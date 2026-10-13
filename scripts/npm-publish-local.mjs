@@ -24,6 +24,9 @@ const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, '..');
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const CHANGELOG_START = '<!-- npm-release:start -->';
 const CHANGELOG_END = '<!-- npm-release:end -->';
+export const REGISTRY_WAIT_DELAYS = [
+  0, 2_000, 5_000, 10_000, 15_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+];
 
 class ReleaseError extends Error {}
 
@@ -372,10 +375,9 @@ function sleep(milliseconds) {
 }
 
 async function waitForPublishedVersion(expected) {
-  const delays = [0, 2_000, 5_000, 10_000, 20_000, 30_000, 60_000];
   let matchingMetadata = null;
   let latest;
-  for (const delay of delays) {
+  for (const delay of REGISTRY_WAIT_DELAYS) {
     if (delay > 0) {
       await sleep(delay);
     }
