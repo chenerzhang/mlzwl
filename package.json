@@ -1,0 +1,29 @@
+{
+  "name": "mlzwl",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.24.0",
+  "scripts": {
+    "build": "pnpm -r --filter './apps/*' build",
+    "typecheck": "pnpm -r --filter './apps/*' typecheck",
+    "lint": "eslint apps/lark-pi-bridge/src apps/lark-pi-bridge/tests apps/lark-pi-bridge/scripts apps/lark-pi-bridge/tsup.config.ts apps/lark-pi-bridge/vitest.config.ts scripts eslint.config.js",
+    "format": "prettier --write \"**/*.{js,cjs,mjs,ts,cts,mts,json,jsonc,yml,yaml}\"",
+    "format:check": "prettier --check \"**/*.{js,cjs,mjs,ts,cts,mts,json,jsonc,yml,yaml}\"",
+    "precommit": "node scripts/precommit-staged.mjs",
+    "test": "pnpm -r --filter './apps/*' test && node --test scripts/*.test.mjs",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "lark-pi-bridge:build": "pnpm --filter @mlzwl/lark-pi-bridge build",
+    "lark-pi-bridge:test": "pnpm --filter @mlzwl/lark-pi-bridge test",
+    "lark-pi-bridge:verify": "pnpm --filter @mlzwl/lark-pi-bridge verify",
+    "lark-pi-bridge:smoke:local": "pnpm --filter @mlzwl/lark-pi-bridge smoke:local"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.67.0"
+  }
+}
