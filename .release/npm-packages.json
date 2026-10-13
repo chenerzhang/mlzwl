@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "repository": "chenerzhang/mlzwl",
+  "defaultBranch": "master",
+  "environment": "npm-release",
+  "workflowPath": ".github/workflows/npm-publish.yml",
+  "registry": "https://registry.npmjs.org",
+  "npmVersion": "11.6.1",
+  "npmIntegrity": "sha512-7iDSHDoup6uMQJ37yWrhfqcbMhF0UEfGRap6Nv+aKQcrIJXlCi2cKbj75WBmiHlcwsQCy/U0zEwDZdAx6H/Vaw==",
+  "nodeVersion": "22.20.0",
+  "nodeLinuxX64Sha256": "00bbd05e306ea68b6e13e17360d0e2f680b493ef95f2fea1c4296ff7437530bc",
+  "repositoryVerify": ["pnpm", "verify"],
+  "packages": [
+    {
+      "id": "lark-pi-bridge",
+      "name": "@mlzwl/lark-pi-bridge",
+      "directory": "apps/lark-pi-bridge",
+      "manifest": "apps/lark-pi-bridge/package.json",
+      "changelog": "apps/lark-pi-bridge/README.md",
+      "tagPrefix": "lark-pi-bridge-v",
+      "releaseTitle": "lark-pi-bridge v<version>",
+      "order": 10,
+      "verify": [
+        ["pnpm", "--filter", "@mlzwl/lark-pi-bridge", "verify"],
+        ["pnpm", "--filter", "@mlzwl/lark-pi-bridge", "smoke:local"],
+        ["pnpm", "--filter", "@mlzwl/lark-pi-bridge", "pack:dry-run"]
+      ]
+    }
+  ]
+}
