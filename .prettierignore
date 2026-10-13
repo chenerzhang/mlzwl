@@ -1,0 +1,12 @@
+dist/
+node_modules/
+coverage/
+.husky/
+package-lock.json
+pnpm-lock.yaml
+.tmp/
+.playwright-mcp/
+apps/*/dist/
+apps/*/node_modules/
+apps/*/coverage/
+apps/*/.playwright-mcp/

@@ -1,0 +1,72 @@
+{
+  "name": "@mlzwl/lark-pi-bridge",
+  "version": "0.1.0",
+  "description": "Local Feishu/Lark channel bridge for Pi coding agent.",
+  "type": "module",
+  "keywords": [
+    "feishu",
+    "lark",
+    "pi",
+    "coding-agent",
+    "bridge"
+  ],
+  "bin": {
+    "lark-pi-bridge": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src tests scripts tsup.config.ts vitest.config.ts",
+    "format": "prettier --write package.json scripts src tests docs README.md tsup.config.ts vitest.config.ts THIRD_PARTY_NOTICES.md",
+    "format:check": "prettier --check package.json scripts src tests docs README.md tsup.config.ts vitest.config.ts THIRD_PARTY_NOTICES.md",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit --passWithNoTests",
+    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "test:process": "vitest run tests/process --passWithNoTests",
+    "prepack": "pnpm build",
+    "smoke:local": "pnpm build && node scripts/smoke-local.mjs",
+    "probe:pi-json": "node scripts/probe-pi-json.mjs",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "pack:dry-run": "rm -rf ../../.tmp/lark-pi-bridge/pack && mkdir -p ../../.tmp/lark-pi-bridge/pack && pnpm pack --pack-destination ../../.tmp/lark-pi-bridge/pack"
+  },
+  "dependencies": {
+    "@larksuite/channel": "0.5.0-beta.1",
+    "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6"
+  },
+  "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
+    "tsup": "^8.3.5",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "license": "MIT",
+  "author": "chenerzhang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chenerzhang/mlzwl.git",
+    "directory": "apps/lark-pi-bridge"
+  },
+  "homepage": "https://github.com/chenerzhang/mlzwl/tree/master/apps/lark-pi-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/chenerzhang/mlzwl/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}
