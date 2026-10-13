@@ -33,8 +33,8 @@ importers:
   apps/lark-pi-bridge:
     dependencies:
       '@larksuite/channel':
-        specifier: 0.5.0-beta.1
-        version: 0.5.0-beta.1(debug@4.4.3)
+        specifier: 0.7.1
+        version: 0.7.1(debug@4.4.3)
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -435,8 +435,8 @@ packages:
   '@keyv/serialize@1.1.1':
     resolution: {integrity: sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA==}
 
-  '@larksuite/channel@0.5.0-beta.1':
-    resolution: {integrity: sha512-ySFj/0ZCYkowysqWJcVSs2wQyqNtCJxkEfXnRoEoWXVjr9eQSz5cs9imO/jjpmWB+twhbW+XKo43TSRw6rKOrA==}
+  '@larksuite/channel@0.7.1':
+    resolution: {integrity: sha512-wtfpVl8fOZz6H+O93r7ZKQtXTAuZrCv+CVFkX/E77R+qK2hx7Slr1emfq5tqJ9h/iwUez/pcmo2mMUw85+Xv1A==}
     engines: {node: '>=18'}
 
   '@larksuiteoapi/node-sdk@1.74.0':
@@ -1718,7 +1718,7 @@ snapshots:
 
   '@keyv/serialize@1.1.1': {}
 
-  '@larksuite/channel@0.5.0-beta.1(debug@4.4.3)':
+  '@larksuite/channel@0.7.1(debug@4.4.3)':
     dependencies:
       '@larksuiteoapi/node-sdk': 1.74.0(debug@4.4.3)
       https-proxy-agent: 9.1.0
