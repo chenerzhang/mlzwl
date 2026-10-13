@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { assertRegistryMatches, expectedDigests, extractReleaseNotes, parseEnv } from './npm-publish-local.mjs';
+import {
+  assertRegistryMatches,
+  expectedDigests,
+  extractReleaseNotes,
+  parseEnv,
+  REGISTRY_WAIT_DELAYS,
+} from './npm-publish-local.mjs';
 
 test('parseEnv parses a quoted npm token without exposing it', () => {
   const values = parseEnv("# local only\nNPM_TOKEN='npm_secret'\n");
@@ -118,6 +124,12 @@ test('assertRegistryMatches verifies gitHead when expected', () => {
       ),
     /gitHead/,
   );
+});
+
+test('registry wait window covers npm asynchronous processing for about five minutes', () => {
+  const total = REGISTRY_WAIT_DELAYS.reduce((sum, delay) => sum + delay, 0);
+  assert.equal(REGISTRY_WAIT_DELAYS[0], 0);
+  assert.ok(total >= 5 * 60_000, `registry wait window is only ${total}ms`);
 });
 
 test('auth-check uses a temporary npmrc and never prints the token', () => {

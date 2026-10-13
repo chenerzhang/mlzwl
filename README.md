@@ -36,4 +36,4 @@ pnpm npm:publish:preflight
 pnpm npm:publish:local
 ```
 
-`npm:publish:local` 会真实发布当前 `master` 中的版本。它要求工作区干净且本地 `master` 与 `origin/master` 完全一致，并在发布前后核验 npm tarball 的 integrity、shasum 和 `latest`。发布命令结果不明确时先回读 registry，不要直接重复执行。
+`npm:publish:local` 会真实发布当前 `master` 中的版本。它要求工作区干净且本地 `master` 与 `origin/master` 完全一致，并在发布前后核验 npm tarball 的 integrity、shasum 和 `latest`。发布后会为 npm 的异步处理预留最长约 5 分钟；结果仍不明确时先回读 registry，不要直接重复执行。

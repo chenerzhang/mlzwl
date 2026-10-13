@@ -94,13 +94,12 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 3. 验证上一 npm 版本、对应远端 tag 和 manifest 历史一致；计算 candidate。不得跳过更高 npm 版本或 tag。
 4. 从精确 `origin/master` 创建未占用的 `release/lark-pi-bridge-v<candidate>` 分支。远端分支或 open PR 已存在时先回读，不能覆盖。
 5. 更新 `apps/lark-pi-bridge/package.json`、README Changelog 和必要的 `pnpm-lock.yaml`。只允许这三条路径变化。
-6. 执行：
+6. 执行一次完整验证。根目录 `pnpm verify` 已包含包级 typecheck、lint、format 和 test，不再重复运行包级 `verify`：
 
    ```bash
-   pnpm --filter @mlzwl/lark-pi-bridge verify
+   pnpm verify
    pnpm --filter @mlzwl/lark-pi-bridge smoke:local
    pnpm --filter @mlzwl/lark-pi-bridge pack:dry-run
-   pnpm verify
    ```
 
 7. 按 `.agents/skills/create-pr/SKILL.md` 的验证、commit、普通 push 和 PR 规则交付版本 PR；上游授权来自本次完整发布请求。create-pr 不负责合并或发布。
@@ -116,7 +115,14 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
    不用 `--admin`，不删除远端分支。结果不明确时只回读，不能重复提交替代 PR。
 
 10. `git fetch origin --prune --tags`，切换本地 `master` 并只做 `git merge --ff-only origin/master`。若本地 master 不能 fast-forward，停止；不 reset、不 rebase。确认版本 PR 的 merge commit 是 `origin/master` 祖先，manifest/Changelog/candidate 一致。
-11. 再执行完整验证和 `pnpm npm:publish:preflight`。然后执行真实发布：
+11. 不重复运行第 6 步的完整测试，但必须证明合并结果未改变已验证版本 tree：
+
+    - 第 6 步前记录经过验证的 base SHA，并在验证后确认 `git diff --exit-code <baseSha> -- . ":(exclude)apps/lark-pi-bridge/package.json" ":(exclude)apps/lark-pi-bridge/README.md" ":(exclude)pnpm-lock.yaml"` 为空，即该 commit 除允许的版本文件外与 base tree 完全一致；PR 回读的 `headRefOid` 必须是这个精确版本 commit；
+    - merge commit 必须是普通双亲 merge commit，其第一父提交等于已验证的 base SHA，第二父提交等于 PR `headRefOid`；
+    - `master` 中 manifest、Changelog 和 candidate 必须与版本分支一致；
+    - 任一 SHA 不明确、父提交不符合预期或出现并发 `master` 变更时，退回完整执行第 6 步。
+
+    证据成立后直接执行真实发布；`npm:publish:local` 内部已包含 `preflight` 的全部 Git、Changelog、凭据、打包和 registry 前置校验，因此不再先单独运行 `npm:publish:preflight`：
 
     ```bash
     pnpm npm:publish:local
@@ -161,7 +167,7 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 - 版本 PR 创建或合入失败：不发布。
 - GitHub 分支保护不允许 merge：停止，不用管理员绕过。
 - `.env` 缺失、权限过宽、token 无效、账号不是 `mlzwl`：停止；不得输出 token。
-- publish 返回超时、失败或结果不明确：脚本先轮询 registry；目标版本完整可见则继续，仍不可见则停止。**不得立即重复 publish。**
+- publish 返回超时、失败或结果不明确：脚本在最长约 5 分钟的窗口内轮询 registry；目标版本完整可见则继续，仍不可见才停止。**不得立即重复 publish。**
 - registry 已存在同版本但 integrity/shasum 不同：停止，不能覆盖。
 - npm 成功而 tag push 失败：不得重新 publish；核验精确版本后只补 tag。
 - tag 成功而 GitHub Release 失败：不得重新 publish 或重建 tag；只补 GitHub Release。
