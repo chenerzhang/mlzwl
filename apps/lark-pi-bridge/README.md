@@ -215,6 +215,12 @@ lark-pi-bridge service-manifest --profile default
 
 <!-- npm-release:start -->
 
+### [0.1.1] - 2026-10-13
+
+#### Changed
+
+- 将 `@larksuite/channel` 更新为公开稳定版本 `0.7.1`，确保通过公共 npm registry 安装时可以完整解析生产依赖。
+
 ### [0.1.0] - 2026-10-13
 
 #### Added
