@@ -3,6 +3,9 @@ dist/
 .DS_Store
 *.log
 *.tgz
+.env
+.env.*
+!.env.example
 coverage/
 .tmp/
 .playwright-mcp/
