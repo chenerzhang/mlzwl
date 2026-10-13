@@ -15,7 +15,10 @@
     "lark-pi-bridge:build": "pnpm --filter @mlzwl/lark-pi-bridge build",
     "lark-pi-bridge:test": "pnpm --filter @mlzwl/lark-pi-bridge test",
     "lark-pi-bridge:verify": "pnpm --filter @mlzwl/lark-pi-bridge verify",
-    "lark-pi-bridge:smoke:local": "pnpm --filter @mlzwl/lark-pi-bridge smoke:local"
+    "lark-pi-bridge:smoke:local": "pnpm --filter @mlzwl/lark-pi-bridge smoke:local",
+    "npm:auth-check": "node scripts/npm-publish-local.mjs auth-check",
+    "npm:publish:preflight": "node scripts/npm-publish-local.mjs preflight",
+    "npm:publish:local": "node scripts/npm-publish-local.mjs publish"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

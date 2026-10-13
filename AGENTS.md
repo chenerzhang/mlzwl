@@ -42,7 +42,7 @@ pnpm --filter @mlzwl/lark-pi-bridge pack:dry-run
 ## GitHub 与 npm
 
 - 默认分支为 `master`，远端为 GitHub `chenerzhang/mlzwl`。
-- 提交、push、创建 PR、创建 tag 或发布 npm 前必须取得当前请求中的明确授权；不得 force push、改写历史或自动合入。
+- 提交、push、创建 PR、创建 tag 或发布 npm 前必须取得当前请求中的明确授权；不得 force push 或改写历史。普通代码 PR 不自动合入；用户明确要求“发布”或“发一个版本”时，授权范围按 npm-release skill 执行，包含创建并合入仅含版本元数据的版本 PR。
 - Pull Request 使用 `.agents/skills/create-pr/SKILL.md`；npm 发布使用 `.agents/skills/npm-release/SKILL.md`。
 - 公共 npm registry 固定为 `https://registry.npmjs.org`，release tag 使用包级前缀 `lark-pi-bridge-v<version>`。
 - 不得输出或提交 npm token、GitHub token、App Secret、provider key、Cookie、JWT 或 auth 文件内容。
