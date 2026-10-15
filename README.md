@@ -5,6 +5,7 @@
 ## Packages
 
 - [`@mlzwl/lark-pi-bridge`](apps/lark-pi-bridge)：把飞书/Lark 消息桥接到本机 Pi coding agent。
+- [`@mlzwl/x-adapter`](apps/x-adapter)：Trae 与豆包工作的本地模型网关。
 
 ## 开发
 
@@ -14,6 +15,13 @@
 pnpm install
 pnpm build
 pnpm verify
+```
+
+单独验证 x-adapter：
+
+```bash
+pnpm --filter @mlzwl/x-adapter verify
+pnpm --filter @mlzwl/x-adapter pack:dry-run
 ```
 
 单独验证 bridge：

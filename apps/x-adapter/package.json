@@ -1,0 +1,51 @@
+{
+  "name": "@mlzwl/x-adapter",
+  "version": "0.1.0",
+  "description": "Local model gateway for Trae and Doubao Work.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "local-gateway",
+    "openai-responses",
+    "trae",
+    "doubao-work"
+  ],
+  "pi": {
+    "extensions": [
+      "./dist/pi/index.js"
+    ]
+  },
+  "bin": {
+    "x-adapter": "dist/bin/index.js"
+  },
+  "files": [
+    "dist/bin/index.js",
+    "dist/pi/index.js",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../../scripts/build-package.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "test": "node ../../scripts/test-package.mjs",
+    "smoke": "pnpm build && node scripts/smoke.mjs",
+    "pack:dry-run": "pnpm build && rm -rf ../../.tmp/x-adapter-pack && mkdir -p ../../.tmp/x-adapter-pack && pnpm pack --pack-destination ../../.tmp/x-adapter-pack"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@inquirer/prompts": "^7.10.1",
+    "hono": "^4.7.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}

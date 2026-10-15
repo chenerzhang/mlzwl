@@ -1,0 +1,11 @@
+{
+  "provider": "trae",
+  "evidence": "Sanitized protocol-shape fixture: output events with empty response and append-only reasoning_content chunks, followed by normal output and done.",
+  "events": [
+    { "event": "output", "payload": { "response": "", "reasoning_content": "甲", "tool_calls": null } },
+    { "event": "output", "payload": { "response": "", "reasoning_content": "乙", "tool_calls": null } },
+    { "event": "output", "payload": { "response": "", "reasoning_content": "丙", "tool_calls": null } },
+    { "event": "output", "payload": { "response": "正文", "reasoning_content": "不应混入正文", "tool_calls": null } },
+    { "event": "done", "payload": { "finish_reason": "stop" } }
+  ]
+}

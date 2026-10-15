@@ -1,0 +1,69 @@
+# Pi Provider 接入
+
+`@mlzwl/x-adapter` 包含 Pi extension：
+
+```bash
+pi install npm:@mlzwl/x-adapter
+```
+
+extension 注册 provider `x-adapter`，默认连接 `http://127.0.0.1:10010/v1`，并注册 `/x-adapter` slash command。
+
+## 使用
+
+先在系统终端完成登录：
+
+```bash
+x-adapter trae import --realm global
+# 如需使用中国区，再执行：x-adapter trae import --realm cn
+# 没有可导入的官方客户端登录时，才使用：x-adapter trae login --realm global|cn
+x-adapter doubao login
+x-adapter models refresh
+```
+
+然后在 Pi 中刷新模型并选择 `x-adapter` 下的 `trae-global-*`、`trae-cn-*` 或 `doubao-work-*` 模型。
+
+```text
+trae-global-<upstream-id>
+trae-cn-<upstream-id>
+doubao-work-auto
+```
+
+不要使用裸上游 ID；网关只接受带 provider 前缀的公开 ID。
+
+## 自动启动与安装
+
+extension 会先访问 `/health`。默认 loopback 网关不可用时，它可以调用 `x-adapter start`；CLI 缺失时可以从公共 npm 安装 `@mlzwl/x-adapter@latest`。
+
+```bash
+export X_ADAPTER_AUTO_START=0
+export X_ADAPTER_AUTO_INSTALL=0
+export PI_OFFLINE=1
+```
+
+以上变量分别关闭自动启动、自动安装和全部网络/生命周期动作。extension 不会自动执行 provider 登录，也不会读取或输出 provider 凭据。
+
+## 自定义地址与本机鉴权
+
+```bash
+export X_ADAPTER_BASE_URL=http://127.0.0.1:10010
+export X_ADAPTER_CLIENT_TOKEN='本机随机 token'
+export X_ADAPTER_PROVIDER_ID=x-adapter
+```
+
+base URL 必须是 loopback HTTP(S) 地址，不能携带自定义路径。`X_ADAPTER_CLIENT_TOKEN` 只用于本机 gateway，不要填 Trae token 或豆包 Cookie。
+
+## Slash command
+
+```text
+/x-adapter status
+/x-adapter models --all
+/x-adapter version
+```
+
+登录和交互式隐藏选择应在系统终端运行，因为 Pi command 不伪造 TTY。
+
+## 能力边界
+
+- Trae Global/CN 目前是实验性能力；官方客户端凭据/设备身份导入、Global SG/CN 模型目录、两个 realm 的最小非流式聊天、Global 流式输出边界/客户端取消，以及一次 Global DeviceProof refresh 已完成本机验证。CN refresh、工具调用和 reasoning 仍需分别验证。普通 function tools 保留，hosted web search 返回 `unsupported_hosted_search`，并且不跨 realm fallback。
+- 豆包工作当前是纯文本 provider；Pi 默认附带的可选工具目录会被忽略，但强制工具选择或已有工具调用/结果会返回 `unsupported_tools`。
+- 模型选择器名称会保留目录提供的 `model_load` 百分比；未提供时不会伪造。
