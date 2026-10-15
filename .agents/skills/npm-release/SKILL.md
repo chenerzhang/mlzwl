@@ -1,15 +1,18 @@
 ---
 name: npm-release
-description: 管理 mlzwl monorepo 的公共 npm 子包 Changelog、首次发布、仅发布及 patch/minor/major 发版。用户要求分析发版差异、发布 lark-pi-bridge、升级版本或生成 GitHub Release 时使用。
+description: 管理 mlzwl monorepo 公共 npm 子包的 Changelog、首次发布、仅发布及 patch/minor/major 发版。用户要求分析发版差异、发布 lark-pi-bridge 或 x-adapter、升级版本或生成 GitHub Release 时使用。
 ---
 
 # mlzwl npm 本地发布
 
 当前支持：
 
-| 包名                    | 包目录                | tag                         |
-| ----------------------- | --------------------- | --------------------------- |
-| `@mlzwl/lark-pi-bridge` | `apps/lark-pi-bridge` | `lark-pi-bridge-v<version>` |
+| 包名                    | 包目录                | 包标识           | tag                         |
+| ----------------------- | --------------------- | ---------------- | --------------------------- |
+| `@mlzwl/lark-pi-bridge` | `apps/lark-pi-bridge` | `lark-pi-bridge` | `lark-pi-bridge-v<version>` |
+| `@mlzwl/x-adapter`      | `apps/x-adapter`      | `x-adapter`      | `x-adapter-v<version>`      |
+
+以下流程中的 `<package-name>`、`<package-directory>` 和 `<package-id>` 必须使用同一行映射。用户未明确目标包且上下文不能唯一确定时，必须先询问，不能默认发布另一个包。
 
 公共 registry 固定为 `https://registry.npmjs.org`，默认分支为 `master`，托管平台为 GitHub。版本改动通过 PR 合入，npm publish 从维护者本机执行。
 
@@ -36,11 +39,11 @@ description: 管理 mlzwl monorepo 的公共 npm 子包 Changelog、首次发布
 
   只报告账号和成功/失败，不显示 token。
 
-- 安全预检和真实发布：
+- 安全预检和真实发布必须显式传入目标包目录：
 
   ```bash
-  pnpm npm:publish:preflight
-  pnpm npm:publish:local
+  pnpm npm:publish:preflight <package-directory>
+  pnpm npm:publish:local <package-directory>
   ```
 
 - `npm:publish:local` 是真实 registry 写入，只能在用户当前请求明确授权发布时运行。
@@ -52,11 +55,11 @@ description: 管理 mlzwl monorepo 的公共 npm 子包 Changelog、首次发布
 - 普通源码、测试和非 Changelog 文档应先通过正常 PR 进入 `master`。版本 PR 只包含目标包 `package.json`、README 和因版本记录产生的 `pnpm-lock.yaml`（若实际变化）。
 - Changelog 只能来自源码、测试和公开文档证据，只写用户、集成方或运维可感知的变化。使用 `Added`、`Changed`、`Fixed`、`Security`、`Deprecated`、`Removed`，不创建空分类。
 - npm 版本不可覆盖。registry 查询、publish、PR merge、tag push 或 GitHub Release 结果不明确时先回读，不盲目重试。
-- publish 始终针对脚本刚刚 `npm pack` 生成的绝对 tarball 路径，不使用 `npm publish apps/lark-pi-bridge`，不运行 publish lifecycle 第二遍。
+- publish 始终针对脚本刚刚 `npm pack` 生成的绝对 tarball 路径，不使用 `npm publish <package-directory>`，不运行 publish lifecycle 第二遍。
 - 发布脚本将精确 `master` SHA 写入最终 tarball 的 `gitHead`，并在 publish 后核验 registry 的版本、`gitHead`、SHA-512 integrity、SHA-1 shasum 和 `latest`。publish 前发现目标版本已存在时拒绝重复发布；publish 返回后即使退出状态异常，也先以本次本地 tarball 回读 registry，完整匹配才视为成功。
-- release tag 必须是 annotated tag `lark-pi-bridge-v<version>`，并指向 `master` 上包含该精确版本的 commit。
-- GitHub Release 从同一个 tag 创建；title 使用 `lark-pi-bridge v<version>`，notes 与 README 同版本 Changelog 语义一致。
-- 当前只有一个包；以后多包也必须串行发布。
+- release tag 必须是 annotated tag `<package-id>-v<version>`，并指向 `master` 上包含该精确版本的 commit。
+- GitHub Release 从同一个 tag 创建；title 使用 `<package-id> v<version>`，notes 与目标包 README 同版本 Changelog 语义一致。
+- 多包必须串行发布，每次发布只允许涉及一个目标包。
 
 ## Changelog 证据
 
@@ -64,13 +67,13 @@ description: 管理 mlzwl monorepo 的公共 npm 子包 Changelog、首次发布
 
 ```bash
 git diff --name-status <previous-tag> <master-sha> -- \
-  apps/lark-pi-bridge package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
+  <package-directory> package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
 
 git diff --stat <previous-tag> <master-sha> -- \
-  apps/lark-pi-bridge package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
+  <package-directory> package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
 
 git log --no-merges --oneline <previous-tag>..<master-sha> -- \
-  apps/lark-pi-bridge package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
+  <package-directory> package.json pnpm-lock.yaml tsconfig.base.json eslint.config.js
 ```
 
 若 tag 不是 master 祖先，commit log 不能作为唯一证据，必须直接比较 tree。临时材料只放 `.tmp/npm-release/`。
@@ -92,14 +95,20 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 1. 记录用户请求的 bump 类型；只允许 stable SemVer。
 2. 工作区必须干净。执行 `git fetch origin --prune --tags`，回读 npm latest、所有已发布版本、远端 release tag 和 `origin/master` manifest。E404 仅在输出明确表示包或版本不存在时解释为未发布；认证、权限、网络、限流错误必须停止。
 3. 验证上一 npm 版本、对应远端 tag 和 manifest 历史一致；计算 candidate。不得跳过更高 npm 版本或 tag。
-4. 从精确 `origin/master` 创建未占用的 `release/lark-pi-bridge-v<candidate>` 分支。远端分支或 open PR 已存在时先回读，不能覆盖。
-5. 更新 `apps/lark-pi-bridge/package.json`、README Changelog 和必要的 `pnpm-lock.yaml`。只允许这三条路径变化。
+4. 从精确 `origin/master` 创建未占用的 `release/<package-id>-v<candidate>` 分支。远端分支或 open PR 已存在时先回读，不能覆盖。
+5. 更新 `<package-directory>/package.json`、目标包 README Changelog 和必要的 `pnpm-lock.yaml`。只允许这三条路径变化。
 6. 执行一次完整验证。根目录 `pnpm verify` 已包含包级 typecheck、lint、format 和 test，不再重复运行包级 `verify`：
 
    ```bash
    pnpm verify
-   pnpm --filter @mlzwl/lark-pi-bridge smoke:local
-   pnpm --filter @mlzwl/lark-pi-bridge pack:dry-run
+   pnpm --filter <package-name> pack:dry-run
+   ```
+
+   另外按目标包执行 smoke：
+
+   ```bash
+   pnpm --filter @mlzwl/lark-pi-bridge smoke:local # lark-pi-bridge
+   pnpm --filter @mlzwl/x-adapter smoke             # x-adapter
    ```
 
 7. 按 `.agents/skills/create-pr/SKILL.md` 的验证、commit、普通 push 和 PR 规则交付版本 PR；上游授权来自本次完整发布请求。create-pr 不负责合并或发布。
@@ -117,7 +126,7 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 10. `git fetch origin --prune --tags`，切换本地 `master` 并只做 `git merge --ff-only origin/master`。若本地 master 不能 fast-forward，停止；不 reset、不 rebase。确认版本 PR 的 merge commit 是 `origin/master` 祖先，manifest/Changelog/candidate 一致。
 11. 不重复运行第 6 步的完整测试，但必须证明合并结果未改变已验证版本 tree：
 
-    - 第 6 步前记录经过验证的 base SHA，并在验证后确认 `git diff --exit-code <baseSha> -- . ":(exclude)apps/lark-pi-bridge/package.json" ":(exclude)apps/lark-pi-bridge/README.md" ":(exclude)pnpm-lock.yaml"` 为空，即该 commit 除允许的版本文件外与 base tree 完全一致；PR 回读的 `headRefOid` 必须是这个精确版本 commit；
+    - 第 6 步前记录经过验证的 base SHA，并在验证后确认 `git diff --exit-code <baseSha> -- . ":(exclude)<package-directory>/package.json" ":(exclude)<package-directory>/README.md" ":(exclude)pnpm-lock.yaml"` 为空，即该 commit 除允许的版本文件外与 base tree 完全一致；PR 回读的 `headRefOid` 必须是这个精确版本 commit；
     - merge commit 必须是普通双亲 merge commit，其第一父提交等于已验证的 base SHA，第二父提交等于 PR `headRefOid`；
     - `master` 中 manifest、Changelog 和 candidate 必须与版本分支一致；
     - 任一 SHA 不明确、父提交不符合预期或出现并发 `master` 变更时，退回完整执行第 6 步。
@@ -125,15 +134,15 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
     证据成立后直接执行真实发布；`npm:publish:local` 内部已包含 `preflight` 的全部 Git、Changelog、凭据、打包和 registry 前置校验，因此不再先单独运行 `npm:publish:preflight`：
 
     ```bash
-    pnpm npm:publish:local
+    pnpm npm:publish:local <package-directory>
     ```
 
 12. registry 确认成功后才创建 annotated tag。先回读远端 tag；不存在时执行：
 
     ```bash
-    git tag -a "lark-pi-bridge-v<version>" \
-      -m "Release lark-pi-bridge-v<version>" <published-master-sha>
-    git push origin "lark-pi-bridge-v<version>"
+    git tag -a "<package-id>-v<version>" \
+      -m "Release <package-id>-v<version>" <published-master-sha>
+    git push origin "<package-id>-v<version>"
     ```
 
     tag 已存在且 peeled commit 匹配时复用；类型错误或指向错误时停止，不删除、不覆盖。
@@ -141,9 +150,9 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 13. 从 README 精确版本 Changelog 生成 `.tmp/npm-release/<version>/notes.md`。不存在时创建 GitHub Release；已存在时必须核验 tag、title 和 notes 一致：
 
     ```bash
-    gh release create "lark-pi-bridge-v<version>" \
+    gh release create "<package-id>-v<version>" \
       --repo chenerzhang/mlzwl \
-      --title "lark-pi-bridge v<version>" \
+      --title "<package-id> v<version>" \
       --notes-file ".tmp/npm-release/<version>/notes.md" \
       --verify-tag
     ```
