@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 const DEFAULT_PROVIDER_ID = 'x-adapter';
-const DEFAULT_BASE_URL = 'http://127.0.0.1:10010';
+const DEFAULT_BASE_URL = 'http://127.0.0.1:10100';
 const DEFAULT_API_KEY = 'dummy-token';
 const DISCOVERY_USER_AGENT = 'codex-cli';
 const DEFAULT_CONTEXT_WINDOW = 128_000;

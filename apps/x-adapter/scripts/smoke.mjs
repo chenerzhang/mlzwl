@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(root, 'dist', 'bin', 'index.js');
-const baseUrl = (process.env.X_ADAPTER_BASE_URL || 'http://127.0.0.1:10010').replace(/\/$/, '');
+const baseUrl = (process.env.X_ADAPTER_BASE_URL || 'http://127.0.0.1:10100').replace(/\/$/, '');
 const timeoutMs = Number(process.env.X_ADAPTER_SMOKE_TIMEOUT_MS || 120000);
 let startedBySmoke = false;
 

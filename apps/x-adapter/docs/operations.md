@@ -119,7 +119,7 @@ Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始
 | 变量                                              | 默认值 / 说明                                   |
 | ------------------------------------------------- | ----------------------------------------------- |
 | `X_ADAPTER_HOST`                                  | `127.0.0.1`。                                   |
-| `X_ADAPTER_PORT`                                  | `10010`。                                       |
+| `X_ADAPTER_PORT`                                  | `10100`。                                       |
 | `X_ADAPTER_DATA_DIR`                              | `~/.x-adapter`。                                |
 | `X_ADAPTER_RUNTIME_DIR`                           | `<data>/runtime`。                              |
 | `X_ADAPTER_LOG_FILE`                              | `<data>/logs/x-adapter.jsonl`。                 |

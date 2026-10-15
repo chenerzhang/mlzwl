@@ -45,7 +45,7 @@ async function withDoubaoMock(run) {
 }
 
 function headers(extra = {}) {
-  return { host: '127.0.0.1:10010', 'content-type': 'application/json', ...extra };
+  return { host: '127.0.0.1:10100', 'content-type': 'application/json', ...extra };
 }
 
 test('Doubao strips optional tool catalogs without mutating the canonical request', () => {
@@ -96,7 +96,7 @@ test('Doubao rejects forced tool choices and actual tool transcripts', () => {
 test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic JSON paths', async () => {
   await withDoubaoMock(async () => {
     const app = doubaoMockApp();
-    const chat = await app.request('http://127.0.0.1:10010/v1/chat/completions', {
+    const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -109,7 +109,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
     assert.equal(chat.status, 200);
     assert.equal((await chat.json()).choices[0].message.content, 'PONG');
 
-    const responses = await app.request('http://127.0.0.1:10010/v1/responses', {
+    const responses = await app.request('http://127.0.0.1:10100/v1/responses', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({ model: DOUBAO_TEST_MODEL, input: 'hello', tools: [tool], tool_choice: 'auto' }),
@@ -117,7 +117,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
     assert.equal(responses.status, 200);
     assert.equal((await responses.json()).output_text, 'PONG');
 
-    const anthropic = await app.request('http://127.0.0.1:10010/v1/messages', {
+    const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
       headers: headers({ 'anthropic-version': '2023-06-01' }),
       body: JSON.stringify({
@@ -136,7 +136,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
 test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic streaming paths', async () => {
   await withDoubaoMock(async () => {
     const app = doubaoMockApp();
-    const chat = await app.request('http://127.0.0.1:10010/v1/chat/completions', {
+    const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -150,7 +150,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
     assert.equal(chat.status, 200);
     assert.match(await chat.text(), /PONG/);
 
-    const responses = await app.request('http://127.0.0.1:10010/v1/responses', {
+    const responses = await app.request('http://127.0.0.1:10100/v1/responses', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -164,7 +164,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
     assert.equal(responses.status, 200);
     assert.match(await responses.text(), /PONG/);
 
-    const anthropic = await app.request('http://127.0.0.1:10010/v1/messages', {
+    const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
       headers: headers({ 'anthropic-version': '2023-06-01' }),
       body: JSON.stringify({
@@ -184,7 +184,7 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
 test('Doubao forced tools and tool transcripts remain explicit client errors', async () => {
   await withDoubaoMock(async () => {
     const app = doubaoMockApp();
-    const chat = await app.request('http://127.0.0.1:10010/v1/chat/completions', {
+    const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -197,7 +197,7 @@ test('Doubao forced tools and tool transcripts remain explicit client errors', a
     assert.equal(chat.status, 400);
     assert.equal((await chat.json()).error.code, 'unsupported_tools');
 
-    const responses = await app.request('http://127.0.0.1:10010/v1/responses', {
+    const responses = await app.request('http://127.0.0.1:10100/v1/responses', {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({
@@ -211,7 +211,7 @@ test('Doubao forced tools and tool transcripts remain explicit client errors', a
     assert.equal(responses.status, 400);
     assert.equal((await responses.json()).error.code, 'unsupported_tools');
 
-    const anthropic = await app.request('http://127.0.0.1:10010/v1/messages', {
+    const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
       headers: headers({ 'anthropic-version': '2023-06-01' }),
       body: JSON.stringify({

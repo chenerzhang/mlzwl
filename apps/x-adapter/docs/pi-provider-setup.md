@@ -6,7 +6,7 @@
 pi install npm:@mlzwl/x-adapter
 ```
 
-extension 注册 provider `x-adapter`，默认连接 `http://127.0.0.1:10010/v1`，并注册 `/x-adapter` slash command。
+extension 注册 provider `x-adapter`，默认连接 `http://127.0.0.1:10100/v1`，并注册 `/x-adapter` slash command。
 
 ## 使用
 
@@ -45,7 +45,7 @@ export PI_OFFLINE=1
 ## 自定义地址与本机鉴权
 
 ```bash
-export X_ADAPTER_BASE_URL=http://127.0.0.1:10010
+export X_ADAPTER_BASE_URL=http://127.0.0.1:10100
 export X_ADAPTER_CLIENT_TOKEN='本机随机 token'
 export X_ADAPTER_PROVIDER_ID=x-adapter
 ```
