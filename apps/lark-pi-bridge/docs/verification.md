@@ -30,7 +30,7 @@ pnpm verify
 - `pack:dry-run`：通过 `prepack` 从干净 `dist` 构建并审计发布文件边界；
 - root `verify`：确认新增 package 没有破坏 monorepo 其他 app。
 
-`probe:pi-json` 是显式诊断命令：它使用临时 `PI_CODING_AGENT_DIR`、非真实 key 和进程内 loopback mock 验证当前 PATH Pi 的 JSON 事件协议，不访问外部 provider。RPC profile 的 `validate` 还运行隔离 RPC probe：在临时 Pi 目录写入合成 extension，验证 `get_commands`、启动期 `setStatus`、blocking `confirm` 的安全取消，并用 `127.0.0.1` mock 验证模型 turn 最终 `agent_settled`；不会读取用户默认 Pi auth/extensions 或真实 provider。
+`probe:pi-json` 是显式诊断命令：它使用临时 `PI_CODING_AGENT_DIR`、非真实 key 和进程内 loopback mock 验证当前 PATH Pi 的 JSON 事件协议，不访问外部 provider。RPC profile 的 `validate` 还运行隔离 RPC probe：在临时 Pi 目录写入合成 extension，验证模型/思考级别 state/list/set、`get_commands`、启动期 `setStatus`、blocking `confirm` 的安全取消，并用 `127.0.0.1` mock 验证模型 turn 最终 `agent_settled`；不会读取用户默认 Pi auth/extensions 或真实 provider。
 
 ## 3. 自动测试覆盖
 
@@ -40,7 +40,7 @@ pnpm verify
 
 - schema v3 的严格解析、显式 `piConfigScope`、权限/transport/model 保留和未知 schema 拒绝；
 - workspace canonicalization、default get/set、删除保护、不可用标记、按次读取、policy fingerprint、session catalog 和 scope settings；
-- Pi argv、受限环境、最低版本与所需 CLI flags；
+- Pi argv、model/thinking 启动覆盖、受限环境、最低版本与所需 CLI flags；
 - 严格 LF JSONL：malformed、非法 UTF-8、空行、未终止、单行/单 run 累计越界、工具密集型多 MiB `agent_end` 与 pooled run 预算重置；
 - 事件 translator：未知/非法顺序/未结束工具/缺少 `agent_settled`/terminal 后记录；
 - 应用注册参数、最小 addons、opaque URL、私有 QR 和 App Secret；
@@ -64,6 +64,7 @@ pnpm verify
 - RPC handshake、session synth/resume、command correlation、event inbox bounds、工具密集型多 MiB `agent_end` 和长驻 child 多轮累计预算隔离；
 - 九种 Extension UI method 的严格 schema、response/UI/agent event 三路分流、`ui_prompt_start/end` 生命周期、无 handler 取消、重复 ID/未知/畸形/越界 fail-closed；
 - 一次性卡片 token 的 actor 绑定、伪造/重放拒绝、群聊私发、confirm 往返与停止/teardown 取消；
+- `/model`、`/thinking` 的 RPC state/list/set、模型元数据投影、支持级别校验、同 scope child 复用、重建恢复与 spawn 明确不支持；
 - `/pi commands` 投影、跨来源重名稳定去重、extension/prompt/skill allowlist、原始命令不包装、unknown/TUI 内建拒绝、handled quiet-period 无模型 turn、延迟独立模型流与 spawn 明确不支持；
 - pool reuse、TTL、LRU、busy/full、child death、dispose；
 - `/steer`、`/follow-up`、`abort`；
@@ -75,7 +76,7 @@ pnpm verify
 使用 fake Channel、临时 home 和注入 runner 验证：
 
 - personal/team 入口策略、真实 mention 语义、仅限 `allowedChats` 子集的按群免 `@` 例外和 scope 隔离；
-- `/new`、`/resume`、`/status`、`/stop`、`/timeout`、`/access`、`/pi` 与 `/workspace` current/list/use/default；
+- `/new`、`/resume`、增强模型状态的 `/status`、`/model`、`/thinking`、`/stop`、`/timeout`、`/access`、`/pi` 与 `/workspace` current/list/use/default；
 - 所有未知 slash command 拦截；
 - 活动控制命令绕过普通 run 互斥，并发普通 prompt 返回明确的 scope 忙提示而不是 Pi 启动失败；
 - 文档评论 scope 与文本回复；

@@ -70,7 +70,7 @@ Channel SDK 先做事件归一化和去重，bridge 再按 profile 执行 fail-c
 - 话题：scope 为 `chatId:threadId`；
 - 文档评论：scope 为 `comment:<fileToken>:<commentId>`。
 
-`/stop`、`/steer` 和 `/follow-up` 在普通提交前分流，以便控制活跃运行；其他本地命令不会启动 Pi。`/workspace` 命令由 bridge 本地处理。`/pi commands` 通过当前 scope 的 RPC child 查询 `get_commands`，只投影名称、extension/prompt/skill 来源和有界描述；`/pi /<command>` 先用同一结果做 allowlist，再把 `/pi ` 后的原始命令直接交给 Pi，不经过 `buildBridgeUserPrompt()`。任何未知或 malformed slash command、TUI 内建命令都被拒绝。普通请求和 Pi command discovery 都受同一 scope/global 并发限制。
+`/stop`、`/steer` 和 `/follow-up` 在普通提交前分流，以便控制活跃运行；其他本地命令不会启动模型 turn。`/workspace` 命令由 bridge 本地处理。RPC 的 `/model`、`/thinking` 和增强后的 `/status` 在同一 scope/global 互斥边界内获取对应 idle child，以严格投影后的 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 实现；不会向模型发送 prompt。`/pi commands` 通过当前 scope 的 RPC child 查询 `get_commands`，只投影名称、extension/prompt/skill 来源和有界描述；`/pi /<command>` 先用同一结果做 allowlist，再把 `/pi ` 后的原始命令直接交给 Pi，不经过 `buildBridgeUserPrompt()`。任何未知或 malformed slash command、TUI 内建命令都被拒绝。普通请求和 Pi command discovery 都受同一 scope/global 并发限制。
 
 ### 3.2 执行身份
 
@@ -82,7 +82,7 @@ profile + scopeId + canonical cwd + access policy fingerprint
 
 `SessionCatalog` 只在该身份完全匹配时返回活动 Pi session。每次消息、评论和 workspace 命令都重读 schema v3 的 alias registry/default 与 scope settings；不使用 watcher。scope override 优先于 `defaultAlias`，`defaultPath` 用于简单本地默认目录，三者不会静默 fallback。alias 删除、默认缺失或目录失效均明确失败。canonical cwd 或 access 改变会生成新 fingerprint；切回原 canonical cwd 可恢复原 identity 的 session。
 
-RPC pool key 进一步包含 model。Pi child 的实际 session ID 通过 `get_state` 与 catalog 逐次核对，不匹配时销毁旧连接，而不是把 prompt 发送给错误 session。
+RPC pool key 进一步包含 model 与 thinking level。Pi child 的实际 session ID 通过 `get_state` 与 catalog 逐次核对，不匹配时销毁旧连接，而不是把 prompt 发送给错误 session。会话内模型和思考级别选择写入私有 `scope-settings.json`，用于 Bridge 重启或 child 重建后的启动覆盖；恢复已有 session 时不再重复传 profile 默认 model，以免覆盖 session 已记录的模型。`/new`、workspace 或 access 改变会清除该覆盖，使新 identity/session 回到 Pi/profile 默认选择。
 
 ### 3.3 附件
 
@@ -117,11 +117,12 @@ Channel 启用 20 秒应用级看门狗和 45 秒 pong 超时。连接健康时�
 - session 通过 profile-local session 目录恢复；
 - stdout 使用严格、有界 LF JSONL 解码；
 - stop/timeout 先 SIGTERM，超过 grace 再 SIGKILL；
-- run 结束后没有空闲 child。
+- run 结束后没有空闲 child；
+- 不支持 `/model`、`/thinking` 或增强模型状态查询，明确提示改用 RPC。
 
 ### 4.2 RPC
 
-RPC 是新 `init` 的默认 transport，也可显式启用或切换。`StrictPiRpcConnection` 负责 command UUID 关联、严格记录校验和独立容量上限；JSONL 单记录上限容纳 Pi 官方 `agent_end.messages` 在工具密集型 run 中形成的多 MiB 权威事件，累计 stdout 上限按 pooled run 重置而不是跨 child 生命周期永久累加，event inbox 仍独立有界。`PiRpcPool` 负责连接容量、idle TTL、idle-only LRU、busy 互斥和失效回收。
+RPC 是新 `init` 的默认 transport，也可显式启用或切换。`StrictPiRpcConnection` 负责 command UUID 关联、模型/思考级别 RPC 响应投影、严格记录校验和独立容量上限；JSONL 单记录上限容纳 Pi 官方 `agent_end.messages` 在工具密集型 run 中形成的多 MiB 权威事件，累计 stdout 上限按 pooled run 重置而不是跨 child 生命周期永久累加，event inbox 仍独立有界。`PiRpcPool` 负责连接容量、idle TTL、idle-only LRU、busy 互斥和失效回收。
 
 `extension_ui_request` 与 `ui_prompt_start/ui_prompt_end` 由 connection 在普通 event 之前分流，绝不进入 `PiJsonTranslator` 或 agent inbox。九种官方方法使用独立严格 schema；blocking request 的 `extension_ui_response` 直接写 child stdin，不进入普通 command pending map。Pi adapter 在连接创建时即安装 sideband handler：无 active run 的 dialog 立即取消，启动期 fire-and-forget 安全忽略；active run 通过 Lark 无关的 interaction port 交给 channel broker。broker 用随机一次性 token 绑定 run/scope/actor/method/服务端选项/期限，并限制每 run 4 个、全局 64 个 pending；pool release、stop、invalidate、refresh、disconnect 和 dispose 都清理交互。群聊/话题/评论将完整卡片私发操作者，原 surface 只可显示等待提示。
 
@@ -141,7 +142,7 @@ RPC fallback 由独立 adapter 实施。只有连接创建/握手等 prompt 写�
 └── profiles/<profile>/
     ├── app-secret                     # 0600
     ├── sessions.json.catalog.json     # scope/cwd/policy -> Pi session
-    ├── scope-settings.json            # workspace/access/timeout
+    ├── scope-settings.json            # workspace/access/timeout/model/thinking
     ├── pi-agent/
     │   ├── models.json
     │   ├── auth.json

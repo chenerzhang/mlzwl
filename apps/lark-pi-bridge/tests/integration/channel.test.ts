@@ -420,6 +420,110 @@ describe('startChannel with a typed fake channel', () => {
     }
   });
 
+  it('controls and restores the scoped RPC model and thinking level through chat commands', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-channel-model-control-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'app-locks') });
+      const profile = createProfileConfig({
+        app: { id: 'cli_model_control', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: await realpath(root),
+        access: { allowedUsers: ['ou_allowed'] },
+        preferences: { transport: 'rpc' },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const runs: AgentRunOptions[] = [];
+      let model = { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true };
+      let thinkingLevel: 'off' | 'medium' | 'high' = 'medium';
+      const sessionState = () => ({ sessionId: 'session-model', isStreaming: false, model, thinkingLevel });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi RPC',
+        async isAvailable() {
+          return true;
+        },
+        async getSessionState() {
+          return sessionState();
+        },
+        async listModels() {
+          return {
+            state: sessionState(),
+            models: [
+              { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true },
+              { provider: 'provider-a', id: 'model-b', name: 'Model B', reasoning: false },
+            ],
+          };
+        },
+        async setModel(_options, provider, id) {
+          model = { provider, id, name: 'Model B', reasoning: false };
+          thinkingLevel = 'off';
+          return sessionState();
+        },
+        async listThinkingLevels() {
+          return { state: sessionState(), levels: model.reasoning ? ['off', 'medium', 'high'] : ['off'] };
+        },
+        async setThinkingLevel(_options, level) {
+          thinkingLevel = level as typeof thinkingLevel;
+          return sessionState();
+        },
+        run(options): AgentRun {
+          runs.push(options);
+          return {
+            runId: options.runId,
+            events: {
+              async *[Symbol.asyncIterator]() {
+                yield { type: 'system' as const, sessionId: 'session-model' };
+                yield { type: 'done' as const, terminationReason: 'normal' as const };
+              },
+            },
+            async stop() {},
+            async waitForExit() {
+              return true;
+            },
+          };
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      const deliver = (content: string) =>
+        fake.deliver({ messageId: randomId(), chatId: 'chat', chatType: 'p2p', senderId: 'ou_allowed', content });
+
+      await deliver('/model');
+      expect(fake.replies.at(-1)).toContain('没有活跃 Pi session');
+      await deliver('/model use provider-a/model-b');
+      expect(fake.replies.at(-1)).toContain('请先发送一条普通消息');
+      await deliver('start');
+      await deliver('/model list');
+      expect(fake.replies.at(-1)).toContain('provider-a/model-a');
+      await deliver('/thinking list');
+      expect(fake.replies.at(-1)).toContain('medium（当前）');
+      await deliver('/thinking high');
+      expect(fake.replies.at(-1)).toContain('已切换为 high');
+      await deliver('/model use provider-a/model-b');
+      expect(fake.replies.at(-1)).toContain('provider-a/model-b');
+      expect(fake.replies.at(-1)).toContain('思考级别：off');
+      await deliver('/thinking high');
+      expect(fake.replies.at(-1)).toContain('当前模型不支持 high');
+      await deliver('/status');
+      expect(fake.replies.at(-1)).toContain('当前 Pi session：session-model');
+      expect(fake.replies.at(-1)).toContain('模型：provider-a/model-b');
+      expect(fake.replies.at(-1)).toContain('思考级别：off');
+      await deliver('continue after restart');
+      expect(runs.at(-1)).toMatchObject({
+        sessionId: 'session-model',
+        model: 'provider-a/model-b',
+        thinkingLevel: 'off',
+      });
+      await deliver('/new');
+      await deliver('fresh defaults');
+      expect(runs.at(-1)?.sessionId).toBeUndefined();
+      expect(runs.at(-1)?.model).toBeUndefined();
+      expect(runs.at(-1)?.thinkingLevel).toBeUndefined();
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('allowlists raw /pi commands and completes a private confirm card without wrapping the command', async () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-channel-command-ui-'));
     try {

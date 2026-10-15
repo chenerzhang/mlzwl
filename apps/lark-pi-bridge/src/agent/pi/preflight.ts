@@ -10,6 +10,7 @@ export const MIN_NODE_VERSION = [22, 19, 0] as const;
 export const REQUIRED_PI_FLAGS = [
   '--mode',
   '--model',
+  '--thinking',
   '--session',
   '--session-dir',
   '--tools',

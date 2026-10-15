@@ -63,6 +63,37 @@ export interface AgentSlashCommand {
   source: 'extension' | 'prompt' | 'skill';
 }
 
+export const AGENT_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type AgentThinkingLevel = (typeof AGENT_THINKING_LEVELS)[number];
+
+export function isAgentThinkingLevel(value: unknown): value is AgentThinkingLevel {
+  return typeof value === 'string' && (AGENT_THINKING_LEVELS as readonly string[]).includes(value);
+}
+
+export interface AgentModelInfo {
+  provider: string;
+  id: string;
+  name?: string;
+  reasoning: boolean;
+}
+
+export interface AgentSessionState {
+  sessionId: string;
+  isStreaming: boolean;
+  model?: AgentModelInfo;
+  thinkingLevel?: AgentThinkingLevel;
+}
+
+export interface AgentModelCatalog {
+  state: AgentSessionState;
+  models: AgentModelInfo[];
+}
+
+export interface AgentThinkingSupport {
+  state: AgentSessionState;
+  levels: AgentThinkingLevel[];
+}
+
 export interface AgentRunOptions {
   runId: string;
   /** Required by long-lived transports to isolate scope-bound children. */
@@ -76,6 +107,7 @@ export interface AgentRunOptions {
   cwd: string;
   sessionId?: string;
   model?: string;
+  thinkingLevel?: AgentThinkingLevel;
   accessMode: AccessMode;
   stopGraceMs?: number;
   attachments?: string[];
@@ -105,6 +137,11 @@ export interface AgentAdapter {
   run(opts: AgentRunOptions): AgentRun;
   probeModel?(opts: Omit<AgentRunOptions, 'runId' | 'prompt' | 'sessionId' | 'attachments'>): Promise<void>;
   listCommands?(opts: AgentRunOptions): Promise<AgentSlashCommand[]>;
+  getSessionState?(opts: AgentRunOptions): Promise<AgentSessionState>;
+  listModels?(opts: AgentRunOptions): Promise<AgentModelCatalog>;
+  setModel?(opts: AgentRunOptions, provider: string, modelId: string): Promise<AgentSessionState>;
+  listThinkingLevels?(opts: AgentRunOptions): Promise<AgentThinkingSupport>;
+  setThinkingLevel?(opts: AgentRunOptions, level: AgentThinkingLevel): Promise<AgentSessionState>;
   control?(runId: string, kind: 'steer' | 'follow-up', prompt: string): Promise<AgentControlDisposition>;
   setBotIdentity?(identity: AgentBotIdentity): void;
   setInteractionPort?(port: AgentInteractionPort): void;

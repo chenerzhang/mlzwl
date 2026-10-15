@@ -42,11 +42,11 @@ RPC 子进程沿用 spawn-per-turn 的安全参数和环境：
 - POSIX 子进程使用 `0077` umask；
 - stderr、JSONL 单行、连接累计输出、待处理 command、事件队列和写入 payload 均有界。
 
-RPC mode 不发 JSON session header。connection 在任何 prompt 前用 `get_state` 完成握手、获得并核对 session ID；adapter 为 bridge 合成一次 `system` event。
+RPC mode 不发 JSON session header。connection 在任何 prompt 前用 `get_state` 完成握手、获得并核对 session ID；adapter 为 bridge 合成一次 `system` event。Bridge 也使用官方 model/thinking state/list/set commands 实现无模型 turn 的会话控制，并对响应字段做严格有界投影。
 
 ### 4. pool identity 与生命周期
 
-pool key 为 profile + scope + canonical cwd + 既有 policy/resource fingerprint。一个 key 同时最多一个 active consumer；RunExecutor 继续拒绝同 scope 的普通并发消息。
+pool key 为 profile + scope + canonical cwd + 既有 policy/resource fingerprint + model/thinking 启动覆盖。一个 key 同时最多一个 active consumer；RunExecutor 继续拒绝同 scope 的普通并发消息和 model/thinking 控制。
 
 - pool 有固定最大容量、idle TTL 和 LRU 淘汰；只淘汰 idle connection；全部 busy 时 fail-closed。
 - 已知 catalog session 必须与 RPC `get_state` 返回值一致；`/new`、workspace/access identity 变化或 session 不匹配会关闭旧 connection 并新建/恢复正确 session。
@@ -75,7 +75,13 @@ RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 pro
 - malformed/未知/非法顺序/terminal 后 record、unfinished tool、缺失 `agent_settled` 均 fail-closed，并销毁 connection。
 - stop/timeout 使用 `abort`，但 bridge 的 stop reason 覆盖正常 settled 呈现；abort 未在 grace 内完成时终止 child。
 
-### 7. steer / follow-up
+### 7. model / thinking
+
+`/model`、`/thinking` 与增强后的 `/status` 只支持 RPC。Bridge 通过 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 控制当前 scope 的 idle Pi session；不向模型发送 prompt。只向飞书投影 provider、model ID、有界名称、reasoning 能力和 thinking level，不回显 endpoint、cost 或认证状态细节。
+
+切换要求当前 scope 已有 session；成功选择写入 profile-local 私有 scope settings，供 Bridge 重启或 child 重建时以 `--model`/`--thinking` 恢复；恢复已有 session 且没有 scope 覆盖时不传 profile 默认 model，避免覆盖 session 自己记录的变化。`/new`、workspace 或 access 变化会清除覆盖。spawn-per-turn 明确拒绝，不用 CLI 文本解析模拟状态。
+
+### 8. steer / follow-up
 
 提供显式 `/steer <text>` 与 `/follow-up <text>`（也支持 `/followup`）控制命令。它们只在当前 scope 有 active RPC run 时直接调用该 run 的 RPC command：
 
@@ -87,11 +93,11 @@ RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 pro
 
 普通并发消息仍 fail-closed，不自动转换成 steer/follow-up。
 
-### 8. 受控 Pi command namespace
+### 9. 受控 Pi command namespace
 
 `/pi commands` 使用当前 RPC session 的 `get_commands`，只返回 extension、prompt、skill 的有界名称/描述/type，不返回 `sourceInfo`；合法跨来源重名按 Pi 返回顺序稳定保留第一个可调用投影。`/pi /<command> [args]` 必须先命中该 allowlist，再以原始命令调用 `prompt`，不套 Bridge wrapper；未列出的内建/TUI 命令拒绝。handled 后经过有界 quiet period 仍无模型流才正常结束，观察期内自行启动模型流则等待 `agent_settled`。`/pi` 继续受 scope/workspace/access/concurrency/timeout/session 约束，且不允许 fallback 到 spawn-per-turn。
 
-### 9. 图片
+### 10. 图片
 
 公共附件下载、MIME + magic-byte 校验、run-owned `0700`/`0600` 落盘与终态清理由现有 AttachmentStore 负责。RPC adapter 以 `O_NOFOLLOW` 打开并复核普通文件、inode、大小和 magic bytes，再转换为官方 `ImageContent[]`：
 
@@ -111,6 +117,7 @@ RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 pro
 - strict LF JSONL、malformed/oversize/unknown/terminal-after-event；
 - `agent_end` 非终态、模型 turn 的 `agent_settled` 与 handled 无模型 command；
 - Extension UI 九方法、生命周期、schema/容量、sideband 隔离、响应写回、启动期状态、一次性 token/actor/replay/取消；
+- `/model`、`/thinking` state/list/set、重建恢复、响应投影与 spawn 不支持；
 - `/pi commands` 投影与 extension/prompt/skill allowlist、原始命令、内建拒绝和 spawn 不支持；
 - abort/timeout、steer、follow-up 与不重复投递；
 - prompt 明确未接受时 fallback，以及 write/timeout/exit 等不确定状态绝不 replay；

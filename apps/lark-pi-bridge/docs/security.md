@@ -72,7 +72,7 @@ Pi 兼容性不能只按版本号判断。`validate` / `run` 会：
 2. 创建临时 `PI_CODING_AGENT_DIR`；
 3. 启动只监听随机 `127.0.0.1` 端口的 OpenAI-compatible mock；
 4. 用非真实 key 验证 `session` 和最终 `agent_settled`；
-5. RPC profile 额外写入临时合成 extension，验证 `get_state`、`get_commands`、启动期 `setStatus`、阻塞 `confirm` 的取消响应、稳定 session identity，以及最终 `agent_settled` 事件流。
+5. RPC profile 额外写入临时合成 extension，验证 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels`、`set_thinking_level`、`get_commands`、启动期 `setStatus`、阻塞 `confirm` 的取消响应、稳定 session identity，以及最终 `agent_settled` 事件流。
 
 Probe 不读取默认 Pi auth、不连接真实 provider，并移除可能在 Node 启动时触发额外文件读取的 `SSL_CERT_FILE`、`SSL_CERT_DIR` 和 `NODE_EXTRA_CA_CERTS`。
 
@@ -81,7 +81,8 @@ Probe 不读取默认 Pi auth、不连接真实 provider，并移除可能在 No
 ## 7. 数据、附件与日志
 
 - 私有目录使用 `0700`，敏感文件使用 `0600`；POSIX Pi 子进程使用 `0077` umask；
-- catalog/settings 在跨进程锁内重读、合并并私有原子替换；workspace registry/default 和 scope settings 按 ingress 重读，损坏、alias 删除、默认缺失或目录失效均 fail-closed；
+- catalog/settings 在跨进程锁内重读、合并并私有原子替换；scope settings 只保存 workspace/access/timeout 及非机密 `provider/model`、thinking level，不保存模型定义、endpoint 或凭据；workspace registry/default 和 scope settings 按 ingress 重读，损坏、alias 删除、默认缺失或目录失效均 fail-closed；
+- 模型和 thinking RPC 响应只投影 provider、ID、名称、reasoning 与受支持级别；不把 base URL、cost 或其他模型元数据发送到飞书；
 - schema v3 配置必须通过严格校验，未知 schema 会被拒绝；
 - 图片只接受 PNG/JPEG/GIF/WebP，规范化 MIME 必须和 magic bytes 一致；
 - 图片按 run 保存在 profile-local 私有目录，完成、失败或中断后删除；崩溃残留按年龄和数量有界清理；

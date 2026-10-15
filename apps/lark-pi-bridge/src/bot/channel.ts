@@ -291,7 +291,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
             });
             return;
           }
-          await scopeSettings.update(scopeId, { accessMode });
+          await scopeSettings.update(scopeId, { accessMode, model: undefined, thinkingLevel: undefined });
           await channel.reply(message, { text: `当前 scope 的访问模式已设置为 ${accessMode}。` });
           return;
         }
@@ -309,6 +309,21 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
             scopeId,
           }),
         };
+        if (isModelThinkingCommand(command) || command?.type === 'status') {
+          await handleModelThinkingCommand({
+            command,
+            reply: (text) => channel.reply(message, { text }),
+            executor,
+            catalog,
+            identity,
+            scopeId,
+            workspace: workspace.cwdRealpath,
+            accessMode,
+            profile,
+            scopeSettings,
+          });
+          return;
+        }
         if (command?.type === 'pi-commands' || command?.type === 'pi-command') {
           await handlePiCommand({
             command,
@@ -329,6 +344,9 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         }
         if (command) {
           const response = await applySessionCommand(command, catalog, identity);
+          if (command.type === 'new') {
+            await scopeSettings.update(scopeId, { model: undefined, thinkingLevel: undefined });
+          }
           if (response) {
             await channel.reply(message, { text: response });
           }
@@ -343,13 +361,15 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
             (messageId, fileKey, type) => channel.downloadResourceWithMeta(messageId, fileKey, type),
           );
           const previous = catalog.activeFor(identity);
+          const currentSettings = scopeSettings.get(scopeId);
           const execution = await executor.submit({
             scopeId,
             policyFingerprint: identity.policyFingerprint,
             cwd: workspace.cwdRealpath,
             accessMode,
             sessionId: previous?.sessionId,
-            model: runtimeProfileModel(profile),
+            model: previous ? currentSettings?.model : (currentSettings?.model ?? runtimeProfileModel(profile)),
+            thinkingLevel: currentSettings?.thinkingLevel,
             stopGraceMs: profile.preferences.agentStopGraceMs,
             attachments: storedAttachments.map((attachment) => attachment.path),
             interaction: {
@@ -467,6 +487,138 @@ function isWorkspaceCommand(command: BridgeCommand | undefined): command is Work
   return Boolean(command?.type.startsWith('workspace-'));
 }
 
+type ModelThinkingCommand = Extract<
+  BridgeCommand,
+  | { type: 'status' }
+  | { type: 'model-current' | 'model-list' | 'model-use' }
+  | { type: 'thinking-current' | 'thinking-list' | 'thinking-set' }
+>;
+
+function isModelThinkingCommand(
+  command: BridgeCommand | undefined,
+): command is Exclude<ModelThinkingCommand, { type: 'status' }> {
+  return Boolean(command?.type.startsWith('model-') || command?.type.startsWith('thinking-'));
+}
+
+async function handleModelThinkingCommand(input: {
+  command: ModelThinkingCommand;
+  reply(text: string): Promise<unknown>;
+  executor: RunExecutor;
+  catalog: SessionCatalog;
+  identity: import('../session/catalog.js').SessionCatalogIdentity;
+  scopeId: string;
+  workspace: string;
+  accessMode: import('../config/permissions.js').AccessMode;
+  profile: ProfileConfig;
+  scopeSettings: ScopeSettingsStore;
+}): Promise<void> {
+  const previous = input.catalog.activeFor(input.identity);
+  const settings = input.scopeSettings.get(input.scopeId);
+  const base = {
+    scopeId: input.scopeId,
+    policyFingerprint: input.identity.policyFingerprint,
+    cwd: input.workspace,
+    accessMode: input.accessMode,
+    sessionId: previous?.sessionId,
+    model: previous ? settings?.model : (settings?.model ?? runtimeProfileModel(input.profile)),
+    thinkingLevel: settings?.thinkingLevel,
+    stopGraceMs: input.profile.preferences.agentStopGraceMs,
+  };
+  if (
+    !previous &&
+    (input.command.type === 'status' ||
+      input.command.type === 'model-current' ||
+      input.command.type === 'thinking-current')
+  ) {
+    await input.reply('当前 scope 没有活跃 Pi session；发送普通消息后可查看当前模型或思考级别。');
+    return;
+  }
+  if (input.command.type === 'status' && input.profile.preferences.transport !== 'rpc') {
+    await input.reply(`当前 Pi session：${previous!.sessionId}\n模型与思考级别仅 RPC transport 可查询。`);
+    return;
+  }
+  try {
+    if (input.command.type === 'model-list') {
+      const result = await input.executor.listModels(base);
+      const current = result.state.model ? `${result.state.model.provider}/${result.state.model.id}` : undefined;
+      await input.reply(renderModels(result.models, current));
+      return;
+    }
+    if (input.command.type === 'model-use') {
+      if (!previous) {
+        await input.reply('当前 scope 没有活跃 Pi session；请先发送一条普通消息，再切换模型。');
+        return;
+      }
+      const state = await input.executor.setModel(base, input.command.provider, input.command.modelId);
+      const model = renderCurrentModel(state.model);
+      await input.catalog.upsertActive(input.identity, state.sessionId);
+      await input.scopeSettings.update(input.scopeId, {
+        model: state.model ? `${state.model.provider}/${state.model.id}` : undefined,
+        thinkingLevel: state.thinkingLevel,
+      });
+      await input.reply(`当前 Pi session 已切换为模型 ${model}；思考级别：${state.thinkingLevel ?? 'unknown'}。`);
+      return;
+    }
+    if (input.command.type === 'thinking-list') {
+      const result = await input.executor.listThinkingLevels(base);
+      await input.reply(
+        `当前模型 ${renderCurrentModel(result.state.model)} 支持的思考级别：${result.levels
+          .map((level) => (level === result.state.thinkingLevel ? `${level}（当前）` : level))
+          .join('、')}`,
+      );
+      return;
+    }
+    if (input.command.type === 'thinking-set') {
+      if (!previous) {
+        await input.reply('当前 scope 没有活跃 Pi session；请先发送一条普通消息，再切换思考级别。');
+        return;
+      }
+      const support = await input.executor.listThinkingLevels(base);
+      if (!support.levels.includes(input.command.level)) {
+        await input.reply(`当前模型不支持 ${input.command.level}；可用级别：${support.levels.join('、')}。`);
+        return;
+      }
+      const state = await input.executor.setThinkingLevel(base, input.command.level);
+      await input.catalog.upsertActive(input.identity, state.sessionId);
+      await input.scopeSettings.update(input.scopeId, {
+        model: state.model ? `${state.model.provider}/${state.model.id}` : settings?.model,
+        thinkingLevel: state.thinkingLevel,
+      });
+      await input.reply(`当前 Pi session 的思考级别已切换为 ${state.thinkingLevel ?? input.command.level}。`);
+      return;
+    }
+    const entry = input.catalog.activeFor(input.identity);
+    const state = await input.executor.getSessionState(base);
+    const detail = `模型：${renderCurrentModel(state.model)}\n思考级别：${state.thinkingLevel ?? 'unknown'}`;
+    await input.reply(input.command.type === 'status' ? `当前 Pi session：${entry!.sessionId}\n${detail}` : detail);
+  } catch (error) {
+    await input.reply(
+      error instanceof ScopeBusyError || error instanceof ProcessPoolFullError
+        ? runStartErrorText(error)
+        : error instanceof Error
+          ? error.message
+          : '当前无法读取或修改模型设置。',
+    );
+  }
+}
+
+function renderCurrentModel(model: import('../agent/types.js').AgentModelInfo | undefined): string {
+  return model ? `${model.provider}/${model.id}` : '未选择';
+}
+
+function renderModels(models: import('../agent/types.js').AgentModelInfo[], current?: string): string {
+  if (!models.length) {
+    return '当前 Pi 配置没有可用模型。';
+  }
+  const lines = models.slice(0, 200).map((model) => {
+    const id = `${model.provider}/${model.id}`;
+    const tags = [id === current ? 'current' : undefined, model.reasoning ? 'thinking' : undefined].filter(Boolean);
+    const name = model.name && model.name !== model.id ? ` — ${model.name.replace(/[\r\n]+/g, ' ').slice(0, 200)}` : '';
+    return `- ${id}${tags.length ? ` [${tags.join(', ')}]` : ''}${name}`;
+  });
+  return `可用模型：\n${lines.join('\n')}${models.length > lines.length ? '\n…[已截断]' : ''}`;
+}
+
 async function handleWorkspaceCommand(input: {
   channel: ChannelPort;
   message: NormalizedMessage;
@@ -486,12 +638,20 @@ async function handleWorkspaceCommand(input: {
         await channel.reply(message, { text: selected.message });
         return;
       }
-      await scopeSettings.update(scopeId, { workspaceAlias: command.alias });
+      await scopeSettings.update(scopeId, {
+        workspaceAlias: command.alias,
+        model: undefined,
+        thinkingLevel: undefined,
+      });
       await channel.reply(message, {
         text: `当前 scope 已使用 workspace「${command.alias}」（显式选择）。后续消息会使用对应独立 session。`,
       });
     } else {
-      await scopeSettings.update(scopeId, { workspaceAlias: undefined });
+      await scopeSettings.update(scopeId, {
+        workspaceAlias: undefined,
+        model: undefined,
+        thinkingLevel: undefined,
+      });
       const selected = await resolveEffectiveWorkspace(workspaces);
       await channel.reply(message, {
         text: selected.ok
@@ -650,7 +810,7 @@ async function handleComment(
       );
       return;
     }
-    await scopeSettings.update(scopeId, { accessMode });
+    await scopeSettings.update(scopeId, { accessMode, model: undefined, thinkingLevel: undefined });
     await channel.comments.reply(target, comment.commentId, `当前 scope 的访问模式已设置为 ${accessMode}。`);
     return;
   }
@@ -668,6 +828,21 @@ async function handleComment(
       scopeId,
     }),
   };
+  if (isModelThinkingCommand(commentCommand) || commentCommand?.type === 'status') {
+    await handleModelThinkingCommand({
+      command: commentCommand,
+      reply: (text) => channel.comments.reply(target, comment.commentId, text),
+      executor,
+      catalog,
+      identity,
+      scopeId,
+      workspace: workspace.cwdRealpath,
+      accessMode,
+      profile,
+      scopeSettings,
+    });
+    return;
+  }
   if (commentCommand?.type === 'pi-commands' || commentCommand?.type === 'pi-command') {
     await handlePiCommentCommand({
       command: commentCommand,
@@ -687,19 +862,24 @@ async function handleComment(
   }
   if (commentCommand) {
     const response = await applySessionCommand(commentCommand, catalog, identity);
+    if (commentCommand.type === 'new') {
+      await scopeSettings.update(scopeId, { model: undefined, thinkingLevel: undefined });
+    }
     if (response) {
       await channel.comments.reply(target, comment.commentId, response);
     }
     return;
   }
   const previous = catalog.activeFor(identity);
+  const currentSettings = scopeSettings.get(scopeId);
   const execution = await executor.submit({
     scopeId,
     policyFingerprint: identity.policyFingerprint,
     cwd: workspace.cwdRealpath,
     accessMode,
     sessionId: previous?.sessionId,
-    model: runtimeProfileModel(profile),
+    model: previous ? currentSettings?.model : (currentSettings?.model ?? runtimeProfileModel(profile)),
+    thinkingLevel: currentSettings?.thinkingLevel,
     stopGraceMs: profile.preferences.agentStopGraceMs,
     interaction: { actorOpenId: comment.operator.openId, surface: 'comment' },
     prompt: `<bridge_comment_context>\n${JSON.stringify({

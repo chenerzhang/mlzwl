@@ -8,6 +8,7 @@ describe('Pi RPC argv', () => {
       sessionId: 'session-a',
       sessionDir: '/private/sessions',
       model: 'local/model',
+      thinkingLevel: 'xhigh',
       bridgeSystemPromptFile: '/private/system.md',
     });
     expect(args).toEqual([
@@ -20,6 +21,8 @@ describe('Pi RPC argv', () => {
       'session-a',
       '--model',
       'local/model',
+      '--thinking',
+      'xhigh',
       '--append-system-prompt',
       '/private/system.md',
       '--tools',

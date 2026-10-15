@@ -162,6 +162,65 @@ describe('RunExecutor', () => {
     }
   });
 
+  it('runs model and thinking controls under the idle scope boundary', async () => {
+    const state = {
+      sessionId: 'session-a',
+      isStreaming: false,
+      model: { provider: 'provider-a', id: 'model-a', reasoning: true },
+      thinkingLevel: 'medium' as const,
+    };
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi RPC',
+      async isAvailable() {
+        return true;
+      },
+      getSessionState: vi.fn(async () => state),
+      listModels: vi.fn(async () => ({ state, models: [state.model] })),
+      setModel: vi.fn(async (_opts, provider, modelId) => ({
+        ...state,
+        model: { provider, id: modelId, reasoning: false },
+      })),
+      listThinkingLevels: vi.fn(async () => ({
+        state,
+        levels: ['off', 'medium', 'high'] as Array<'off' | 'medium' | 'high'>,
+      })),
+      setThinkingLevel: vi.fn(async (_opts, thinkingLevel) => ({ ...state, thinkingLevel })),
+      run() {
+        throw new Error('not used');
+      },
+    };
+    const executor = new RunExecutor(adapter, 1);
+    const request = { scopeId: 'chat-a', cwd: '/tmp', accessMode: 'full' as const, sessionId: 'session-a' };
+    await expect(executor.getSessionState(request)).resolves.toEqual(state);
+    await expect(executor.listModels(request)).resolves.toEqual({ state, models: [state.model] });
+    await expect(executor.setModel(request, 'provider-a', 'model-b')).resolves.toMatchObject({
+      model: { provider: 'provider-a', id: 'model-b' },
+    });
+    await expect(executor.listThinkingLevels(request)).resolves.toEqual({
+      state,
+      levels: ['off', 'medium', 'high'],
+    });
+    await expect(executor.setThinkingLevel(request, 'high')).resolves.toMatchObject({ thinkingLevel: 'high' });
+  });
+
+  it('rejects model controls for spawn-per-turn transport', async () => {
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi spawn',
+      async isAvailable() {
+        return true;
+      },
+      run() {
+        throw new Error('not used');
+      },
+    };
+    const executor = new RunExecutor(adapter, 1);
+    await expect(executor.listModels({ scopeId: 'chat-a', cwd: '/tmp', accessMode: 'full' })).rejects.toThrow(
+      /RPC transport/,
+    );
+  });
+
   it('reserves a scope while asynchronous preparation is pending', async () => {
     let releasePreparation: (() => void) | undefined;
     const adapter: AgentAdapter = {

@@ -14,9 +14,13 @@ import type {
   AgentControlDisposition,
   AgentEvent,
   AgentInteractionPort,
+  AgentModelCatalog,
   AgentRun,
   AgentRunOptions,
+  AgentSessionState,
   AgentSlashCommand,
+  AgentThinkingLevel,
+  AgentThinkingSupport,
 } from '../types.js';
 import { PiJsonTranslator, type PiFinishReason } from './json-translator.js';
 import { buildPiRpcArgs } from './rpc-argv.js';
@@ -128,43 +132,50 @@ export class PiRpcAdapter implements AgentAdapter {
     }
   }
 
-  async listCommands(opts: AgentRunOptions): Promise<AgentSlashCommand[]> {
-    if (!opts.scopeId || !opts.policyFingerprint) {
-      throw new Error('Pi RPC requires scopeId and policyFingerprint');
-    }
-    const key = rpcPoolKey(opts);
-    let acquired: Awaited<ReturnType<PiRpcPool['acquire']>>;
-    try {
-      acquired = await this.pool.acquire(key, async () => this.createConnection(opts));
-    } catch (error) {
-      throw new RpcCommandError(error instanceof Error ? error.message : String(error), 'not-accepted', true);
-    }
-    const entry = acquired.entry;
-    let invalidate = false;
-    try {
-      const state = await entry.connection.getState();
-      if (opts.sessionId && state.sessionId !== opts.sessionId) {
-        throw new RpcCommandError(
-          `Pi RPC resumed session ${state.sessionId} but catalog expected ${opts.sessionId}`,
-          'not-accepted',
-          true,
-        );
-      }
-      if (state.isStreaming) {
-        throw new RpcCommandError('Pi RPC connection is active while commands are listed', 'not-accepted');
-      }
-      return await entry.connection.getCommands();
-    } catch (error) {
-      invalidate = true;
-      await this.pool.invalidate(entry);
-      throw error;
-    } finally {
-      entry.connection.cancelExtensionUIRequests();
-      this.interactionPort?.cancelRun(opts.runId);
-      if (!invalidate && entry.connection.usable) {
-        this.pool.release(entry);
-      }
-    }
+  listCommands(opts: AgentRunOptions): Promise<AgentSlashCommand[]> {
+    return this.withIdleConnection(opts, (connection) => connection.getCommands(), 'commands are listed');
+  }
+
+  getSessionState(opts: AgentRunOptions): Promise<AgentSessionState> {
+    return this.withIdleConnection(opts, (connection, state) => Promise.resolve(state), 'state is read');
+  }
+
+  listModels(opts: AgentRunOptions): Promise<AgentModelCatalog> {
+    return this.withIdleConnection(
+      opts,
+      async (connection, state) => ({ state, models: await connection.getAvailableModels() }),
+      'models are listed',
+    );
+  }
+
+  setModel(opts: AgentRunOptions, provider: string, modelId: string): Promise<AgentSessionState> {
+    return this.withIdleConnection(
+      opts,
+      async (connection) => {
+        await connection.setModel(provider, modelId);
+        return connection.getState();
+      },
+      'model is changed',
+    );
+  }
+
+  listThinkingLevels(opts: AgentRunOptions): Promise<AgentThinkingSupport> {
+    return this.withIdleConnection(
+      opts,
+      async (connection, state) => ({ state, levels: await connection.getAvailableThinkingLevels() }),
+      'thinking levels are listed',
+    );
+  }
+
+  setThinkingLevel(opts: AgentRunOptions, level: AgentThinkingLevel): Promise<AgentSessionState> {
+    return this.withIdleConnection(
+      opts,
+      async (connection) => {
+        await connection.setThinkingLevel(level);
+        return connection.getState();
+      },
+      'thinking level is changed',
+    );
   }
 
   run(opts: AgentRunOptions): AgentRun {
@@ -229,6 +240,49 @@ export class PiRpcAdapter implements AgentAdapter {
     }
     this.activeByRunId.clear();
     await this.pool.dispose();
+  }
+
+  private async withIdleConnection<T>(
+    opts: AgentRunOptions,
+    operation: (connection: StrictPiRpcConnection, state: AgentSessionState) => Promise<T>,
+    activity: string,
+  ): Promise<T> {
+    if (!opts.scopeId || !opts.policyFingerprint) {
+      throw new Error('Pi RPC requires scopeId and policyFingerprint');
+    }
+    const key = rpcPoolKey(opts);
+    let acquired: Awaited<ReturnType<PiRpcPool['acquire']>>;
+    try {
+      acquired = await this.pool.acquire(key, async () => this.createConnection(opts));
+    } catch (error) {
+      throw new RpcCommandError(error instanceof Error ? error.message : String(error), 'not-accepted', true);
+    }
+    const entry = acquired.entry;
+    let invalidate = false;
+    try {
+      const state = await entry.connection.getState();
+      if (opts.sessionId && state.sessionId !== opts.sessionId) {
+        throw new RpcCommandError(
+          `Pi RPC resumed session ${state.sessionId} but catalog expected ${opts.sessionId}`,
+          'not-accepted',
+          true,
+        );
+      }
+      if (state.isStreaming) {
+        throw new RpcCommandError(`Pi RPC connection is active while ${activity}`, 'not-accepted');
+      }
+      return await operation(entry.connection, state);
+    } catch (error) {
+      invalidate = true;
+      await this.pool.invalidate(entry);
+      throw error;
+    } finally {
+      entry.connection.cancelExtensionUIRequests();
+      this.interactionPort?.cancelRun(opts.runId);
+      if (!invalidate && entry.connection.usable) {
+        this.pool.release(entry);
+      }
+    }
   }
 
   private async startRun(
@@ -347,6 +401,7 @@ export class PiRpcAdapter implements AgentAdapter {
       sessionDir: this.opts.piSessionDir,
       sessionId: opts.sessionId,
       model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
       bridgeSystemPromptFile: this.opts.bridgeSystemPromptFile,
     });
     const child = spawnProcessPrivate(this.binary, args, {
@@ -630,6 +685,7 @@ function rpcPoolKey(opts: AgentRunOptions): string {
         cwd: opts.cwd,
         policyFingerprint: opts.policyFingerprint,
         model: opts.model ?? null,
+        thinkingLevel: opts.thinkingLevel ?? null,
         sessionId: null,
       }),
     )

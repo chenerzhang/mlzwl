@@ -1,5 +1,16 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentEvent, AgentInteractionContext, AgentRun, AgentSlashCommand } from '../agent/types.js';
+import type {
+  AgentAdapter,
+  AgentEvent,
+  AgentInteractionContext,
+  AgentModelCatalog,
+  AgentRun,
+  AgentRunOptions,
+  AgentSessionState,
+  AgentSlashCommand,
+  AgentThinkingLevel,
+  AgentThinkingSupport,
+} from '../agent/types.js';
 import type { AccessMode } from '../config/permissions.js';
 
 export interface RunRequest {
@@ -9,6 +20,7 @@ export interface RunRequest {
   accessMode: AccessMode;
   sessionId?: string;
   model?: string;
+  thinkingLevel?: AgentThinkingLevel;
   stopGraceMs?: number;
   attachments?: string[];
   policyFingerprint?: string;
@@ -58,6 +70,7 @@ export class RunExecutor {
         accessMode: request.accessMode,
         sessionId: request.sessionId,
         model: request.model,
+        thinkingLevel: request.thinkingLevel,
         stopGraceMs: request.stopGraceMs,
         attachments: request.attachments,
       };
@@ -108,6 +121,51 @@ export class RunExecutor {
     }
   }
 
+  getSessionState(request: IdleSessionRequest): Promise<AgentSessionState> {
+    return this.runIdleOperation(request, (options) => {
+      if (!this.agent.getSessionState) {
+        throw unsupportedModelControl();
+      }
+      return this.agent.getSessionState(options);
+    });
+  }
+
+  listModels(request: IdleSessionRequest): Promise<AgentModelCatalog> {
+    return this.runIdleOperation(request, (options) => {
+      if (!this.agent.listModels) {
+        throw unsupportedModelControl();
+      }
+      return this.agent.listModels(options);
+    });
+  }
+
+  setModel(request: IdleSessionRequest, provider: string, modelId: string): Promise<AgentSessionState> {
+    return this.runIdleOperation(request, (options) => {
+      if (!this.agent.setModel) {
+        throw unsupportedModelControl();
+      }
+      return this.agent.setModel(options, provider, modelId);
+    });
+  }
+
+  listThinkingLevels(request: IdleSessionRequest): Promise<AgentThinkingSupport> {
+    return this.runIdleOperation(request, (options) => {
+      if (!this.agent.listThinkingLevels) {
+        throw unsupportedModelControl();
+      }
+      return this.agent.listThinkingLevels(options);
+    });
+  }
+
+  setThinkingLevel(request: IdleSessionRequest, level: AgentThinkingLevel): Promise<AgentSessionState> {
+    return this.runIdleOperation(request, (options) => {
+      if (!this.agent.setThinkingLevel) {
+        throw unsupportedModelControl();
+      }
+      return this.agent.setThinkingLevel(options, level);
+    });
+  }
+
   async stop(scopeId: string, reason: 'interrupted' | 'timeout' = 'interrupted'): Promise<void> {
     await this.active.get(scopeId)?.stop(reason);
   }
@@ -127,4 +185,30 @@ export class RunExecutor {
   activity(): { active: number; starting: number; scopes: string[] } {
     return { active: this.active.size, starting: this.starting.size, scopes: [...this.active.keys()] };
   }
+
+  private async runIdleOperation<T>(
+    request: IdleSessionRequest,
+    operation: (options: AgentRunOptions) => Promise<T>,
+  ): Promise<T> {
+    if (this.active.has(request.scopeId) || this.starting.has(request.scopeId)) {
+      throw new ScopeBusyError(request.scopeId);
+    }
+    if (this.active.size + this.starting.size >= this.maxConcurrent) {
+      throw new ProcessPoolFullError();
+    }
+    this.starting.add(request.scopeId);
+    try {
+      const options = { ...request, runId: randomUUID(), prompt: '/bridge-session-control' };
+      await this.agent.prepareRun?.(options);
+      return await operation(options);
+    } finally {
+      this.starting.delete(request.scopeId);
+    }
+  }
+}
+
+type IdleSessionRequest = Omit<RunRequest, 'prompt' | 'attachments' | 'promptMode'>;
+
+function unsupportedModelControl(): Error {
+  return new Error('当前 transport 不支持模型与思考级别控制；请使用 RPC transport。');
 }

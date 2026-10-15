@@ -256,6 +256,7 @@ import { join } from 'node:path';
 const flags = ${JSON.stringify([
       '--mode',
       '--model',
+      '--thinking',
       '--session',
       '--session-dir',
       '--tools',
@@ -273,12 +274,18 @@ else if (process.argv.includes('rpc')) {
   const models = JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR, 'models.json'), 'utf8'));
   let buffered = '';
   let uiPromptId;
+  let selectedModel = 'loopback';
+  let thinkingLevel = 'medium';
   function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
   send({ type: 'extension_ui_request', id: 'startup-status', method: 'setStatus', statusKey: 'probe', statusText: 'ready' });
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => { buffered += chunk; let index; while ((index = buffered.indexOf('\\n')) >= 0) { const line = buffered.slice(0, index); buffered = buffered.slice(index + 1); if (line) handle(JSON.parse(line)); } });
   async function handle(command) {
-    if (command.type === 'get_state') return send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'smoke-rpc-probe', isStreaming: false } });
+    if (command.type === 'get_state') return send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'smoke-rpc-probe', isStreaming: false, model: { provider: 'lark-pi-bridge-rpc-probe', id: selectedModel, reasoning: true }, thinkingLevel } });
+    if (command.type === 'get_available_models') return send({ id: command.id, type: 'response', command: 'get_available_models', success: true, data: { models: [{ provider: 'lark-pi-bridge-rpc-probe', id: 'loopback', name: 'Probe Model', reasoning: true }] } });
+    if (command.type === 'set_model') { selectedModel = command.modelId; return send({ id: command.id, type: 'response', command: 'set_model', success: true, data: { provider: command.provider, id: command.modelId, name: 'Probe Model', reasoning: true } }); }
+    if (command.type === 'get_available_thinking_levels') return send({ id: command.id, type: 'response', command: 'get_available_thinking_levels', success: true, data: { levels: ['off', 'medium'] } });
+    if (command.type === 'set_thinking_level') { thinkingLevel = command.level; send({ type: 'thinking_level_changed', level: thinkingLevel }); return send({ id: command.id, type: 'response', command: 'set_thinking_level', success: true, data: {} }); }
     if (command.type === 'get_commands') return send({ id: command.id, type: 'response', command: 'get_commands', success: true, data: { commands: [{ name: 'lark-pi-bridge-ui-probe', description: 'probe', source: 'extension' }] } });
     if (command.type === 'prompt' && command.message === '/lark-pi-bridge-ui-probe') {
       uiPromptId = command.id;

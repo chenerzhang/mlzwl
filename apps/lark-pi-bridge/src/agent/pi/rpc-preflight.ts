@@ -83,7 +83,15 @@ export async function checkPiRpcCompatibility(input: {
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               apiKey: 'local-rpc-probe-key-not-real',
               api: 'openai-completions',
-              models: [{ id: MODEL, name: 'Local RPC protocol probe', contextWindow: 4096, maxTokens: 64 }],
+              models: [
+                {
+                  id: MODEL,
+                  name: 'Local RPC protocol probe',
+                  reasoning: true,
+                  contextWindow: 4096,
+                  maxTokens: 64,
+                },
+              ],
             },
           },
         },
@@ -135,8 +143,26 @@ export async function checkPiRpcCompatibility(input: {
       }
     });
     const state = await connection.getState();
-    if (state.isStreaming) {
-      throw new Error('Pi RPC protocol probe started in streaming state');
+    if (state.isStreaming || state.model?.provider !== PROVIDER || state.model.id !== MODEL || !state.thinkingLevel) {
+      throw new Error('Pi RPC protocol probe started with invalid model state');
+    }
+    const models = await connection.getAvailableModels();
+    if (!models.some((model) => model.provider === PROVIDER && model.id === MODEL)) {
+      throw new Error('Pi RPC protocol probe did not list its isolated model');
+    }
+    const thinkingLevels = await connection.getAvailableThinkingLevels();
+    if (!thinkingLevels.includes('off')) {
+      throw new Error('Pi RPC protocol probe returned invalid thinking levels');
+    }
+    await connection.setModel(PROVIDER, MODEL);
+    await connection.setThinkingLevel('off');
+    const selectedState = await connection.getState();
+    if (
+      selectedState.model?.provider !== PROVIDER ||
+      selectedState.model.id !== MODEL ||
+      selectedState.thinkingLevel !== 'off'
+    ) {
+      throw new Error('Pi RPC protocol probe could not control model and thinking state');
     }
     const commands = await connection.getCommands();
     if (!commands.some((command) => command.name === 'lark-pi-bridge-ui-probe' && command.source === 'extension')) {
