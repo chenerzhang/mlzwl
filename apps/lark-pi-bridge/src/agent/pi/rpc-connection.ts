@@ -1,6 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { Readable, Writable } from 'node:stream';
-import type { AgentExtensionUIRequest, AgentExtensionUIResponse, AgentSlashCommand } from '../types.js';
+import {
+  AGENT_THINKING_LEVELS,
+  type AgentExtensionUIRequest,
+  type AgentExtensionUIResponse,
+  type AgentModelInfo,
+  type AgentSessionState,
+  type AgentSlashCommand,
+  type AgentThinkingLevel,
+} from '../types.js';
 import type { SpawnedProcessByStdio } from '../../platform/spawn.js';
 import { log } from '../../core/logger.js';
 import {
@@ -41,10 +49,7 @@ interface RpcResponse {
   error?: string;
 }
 
-interface RpcSessionState {
-  sessionId: string;
-  isStreaming: boolean;
-}
+type RpcSessionState = AgentSessionState;
 
 export interface RpcExtensionUIRequest {
   id: string;
@@ -226,7 +231,56 @@ export class StrictPiRpcConnection {
     if (!sessionId || typeof data?.isStreaming !== 'boolean') {
       throw this.protocolFailure('Pi RPC get_state returned invalid data', 'not-accepted');
     }
-    return { sessionId, isStreaming: data.isStreaming };
+    const model = data?.model === undefined ? undefined : parseModel(data.model);
+    const thinkingLevel = data?.thinkingLevel === undefined ? undefined : parseThinkingLevel(data.thinkingLevel);
+    if ((data?.model !== undefined && !model) || (data?.thinkingLevel !== undefined && !thinkingLevel)) {
+      throw this.protocolFailure('Pi RPC get_state returned invalid model state', 'not-accepted');
+    }
+    return {
+      sessionId,
+      isStreaming: data.isStreaming,
+      ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+    };
+  }
+
+  async getAvailableModels(): Promise<AgentModelInfo[]> {
+    const response = await this.send({ type: 'get_available_models' }, 'not-accepted');
+    const rawModels = record(response.data)?.models;
+    if (!Array.isArray(rawModels) || rawModels.length > 10_000) {
+      throw this.protocolFailure('Pi RPC get_available_models returned invalid data', 'not-accepted');
+    }
+    const models = rawModels.map(parseModel);
+    if (models.some((model) => !model)) {
+      throw this.protocolFailure('Pi RPC get_available_models returned an invalid model entry', 'not-accepted');
+    }
+    return models as AgentModelInfo[];
+  }
+
+  async setModel(provider: string, modelId: string): Promise<AgentModelInfo> {
+    const response = await this.sendStateChange({ type: 'set_model', provider, modelId });
+    const model = parseModel(response.data);
+    if (!model) {
+      throw this.protocolFailure('Pi RPC set_model returned invalid data', 'not-accepted');
+    }
+    return model;
+  }
+
+  async getAvailableThinkingLevels(): Promise<AgentThinkingLevel[]> {
+    const response = await this.send({ type: 'get_available_thinking_levels' }, 'not-accepted');
+    const rawLevels = record(response.data)?.levels;
+    if (!Array.isArray(rawLevels) || !rawLevels.length || rawLevels.length > AGENT_THINKING_LEVELS.length) {
+      throw this.protocolFailure('Pi RPC get_available_thinking_levels returned invalid data', 'not-accepted');
+    }
+    const levels = rawLevels.map(parseThinkingLevel);
+    if (levels.some((level) => !level) || new Set(levels).size !== levels.length) {
+      throw this.protocolFailure('Pi RPC get_available_thinking_levels returned invalid levels', 'not-accepted');
+    }
+    return levels as AgentThinkingLevel[];
+  }
+
+  async setThinkingLevel(level: AgentThinkingLevel): Promise<void> {
+    await this.sendStateChange({ type: 'set_thinking_level', level });
   }
 
   async prompt(message: string, images?: RpcImageContent[], timeoutMs?: number): Promise<RpcPromptDisposition> {
@@ -320,6 +374,26 @@ export class StrictPiRpcConnection {
         timer.unref();
       }),
     ]);
+  }
+
+  private async sendStateChange(command: Record<string, unknown>): Promise<RpcResponse> {
+    let eventError: Error | undefined;
+    const unsubscribe = this.onEvent((event) => {
+      const raw = record(event);
+      if (raw?.type !== 'thinking_level_changed' || !parseThinkingLevel(raw.level)) {
+        eventError = new Error(`Pi RPC emitted an unexpected event during ${String(command.type)}`);
+        this.terminate(eventError);
+      }
+    });
+    try {
+      const response = await this.send(command, 'not-accepted');
+      if (eventError) {
+        throw eventError;
+      }
+      return response;
+    } finally {
+      unsubscribe();
+    }
   }
 
   private async queueCommand(
@@ -740,6 +814,30 @@ function record(value: unknown): Record<string, unknown> | undefined {
 
 function string(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function parseModel(value: unknown): AgentModelInfo | undefined {
+  const raw = record(value);
+  const provider = string(raw?.provider);
+  const id = string(raw?.id);
+  const name = raw?.name;
+  if (
+    !provider ||
+    provider.length > 128 ||
+    !id ||
+    id.length > 256 ||
+    typeof raw?.reasoning !== 'boolean' ||
+    (name !== undefined && (typeof name !== 'string' || name.length > 512))
+  ) {
+    return undefined;
+  }
+  return { provider, id, reasoning: raw.reasoning, ...(name ? { name } : {}) };
+}
+
+function parseThinkingLevel(value: unknown): AgentThinkingLevel | undefined {
+  return typeof value === 'string' && (AGENT_THINKING_LEVELS as readonly string[]).includes(value)
+    ? (value as AgentThinkingLevel)
+    : undefined;
 }
 
 function positive(value: number | undefined, fallback: number, name: string): number {

@@ -5,9 +5,13 @@ import type {
   AgentBotIdentity,
   AgentEvent,
   AgentInteractionPort,
+  AgentModelCatalog,
   AgentRun,
   AgentRunOptions,
+  AgentSessionState,
   AgentSlashCommand,
+  AgentThinkingLevel,
+  AgentThinkingSupport,
 } from '../types.js';
 import { RpcCommandError } from './rpc-connection.js';
 
@@ -61,6 +65,41 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
       return Promise.reject(new Error('当前 RPC adapter 不支持 /pi 命令。'));
     }
     return this.rpc.listCommands(opts);
+  }
+
+  getSessionState(opts: AgentRunOptions): Promise<AgentSessionState> {
+    if (!this.rpc.getSessionState) {
+      return Promise.reject(unsupportedModelControl());
+    }
+    return this.rpc.getSessionState(opts);
+  }
+
+  listModels(opts: AgentRunOptions): Promise<AgentModelCatalog> {
+    if (!this.rpc.listModels) {
+      return Promise.reject(unsupportedModelControl());
+    }
+    return this.rpc.listModels(opts);
+  }
+
+  setModel(opts: AgentRunOptions, provider: string, modelId: string): Promise<AgentSessionState> {
+    if (!this.rpc.setModel) {
+      return Promise.reject(unsupportedModelControl());
+    }
+    return this.rpc.setModel(opts, provider, modelId);
+  }
+
+  listThinkingLevels(opts: AgentRunOptions): Promise<AgentThinkingSupport> {
+    if (!this.rpc.listThinkingLevels) {
+      return Promise.reject(unsupportedModelControl());
+    }
+    return this.rpc.listThinkingLevels(opts);
+  }
+
+  setThinkingLevel(opts: AgentRunOptions, level: AgentThinkingLevel): Promise<AgentSessionState> {
+    if (!this.rpc.setThinkingLevel) {
+      return Promise.reject(unsupportedModelControl());
+    }
+    return this.rpc.setThinkingLevel(opts, level);
   }
 
   run(opts: AgentRunOptions): AgentRun {
@@ -141,4 +180,8 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
   async dispose(): Promise<void> {
     await Promise.all([this.rpc.dispose?.(), this.spawnPerTurn.dispose?.()]);
   }
+}
+
+function unsupportedModelControl(): Error {
+  return new Error('当前 RPC adapter 不支持模型与思考级别控制。');
 }

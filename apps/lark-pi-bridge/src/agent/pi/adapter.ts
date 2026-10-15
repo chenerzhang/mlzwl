@@ -107,6 +107,7 @@ export class PiAdapter implements AgentAdapter {
       sessionDir: this.opts.piSessionDir,
       sessionId: opts.sessionId,
       model: opts.model,
+      thinkingLevel: opts.thinkingLevel,
       attachments: opts.attachments,
       bridgeSystemPromptFile: this.opts.bridgeSystemPromptFile,
     });

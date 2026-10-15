@@ -5,6 +5,7 @@ export interface BuildPiRpcArgsInput {
   sessionId?: string;
   sessionDir: string;
   model?: string;
+  thinkingLevel?: string;
   bridgeSystemPromptFile: string;
 }
 
@@ -22,6 +23,9 @@ export function buildPiRpcArgs(input: BuildPiRpcArgsInput): string[] {
   }
   if (input.model) {
     args.push('--model', input.model);
+  }
+  if (input.thinkingLevel) {
+    args.push('--thinking', input.thinkingLevel);
   }
   args.push('--append-system-prompt', input.bridgeSystemPromptFile);
   if (input.accessMode === 'read-only') {

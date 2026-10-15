@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { isAgentThinkingLevel, type AgentThinkingLevel } from '../agent/types.js';
 import { isAccessMode, type AccessMode } from '../config/permissions.js';
+import { parseSelectedModel } from '../config/pi-models.js';
 import { withFileMutationLock } from '../runtime/file-mutation.js';
 
 export interface ScopeSettings {
@@ -9,6 +11,8 @@ export interface ScopeSettings {
   workspaceAlias?: string;
   idleTimeoutMinutes?: number;
   accessMode?: AccessMode;
+  model?: string;
+  thinkingLevel?: AgentThinkingLevel;
   updatedAt: number;
 }
 
@@ -35,7 +39,7 @@ export class ScopeSettingsStore {
 
   async update(
     scopeId: string,
-    patch: Pick<ScopeSettings, 'workspaceAlias' | 'idleTimeoutMinutes' | 'accessMode'>,
+    patch: Pick<ScopeSettings, 'workspaceAlias' | 'idleTimeoutMinutes' | 'accessMode' | 'model' | 'thinkingLevel'>,
   ): Promise<ScopeSettings> {
     return withFileMutationLock(this.path, async () => {
       const latest = await readSettings(this.path);
@@ -45,6 +49,8 @@ export class ScopeSettingsStore {
         ...(current?.workspaceAlias ? { workspaceAlias: current.workspaceAlias } : {}),
         ...(current?.idleTimeoutMinutes ? { idleTimeoutMinutes: current.idleTimeoutMinutes } : {}),
         ...(current?.accessMode ? { accessMode: current.accessMode } : {}),
+        ...(current?.model ? { model: current.model } : {}),
+        ...(current?.thinkingLevel ? { thinkingLevel: current.thinkingLevel } : {}),
         ...patch,
         updatedAt: nextTimestamp(current?.updatedAt),
       };
@@ -56,6 +62,12 @@ export class ScopeSettingsStore {
       }
       if (!isAccessMode(next.accessMode)) {
         delete next.accessMode;
+      }
+      if (!next.model || !parseSelectedModel(next.model)) {
+        delete next.model;
+      }
+      if (!isAgentThinkingLevel(next.thinkingLevel)) {
+        delete next.thinkingLevel;
       }
       latest.set(scopeId, next);
       await persistSettings(this.path, latest);
@@ -126,6 +138,8 @@ function parseScopeSettings(value: unknown): ScopeSettings | undefined {
     ...(typeof raw.workspaceAlias === 'string' && raw.workspaceAlias ? { workspaceAlias: raw.workspaceAlias } : {}),
     ...(validTimeout(raw.idleTimeoutMinutes) ? { idleTimeoutMinutes: raw.idleTimeoutMinutes } : {}),
     ...(isAccessMode(raw.accessMode) ? { accessMode: raw.accessMode } : {}),
+    ...(typeof raw.model === 'string' && parseSelectedModel(raw.model) ? { model: raw.model } : {}),
+    ...(isAgentThinkingLevel(raw.thinkingLevel) ? { thinkingLevel: raw.thinkingLevel } : {}),
     updatedAt: raw.updatedAt,
   };
 }

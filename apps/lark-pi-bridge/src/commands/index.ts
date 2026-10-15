@@ -1,4 +1,6 @@
+import { isAgentThinkingLevel, type AgentThinkingLevel } from '../agent/types.js';
 import { isAccessMode, type AccessMode } from '../config/permissions.js';
+import { parseSelectedModel } from '../config/pi-models.js';
 import type { SessionCatalog, SessionCatalogIdentity } from '../session/catalog.js';
 
 export type WorkspaceBridgeCommand =
@@ -17,6 +19,12 @@ export type BridgeCommand =
   | { type: 'follow-up'; prompt: string }
   | { type: 'timeout'; minutes: number }
   | { type: 'access'; accessMode: AccessMode }
+  | { type: 'model-current' }
+  | { type: 'model-list' }
+  | { type: 'model-use'; provider: string; modelId: string }
+  | { type: 'thinking-current' }
+  | { type: 'thinking-list' }
+  | { type: 'thinking-set'; level: AgentThinkingLevel }
   | { type: 'pi-commands' }
   | { type: 'pi-command'; command: string; name: string }
   | { type: 'invalid'; command: string; message: string }
@@ -70,6 +78,10 @@ export function parseBridgeCommand(text: string): BridgeCommand | undefined {
     }
     case '/workspace':
       return parseWorkspaceCommand(args);
+    case '/model':
+      return parseModelCommand(args);
+    case '/thinking':
+      return parseThinkingCommand(args);
     case '/access':
       return args.length === 1 && isAccessMode(args[0])
         ? { type: 'access', accessMode: args[0] }
@@ -115,6 +127,35 @@ function parseWorkspaceCommand(args: string[]): BridgeCommand {
     return { type: 'workspace-default-set', alias: args[2]! };
   }
   return invalid('/workspace', '用法：/workspace [current|list|use <alias|default>|default get|default set <alias>]');
+}
+
+function parseModelCommand(args: string[]): BridgeCommand {
+  if (args.length === 0 || (args.length === 1 && args[0]?.toLowerCase() === 'current')) {
+    return { type: 'model-current' };
+  }
+  if (args.length === 1 && args[0]?.toLowerCase() === 'list') {
+    return { type: 'model-list' };
+  }
+  if (args.length === 2 && args[0]?.toLowerCase() === 'use') {
+    const parsed = parseSelectedModel(args[1]!);
+    return parsed
+      ? { type: 'model-use', provider: parsed.providerId, modelId: parsed.modelId }
+      : invalid('/model', '用法：/model use <provider>/<model>');
+  }
+  return invalid('/model', '用法：/model [current|list|use <provider>/<model>]');
+}
+
+function parseThinkingCommand(args: string[]): BridgeCommand {
+  if (args.length === 0 || (args.length === 1 && args[0]?.toLowerCase() === 'current')) {
+    return { type: 'thinking-current' };
+  }
+  if (args.length === 1 && args[0]?.toLowerCase() === 'list') {
+    return { type: 'thinking-list' };
+  }
+  if (args.length === 1 && isAgentThinkingLevel(args[0]?.toLowerCase())) {
+    return { type: 'thinking-set', level: args[0].toLowerCase() as AgentThinkingLevel };
+  }
+  return invalid('/thinking', '用法：/thinking [current|list|off|minimal|low|medium|high|xhigh|max]');
 }
 
 function noArgs<T extends BridgeCommand>(name: string, args: string[], command: T): T | BridgeCommand {

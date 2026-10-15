@@ -9,7 +9,7 @@ describe('ScopeSettingsStore', () => {
   afterEach(async () => {
     await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   });
-  it('persists a scope-local workspace alias and timeout without session identity', async () => {
+  it('persists scope-local workspace, runtime, model, and thinking selections without session identity', async () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-settings-'));
     paths.push(root);
     const path = join(root, 'scope-settings.json');
@@ -18,6 +18,8 @@ describe('ScopeSettingsStore', () => {
       workspaceAlias: 'api',
       idleTimeoutMinutes: 15,
       accessMode: 'read-only',
+      model: 'anthropic/claude-sonnet-4',
+      thinkingLevel: 'high',
     });
     const reloaded = new ScopeSettingsStore(path);
     await reloaded.load();
@@ -25,6 +27,8 @@ describe('ScopeSettingsStore', () => {
       workspaceAlias: 'api',
       idleTimeoutMinutes: 15,
       accessMode: 'read-only',
+      model: 'anthropic/claude-sonnet-4',
+      thinkingLevel: 'high',
     });
   });
 });

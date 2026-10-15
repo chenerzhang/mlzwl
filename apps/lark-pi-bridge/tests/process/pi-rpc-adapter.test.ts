@@ -74,6 +74,64 @@ describe('PiRpcAdapter process contract', () => {
     expect((await stat(join(root, 'pi-agent', 'lark-pi-bridge-system-prompt.md'))).mode & 0o777).toBe(0o600);
   });
 
+  it('lists, selects, and reports model and thinking state on the scoped RPC child', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-rpc-model-control-'));
+    cleanup.push(root);
+    const record = join(root, 'records.jsonl');
+    const binary = await fakeModelControlPi(root, record);
+    const adapter = new PiRpcAdapter({
+      binary,
+      piConfigDir: join(root, 'pi-agent'),
+      piSessionDir: join(root, 'pi-agent', 'sessions'),
+      bridgeSystemPromptFile: join(root, 'pi-agent', 'lark-pi-bridge-system-prompt.md'),
+    });
+    await adapter.prepareRun();
+    const options = {
+      runId: 'model-control',
+      scopeId: 'chat-model-control',
+      policyFingerprint: 'fingerprint-model-control',
+      prompt: '/model',
+      cwd: root,
+      accessMode: 'read-only' as const,
+      sessionId: 'rpc-model-session',
+    };
+    await expect(adapter.getSessionState(options)).resolves.toMatchObject({
+      sessionId: 'rpc-model-session',
+      model: { provider: 'provider-a', id: 'model-a' },
+      thinkingLevel: 'medium',
+    });
+    await expect(adapter.listModels(options)).resolves.toMatchObject({
+      state: { model: { provider: 'provider-a', id: 'model-a' }, thinkingLevel: 'medium' },
+      models: [
+        { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true },
+        { provider: 'provider-a', id: 'model-b', reasoning: false },
+      ],
+    });
+    await expect(adapter.setModel(options, 'provider-a', 'model-b')).resolves.toMatchObject({
+      model: { provider: 'provider-a', id: 'model-b' },
+    });
+    await expect(adapter.listThinkingLevels(options)).resolves.toMatchObject({
+      state: { model: { provider: 'provider-a', id: 'model-b' }, thinkingLevel: 'medium' },
+      levels: ['off'],
+    });
+    await expect(adapter.setThinkingLevel(options, 'off')).resolves.toMatchObject({ thinkingLevel: 'off' });
+    await adapter.dispose();
+    const records = (await readFile(record, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(new Set(records.filter((entry) => entry.kind === 'startup').map((entry) => entry.pid)).size).toBe(1);
+    expect(records.find((entry) => entry.kind === 'startup').argv).not.toContain('--model');
+    expect(records.map((entry) => entry.type).filter(Boolean)).toEqual(
+      expect.arrayContaining([
+        'get_available_models',
+        'set_model',
+        'get_available_thinking_levels',
+        'set_thinking_level',
+      ]),
+    );
+  });
+
   it('sends explicit Pi commands raw and completes handled commands without a model terminal event', async () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-rpc-command-'));
     cleanup.push(root);
@@ -483,6 +541,32 @@ function runOptions(root: string, suffix: string) {
     cwd: root,
     accessMode: 'read-only' as const,
   };
+}
+
+async function fakeModelControlPi(root: string, record: string): Promise<string> {
+  const path = join(root, 'fake-model-control-pi.mjs');
+  const code = `#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+const record = ${JSON.stringify(record)};
+appendFileSync(record, JSON.stringify({ kind: 'startup', pid: process.pid, argv: process.argv.slice(2) }) + '\\n');
+let buffered = '';
+let model = { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true };
+let thinkingLevel = 'medium';
+function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { buffered += chunk; let index; while ((index = buffered.indexOf('\\n')) >= 0) { const line = buffered.slice(0, index); buffered = buffered.slice(index + 1); if (line) handle(JSON.parse(line)); } });
+function handle(command) {
+  appendFileSync(record, JSON.stringify({ ...command, pid: process.pid }) + '\\n');
+  if (command.type === 'get_state') return send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'rpc-model-session', isStreaming: false, model, thinkingLevel } });
+  if (command.type === 'get_available_models') return send({ id: command.id, type: 'response', command: command.type, success: true, data: { models: [{ provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true }, { provider: 'provider-a', id: 'model-b', reasoning: false }] } });
+  if (command.type === 'set_model') { model = { provider: command.provider, id: command.modelId, reasoning: false }; return send({ id: command.id, type: 'response', command: command.type, success: true, data: model }); }
+  if (command.type === 'get_available_thinking_levels') return send({ id: command.id, type: 'response', command: command.type, success: true, data: { levels: ['off'] } });
+  if (command.type === 'set_thinking_level') { thinkingLevel = command.level; send({ type: 'thinking_level_changed', level: thinkingLevel }); return send({ id: command.id, type: 'response', command: command.type, success: true }); }
+}
+`;
+  await writeFile(path, code, { mode: 0o755 });
+  await chmod(path, 0o755);
+  return path;
 }
 
 async function fakeCommandPi(root: string, record: string): Promise<string> {

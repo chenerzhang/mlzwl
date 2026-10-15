@@ -289,25 +289,31 @@ lark-pi-bridge config refresh --profile default
 
 命令应作为消息主体发送；参数中的 workspace 必须是已配置 alias。
 
-| 命令                             | 作用                               | 是否启动新 Pi turn | 作用范围与说明                                                    |
-| -------------------------------- | ---------------------------------- | ------------------ | ----------------------------------------------------------------- |
-| `/new`                           | 归档当前上下文对应的 session       | 否                 | 下一条普通消息创建新 session                                      |
-| `/resume`                        | 检查当前上下文是否有可恢复 session | 否                 | 普通消息本来就会自动恢复；不接受 session ID                       |
-| `/status`                        | 显示当前上下文的 Pi session ID     | 否                 | workspace/access 改变后可能显示尚无 session                       |
-| `/stop`                          | 请求停止当前活动 run               | 否                 | spawn 模式终止 child；RPC 优先发送 `abort`，必要时销毁 child      |
-| `/timeout <分钟>`                | 设置 idle timeout                  | 否                 | 允许 1–1440 分钟，按当前 scope 持久化                             |
-| `/workspace` / `current`         | 显示当前有效 alias 与来源          | 否                 | 不显示本机绝对路径                                                |
-| `/workspace list`                | 稳定列出 alias 与状态              | 否                 | 标记 current/default/unavailable                                  |
-| `/workspace use <alias>`         | 显式选择当前 scope workspace       | 否                 | alias 必须存在且目录可用                                          |
-| `/workspace use default`         | 清除 scope 覆盖并跟随 profile 默认 | 否                 | 默认缺失或不可用时明确报错                                        |
-| `/workspace default get`         | 查看 profile 默认值                | 否                 | direct default 只说明状态，不显示路径                             |
-| `/workspace default set <alias>` | 修改 profile 默认 alias            | 否                 | 仅 `access.admins`；无管理员时只能用本机 CLI                      |
-| `/access read-only`              | 将当前 scope 切到只读工具集        | 否                 | 总是受 profile `maxAccess` 约束                                   |
-| `/access full`                   | 将当前 scope 切到完整工具集        | 否                 | `maxAccess=read-only` 时明确拒绝                                  |
-| `/steer <指令>`                  | 在当前活跃 RPC run 中追加实时引导  | 否                 | 仅 RPC 且当前 scope 有活动 run；不会复制成普通 prompt             |
-| `/follow-up <指令>`              | 将后续指令交给当前活跃 RPC run     | 否                 | 仅 RPC；也支持 `/followup` 写法                                   |
-| `/pi commands`                   | 列出 Pi 当前公开的可调用命令       | 否                 | 仅 RPC；只显示名称、来源类型和有界描述，不显示资源路径            |
-| `/pi /<command> [args]`          | 原样执行一条已公开 Pi 命令         | 视命令而定         | 仅 extension/prompt/skill；继续受当前 scope/workspace/access 约束 |
+| 命令                             | 作用                                | 是否启动新 Pi turn | 作用范围与说明                                                    |
+| -------------------------------- | ----------------------------------- | ------------------ | ----------------------------------------------------------------- |
+| `/new`                           | 归档当前上下文对应的 session        | 否                 | 下一条普通消息创建新 session                                      |
+| `/resume`                        | 检查当前上下文是否有可恢复 session  | 否                 | 普通消息本来就会自动恢复；不接受 session ID                       |
+| `/status`                        | 显示当前 Pi session、模型和思考级别 | 否                 | 尚无 session 时明确提示                                           |
+| `/model` / `current`             | 显示当前 session 模型与思考级别     | 否                 | 仅 RPC；不会创建空 session                                        |
+| `/model list`                    | 列出当前 Pi 配置可用模型            | 否                 | 仅 RPC；标记当前模型与 thinking 能力                              |
+| `/model use <provider>/<model>`  | 切换当前 Pi session 模型            | 否                 | 仅 RPC；须先有 session；按 scope 持久化，模型必须由 Pi 列为可用   |
+| `/thinking` / `current`          | 显示当前思考级别                    | 否                 | 仅 RPC；同时显示当前模型                                          |
+| `/thinking list`                 | 列出当前模型支持的思考级别          | 否                 | 仅 RPC；标记当前级别                                              |
+| `/thinking <level>`              | 切换当前 Pi session 思考级别        | 否                 | 仅 RPC 且须先有 session；级别需当前模型支持                       |
+| `/stop`                          | 请求停止当前活动 run                | 否                 | spawn 模式终止 child；RPC 优先发送 `abort`，必要时销毁 child      |
+| `/timeout <分钟>`                | 设置 idle timeout                   | 否                 | 允许 1–1440 分钟，按当前 scope 持久化                             |
+| `/workspace` / `current`         | 显示当前有效 alias 与来源           | 否                 | 不显示本机绝对路径                                                |
+| `/workspace list`                | 稳定列出 alias 与状态               | 否                 | 标记 current/default/unavailable                                  |
+| `/workspace use <alias>`         | 显式选择当前 scope workspace        | 否                 | alias 必须存在且目录可用                                          |
+| `/workspace use default`         | 清除 scope 覆盖并跟随 profile 默认  | 否                 | 默认缺失或不可用时明确报错                                        |
+| `/workspace default get`         | 查看 profile 默认值                 | 否                 | direct default 只说明状态，不显示路径                             |
+| `/workspace default set <alias>` | 修改 profile 默认 alias             | 否                 | 仅 `access.admins`；无管理员时只能用本机 CLI                      |
+| `/access read-only`              | 将当前 scope 切到只读工具集         | 否                 | 总是受 profile `maxAccess` 约束                                   |
+| `/access full`                   | 将当前 scope 切到完整工具集         | 否                 | `maxAccess=read-only` 时明确拒绝                                  |
+| `/steer <指令>`                  | 在当前活跃 RPC run 中追加实时引导   | 否                 | 仅 RPC 且当前 scope 有活动 run；不会复制成普通 prompt             |
+| `/follow-up <指令>`              | 将后续指令交给当前活跃 RPC run      | 否                 | 仅 RPC；也支持 `/followup` 写法                                   |
+| `/pi commands`                   | 列出 Pi 当前公开的可调用命令        | 否                 | 仅 RPC；只显示名称、来源类型和有界描述，不显示资源路径            |
+| `/pi /<command> [args]`          | 原样执行一条已公开 Pi 命令          | 视命令而定         | 仅 extension/prompt/skill；继续受当前 scope/workspace/access 约束 |
 
 典型 session 操作：
 
@@ -317,6 +323,18 @@ lark-pi-bridge config refresh --profile default
 请重新从 workspace 入口分析，不沿用上一轮结论。
 /status
 ```
+
+典型模型和思考级别控制（RPC）：
+
+```text
+/model list
+/model use anthropic/claude-sonnet-4
+/thinking list
+/thinking high
+/status
+```
+
+模型和思考级别选择属于当前聊天 scope 的既有 Pi session；切换前须先发送普通消息创建 session。Bridge 重启或 RPC child 重建后会恢复；`/new`、`/workspace use ...` 或 `/access ...` 改变 session 身份时会清除选择，新 session 重新采用 Pi/profile 默认值。`/model list` 只列出 Pi 判断当前配置与认证可用的聊天模型，不是全量模型目录。spawn-per-turn 会明确拒绝这些命令，不会模拟 RPC 状态。
 
 典型运行控制：
 
@@ -378,6 +396,8 @@ Bridge 会把评论引用文本与评论回复文本组成输入，并在同一�
 - `/new`
 - `/resume`
 - `/status`
+- RPC 的 `/model [current|list|use <provider>/<model>]`
+- RPC 的 `/thinking [current|list|<level>]`
 - `/stop`
 - `/timeout <分钟>`
 - `/access read-only|full`

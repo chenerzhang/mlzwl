@@ -124,6 +124,72 @@ describe('StrictPiRpcConnection extension UI', () => {
     await connection.dispose();
   });
 
+  it('validates model and thinking state commands without leaking full model definitions', async () => {
+    const child = new FakeChild();
+    const connection = new StrictPiRpcConnection(child as never);
+    let model = {
+      provider: 'provider-a',
+      id: 'model-a',
+      name: 'Model A',
+      reasoning: true,
+      baseUrl: 'https://private.example',
+    };
+    let thinkingLevel = 'medium';
+    child.stdin.on('data', (chunk) => {
+      const command = JSON.parse(String(chunk));
+      if (command.type === 'get_state') {
+        child.stdout.write(
+          `${JSON.stringify({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: 'session-a', isStreaming: false, model, thinkingLevel } })}\n`,
+        );
+      } else if (command.type === 'get_available_models') {
+        child.stdout.write(
+          `${JSON.stringify({ id: command.id, type: 'response', command: 'get_available_models', success: true, data: { models: [model, { provider: 'provider-a', id: 'model-b', reasoning: false }] } })}\n`,
+        );
+      } else if (command.type === 'set_model') {
+        model = {
+          provider: command.provider,
+          id: command.modelId,
+          name: 'Model B',
+          reasoning: false,
+          baseUrl: 'secret',
+        };
+        child.stdout.write(
+          `${JSON.stringify({ id: command.id, type: 'response', command: 'set_model', success: true, data: model })}\n`,
+        );
+      } else if (command.type === 'get_available_thinking_levels') {
+        child.stdout.write(
+          `${JSON.stringify({ id: command.id, type: 'response', command: 'get_available_thinking_levels', success: true, data: { levels: ['off'] } })}\n`,
+        );
+      } else if (command.type === 'set_thinking_level') {
+        thinkingLevel = command.level;
+        child.stdout.write(`${JSON.stringify({ type: 'thinking_level_changed', level: thinkingLevel })}\n`);
+        child.stdout.write(
+          `${JSON.stringify({ id: command.id, type: 'response', command: 'set_thinking_level', success: true })}\n`,
+        );
+      }
+    });
+    await expect(connection.getState()).resolves.toEqual({
+      sessionId: 'session-a',
+      isStreaming: false,
+      model: { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true },
+      thinkingLevel: 'medium',
+    });
+    await expect(connection.getAvailableModels()).resolves.toEqual([
+      { provider: 'provider-a', id: 'model-a', name: 'Model A', reasoning: true },
+      { provider: 'provider-a', id: 'model-b', reasoning: false },
+    ]);
+    await expect(connection.setModel('provider-a', 'model-b')).resolves.toEqual({
+      provider: 'provider-a',
+      id: 'model-b',
+      name: 'Model B',
+      reasoning: false,
+    });
+    await expect(connection.getAvailableThinkingLevels()).resolves.toEqual(['off']);
+    await expect(connection.setThinkingLevel('off')).resolves.toBeUndefined();
+    expect(connection.usable).toBe(true);
+    await connection.dispose();
+  });
+
   it('returns only bounded get_commands fields and rejects unsafe command names', async () => {
     const child = new FakeChild();
     const connection = new StrictPiRpcConnection(child as never);
