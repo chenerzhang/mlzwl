@@ -7,7 +7,7 @@
 ```toml
 [model_providers.x-adapter]
 name = "x-adapter"
-base_url = "http://127.0.0.1:10010/v1"
+base_url = "http://127.0.0.1:10100/v1"
 wire_api = "responses"
 env_key = "X_ADAPTER_CLIENT_TOKEN"
 ```
@@ -26,7 +26,7 @@ model = "trae-global-<upstream-id>"
 将 Anthropic base URL 指向：
 
 ```text
-http://127.0.0.1:10010
+http://127.0.0.1:10100
 ```
 
 网关支持：
@@ -41,9 +41,9 @@ Claude 模型发现返回包装后的公开模型 ID，Messages 路由会安全�
 ## 验证
 
 ```bash
-curl -sS http://127.0.0.1:10010/health
-curl -sS -H 'user-agent: codex-cli' http://127.0.0.1:10010/v1/models
-curl -sS -H 'user-agent: claude-cli' http://127.0.0.1:10010/v1/models
+curl -sS http://127.0.0.1:10100/health
+curl -sS -H 'user-agent: codex-cli' http://127.0.0.1:10100/v1/models
+curl -sS -H 'user-agent: claude-cli' http://127.0.0.1:10100/v1/models
 ```
 
 如配置了 `X_ADAPTER_CLIENT_TOKEN`，增加：

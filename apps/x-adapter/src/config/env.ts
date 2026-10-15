@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_PORT = 10010;
+export const DEFAULT_PORT = 10100;
 /** Default public model for model-less compatibility requests and client setup examples. */
 export const DEFAULT_MODEL = 'doubao-work-auto';
 export const PACKAGE_NAME = '@mlzwl/x-adapter';

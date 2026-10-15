@@ -39,7 +39,7 @@ x-adapter status
 服务默认地址为：
 
 ```text
-http://127.0.0.1:10010/v1
+http://127.0.0.1:10100/v1
 ```
 
 停止服务：
@@ -71,7 +71,7 @@ Global、CN 与豆包工作之间不会自动 fallback。默认模型为 `doubao
 Chat Completions 示例：
 
 ```bash
-curl -sS http://127.0.0.1:10010/v1/chat/completions \
+curl -sS http://127.0.0.1:10100/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
     "model":"doubao-work-auto",
@@ -82,7 +82,7 @@ curl -sS http://127.0.0.1:10010/v1/chat/completions \
 Trae Responses 示例（将占位符替换为 `x-adapter models` 返回的真实 ID）：
 
 ```bash
-curl -sS http://127.0.0.1:10010/v1/responses \
+curl -sS http://127.0.0.1:10100/v1/responses \
   -H 'content-type: application/json' \
   -d '{"model":"trae-global-<upstream-id>","input":"只回复 PONG"}'
 ```
@@ -112,7 +112,7 @@ x-adapter/doubao-work-auto
 pi --model x-adapter/trae-global-<upstream-id>
 ```
 
-extension 默认连接 `http://127.0.0.1:10010/v1`。本机网关未运行时会尝试执行 `x-adapter start`，但不会自动登录 provider 或读取官方客户端账号存储。Pi 内还可使用：
+extension 默认连接 `http://127.0.0.1:10100/v1`。本机网关未运行时会尝试执行 `x-adapter start`，但不会自动登录 provider 或读取官方客户端账号存储。Pi 内还可使用：
 
 ```text
 /x-adapter status
@@ -132,7 +132,7 @@ extension 默认连接 `http://127.0.0.1:10010/v1`。本机网关未运行时会
 
 | 变量                      | 用途                                     |
 | ------------------------- | ---------------------------------------- |
-| `X_ADAPTER_PORT`          | 修改监听端口，默认为 `10010`。           |
+| `X_ADAPTER_PORT`          | 修改监听端口，默认为 `10100`。           |
 | `X_ADAPTER_DATA_DIR`      | 修改数据根目录，默认为 `~/.x-adapter`。  |
 | `X_ADAPTER_DEFAULT_MODEL` | 修改默认模型。                           |
 | `X_ADAPTER_CLIENT_TOKEN`  | 为本机客户端请求启用可选的 Bearer 鉴权。 |

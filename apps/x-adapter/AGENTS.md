@@ -8,7 +8,7 @@
 
 核心契约：
 
-- 默认监听 `127.0.0.1:10010`，默认数据目录为 `~/.x-adapter`；配置、缓存、日志、运行时文件和 provider 凭据必须位于该目录或用户显式配置的替代路径。
+- 默认监听 `127.0.0.1:10100`，默认数据目录为 `~/.x-adapter`；配置、缓存、日志、运行时文件和 provider 凭据必须位于该目录或用户显式配置的替代路径。
 - 公开模型 ID 使用 `trae-global-*`、`trae-cn-*` 与 `doubao-work-*`；数据面按公开 ID 精确派发，不允许跨 realm、跨模型或跨 provider fallback。
 - `GET /v1/models` 聚合成功发现且用户可见的模型；Trae Global、Trae CN 或豆包工作任一失败不得阻塞其他边界。
 - Trae Global、Trae CN 与豆包工作凭据严格隔离。客户端 Authorization 不得作为上游凭据转发。

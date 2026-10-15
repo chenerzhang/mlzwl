@@ -18,7 +18,7 @@ test('launchd service starts the unified daemon on the x-adapter default port', 
   assert.match(plist, /ai\.x-adapter/);
   assert.match(plist, /__daemon__/);
   assert.match(plist, /X_ADAPTER_PORT/);
-  assert.match(plist, /10010/);
+  assert.match(plist, /10100/);
 });
 
 test('systemd service has unified daemon command and restart policy', () => {
