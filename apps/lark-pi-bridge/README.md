@@ -215,6 +215,13 @@ lark-pi-bridge service-manifest --profile default
 
 <!-- npm-release:start -->
 
+### [0.1.2] - 2026-10-16
+
+#### Added
+
+- 支持在飞书聊天和云文档评论中通过 `/model` 与 `/thinking` 查看或切换当前 Pi session 的模型和思考级别，并在 `/status` 中展示当前选择。
+- 按聊天 scope 持久化模型与思考级别，在 Bridge 重启或 RPC child 重建后恢复；创建新 session、切换 workspace 或 access 时安全回到 Pi/profile 默认值。
+
 ### [0.1.1] - 2026-10-13
 
 #### Changed
