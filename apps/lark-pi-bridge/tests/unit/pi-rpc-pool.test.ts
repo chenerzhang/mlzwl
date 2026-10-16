@@ -492,4 +492,18 @@ describe('PiRpcPool', () => {
     expect(pool.size()).toBe(1);
     await pool.dispose();
   });
+
+  it('disposes every idle entry while preserving busy entries for retention maintenance', async () => {
+    const pool = new PiRpcPool({ maxConnections: 2, idleTtlMs: 1_000_000 });
+    const make = async () => new StrictPiRpcConnection(new FakeChild() as never);
+    const idle = await pool.acquire('idle', make);
+    pool.release(idle.entry);
+    const busy = await pool.acquire('busy', make);
+    await pool.disposeIdle();
+    expect(pool.size()).toBe(1);
+    pool.release(busy.entry);
+    await pool.disposeIdle();
+    expect(pool.size()).toBe(0);
+    await pool.dispose();
+  });
 });

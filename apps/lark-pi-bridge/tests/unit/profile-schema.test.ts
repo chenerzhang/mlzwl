@@ -16,7 +16,11 @@ describe('Pi-only profile schema', () => {
     const profile = createProfileConfig({ app, permissions: { defaultAccess: 'read-only', maxAccess: 'full' } });
     expect(profile.agentKind).toBe('pi');
     expect(profile.permissions).toEqual({ defaultAccess: 'read-only', maxAccess: 'full' });
-    expect(profile.preferences).toMatchObject({ piConfigScope: 'user', transport: 'spawn-per-turn' });
+    expect(profile.preferences).toMatchObject({
+      piConfigScope: 'user',
+      transport: 'spawn-per-turn',
+      sessionRetention: { enabled: true, activeDays: 90, archivedDays: 7, orphanDays: 7 },
+    });
   });
 
   it('defaults mention exceptions to empty and normalizes persisted entries', () => {
@@ -115,7 +119,25 @@ describe('Pi-only profile schema', () => {
       transport: 'rpc',
       model: 'x-connect/trae-gpt-5.5',
       showToolCalls: true,
+      sessionRetention: { enabled: true, activeDays: 90, archivedDays: 7, orphanDays: 7 },
     });
+  });
+
+  it('normalizes session retention and rejects unsafe retention windows', () => {
+    expect(
+      createProfileConfig({
+        app,
+        preferences: {
+          sessionRetention: { enabled: false, activeDays: 365, archivedDays: 30, orphanDays: 14 },
+        },
+      }).preferences.sessionRetention,
+    ).toEqual({ enabled: false, activeDays: 365, archivedDays: 30, orphanDays: 14 });
+    expect(() => createProfileConfig({ app, preferences: { sessionRetention: { activeDays: 6 } as never } })).toThrow(
+      /activeDays/,
+    );
+    expect(() =>
+      createProfileConfig({ app, preferences: { sessionRetention: { archivedDays: 366 } as never } }),
+    ).toThrow(/archivedDays/);
   });
 
   it('accepts safe named workspace aliases while dropping invalid aliases', () => {

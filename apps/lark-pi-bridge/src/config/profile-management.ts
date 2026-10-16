@@ -3,11 +3,13 @@ import { isAbsolute } from 'node:path';
 import { resolveAppPaths, type AppPaths } from './app-paths.js';
 import { isAccessMode, normalizePermissions, type AccessMode } from './permissions.js';
 import {
+  normalizeSessionRetention,
   workspaceDefault,
   type PiTransport,
   type ProfileConfig,
   type ProfileWorkspaces,
   type RootConfig,
+  type SessionRetentionPolicy,
 } from './profile-schema.js';
 import { loadRootConfig, readActiveProfile, saveRootConfig, writeActiveProfile } from './store.js';
 import {
@@ -63,6 +65,7 @@ export interface PublicProfileView {
     maxConcurrentRuns?: number;
     runIdleTimeoutMinutes?: number;
     agentStopGraceMs?: number;
+    sessionRetention: ProfileConfig['preferences']['sessionRetention'];
   };
   model: PublicModelStatus;
 }
@@ -245,6 +248,21 @@ export async function updateProfileTransport(paths: AppPaths, transport: PiTrans
     preferences: { ...profile.preferences, transport },
   }));
   return transport;
+}
+
+export async function updateProfileSessionRetention(
+  paths: AppPaths,
+  input: Partial<SessionRetentionPolicy>,
+): Promise<SessionRetentionPolicy> {
+  let policy: SessionRetentionPolicy | undefined;
+  await mutateProfile(paths, (profile) => {
+    policy = normalizeSessionRetention({ ...profile.preferences.sessionRetention, ...input });
+    return {
+      ...profile,
+      preferences: { ...profile.preferences, sessionRetention: policy },
+    };
+  });
+  return policy!;
 }
 
 export async function updateProfileMentionOptionalChat(

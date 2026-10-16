@@ -28,7 +28,7 @@
 
 **Scope。** scope 决定命令、workspace、权限和 session 的作用范围。私聊和普通群按 chat 隔离，话题按 `chat + thread` 隔离，文档评论按目标文档与 comment 隔离。
 
-**Session。** 普通消息会自动恢复当前 scope、canonical workspace 和权限策略对应的 Pi session。`/new` 会归档当前 session；下一条普通消息创建新 session。`/resume` 只检查当前上下文是否存在可恢复 session，不接受 session ID 参数，也不把已归档 session 重新激活。
+**Session。** 普通消息会自动恢复当前 scope、canonical workspace 和权限策略对应的 Pi session。`/new` 会归档当前 session；下一条普通消息创建新 session。`/resume` 只检查当前上下文是否存在可恢复 session，不接受 session ID 参数，也不把已归档 session 重新激活。默认自动保留 active session 90 天、archived 和 catalog 无引用的 orphan session 各 7 天；按 catalog `updatedAt` 与文件 mtime 的较新值计算。
 
 **Access mode。** `read-only` 只向 Pi 开放 `read,grep,find,ls`；`full` 使用 Pi 的默认工具集合。scope 只能在 profile 的 `maxAccess` 上限内选择。
 
@@ -452,15 +452,30 @@ lark-pi-bridge profile activate default
 lark-pi-bridge profile transport --profile default
 lark-pi-bridge profile transport rpc --profile default
 lark-pi-bridge profile transport spawn-per-turn --profile default
+lark-pi-bridge profile session-retention get --profile default
+lark-pi-bridge profile session-retention set --profile default \
+  --active-days 90 --archived-days 7 --orphan-days 7
 lark-pi-bridge profile mention-optional list --profile default
 lark-pi-bridge profile mention-optional add oc_xxx --profile default
 lark-pi-bridge profile mention-optional remove oc_xxx --profile default
 lark-pi-bridge paths --profile default
 ```
 
-`profile status` 和 Web 只输出 allowlist DTO，例如 App ID、是否已配置 secret、workspace、权限、transport 和非机密模型状态；不输出 App Secret、API key 或 auth 文件内容。
+`profile status` 和 Web 只输出 allowlist DTO，例如 App ID、是否已配置 secret、workspace、权限、transport、session retention 和非机密模型状态；不输出 App Secret、API key 或 auth 文件内容。retention 可用 `--enabled false` 关闭；active 保留期允许 7–3650 天，archived/orphan 允许 1–365 天，修改后执行 `config refresh`。
 
-### 8.2 Workspace 与运行时刷新
+### 8.2 Session 保留与清理
+
+```bash
+# 默认 dry-run，只显示分类计数和空间统计
+lark-pi-bridge sessions prune --profile default
+
+# 实际删除；对应 profile runtime 必须已停止
+lark-pi-bridge sessions prune --profile default --apply
+```
+
+Runtime 启动时执行一次清理，之后每 24 小时在无 active/starting run 和 ingress 时尝试；忙时跳过到下一轮。执行前关闭空闲 RPC child，不停止活动任务。超过 512 MiB 只记录 warning，不为了配额删除未到期 active session。损坏 header、重复 session ID、symlink 或扫描结果不确定时保守跳过；手工 `--apply` 通过 profile lock 拒绝与运行中 runtime 并发。
+
+### 8.3 Workspace 与运行时刷新
 
 ```bash
 lark-pi-bridge workspace list --profile default
@@ -477,7 +492,7 @@ alias 只能使用字母、数字、点、下划线和连字符，最长 64 个�
 
 `config refresh` 只刷新非 workspace 运行配置；runtime 未运行时仅验证 profile、App Secret、profile-local model/Pi 配置并提示下次启动生效，不会连接飞书或真实模型。workspace 本身每次使用前都会从磁盘重读。
 
-### 8.3 模型与诊断
+### 8.4 模型与诊断
 
 ```bash
 lark-pi-bridge model-status --profile default
@@ -489,7 +504,7 @@ lark-pi-bridge doctor --profile default --check-credentials
 
 `validate` 和默认 `doctor` 不访问真实 provider。`--check-provider` 只做网络可达性检查；`--check-credentials` 才会执行真实模型 turn。
 
-### 8.4 前台进程
+### 8.5 前台进程
 
 ```bash
 lark-pi-bridge run --profile default
@@ -552,7 +567,7 @@ lark-pi-bridge update
 - `read-only` 是 Pi 工具 allowlist，不是 OS sandbox。高风险仓库应在独立系统账号、容器或 VM 中运行。
 - `user` scope 共享用户 `~/.pi/agent` 的配置、认证、extensions 与 skills，但 Bridge 管理面只读；`profile` scope 使用独立 `PI_CODING_AGENT_DIR`。两者的 session 和 Bridge prompt 都不会跨 profile 共享。
 - Pi 子进程只继承受限环境 allowlist；飞书 secret、常见 provider token、Cookie/JWT、npm token和云凭据不会自动传入。
-- App Secret、session catalog、scope settings、模型 auth 和日志保存在 profile 私有目录；敏感文件使用 `0600`，目录使用 `0700`。
+- App Secret、session catalog、scope settings、模型 auth 和日志保存在 profile 私有目录；敏感文件使用 `0600`，目录使用 `0700`。过期 session 删除会先在 catalog 锁内移除仍与扫描快照一致的引用，再删除经 inode/mtime/size 复核的普通 `.jsonl` 文件；失败最多留下下次可清理的 orphan。
 - personal 模式建议只开放必要的用户和群。`allowedChats` 是整个群级授权，不是群成员白名单；群成员变化后应重新审查。
 - 同一 OS 用户下，同一 App ID 不能被多个 profile、不同 home 或不同 bridge 进程同时占用。
 - RPC 的自动 fallback 只覆盖“可证明 prompt 未被接受”的故障。写入后超时、断连、协议错误或 child death 都不会自动重放，以避免重复改代码。

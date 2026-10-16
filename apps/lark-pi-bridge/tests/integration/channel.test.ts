@@ -260,6 +260,7 @@ describe('startChannel with a typed fake channel', () => {
           return true;
         },
         setBotIdentity: vi.fn(),
+        closeIdleSessions: vi.fn(async () => {}),
         run(options: AgentRunOptions): AgentRun {
           runs.push(options);
           return {
@@ -289,6 +290,7 @@ describe('startChannel with a typed fake channel', () => {
         throw new Error('fake channel was not created');
       }
       expect(fake.connected).toBe(true);
+      expect(agent.closeIdleSessions).toHaveBeenCalledOnce();
       expect(fake.options?.safety?.chatQueue).toEqual({ enabled: false });
       expect(fake.options?.keepalive?.enabled).toBe(true);
       expect(fake.options?.keepalive?.intervalMs).toBe(CHANNEL_KEEPALIVE_INTERVAL_MS);

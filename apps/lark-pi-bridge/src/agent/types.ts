@@ -143,6 +143,8 @@ export interface AgentAdapter {
   listThinkingLevels?(opts: AgentRunOptions): Promise<AgentThinkingSupport>;
   setThinkingLevel?(opts: AgentRunOptions, level: AgentThinkingLevel): Promise<AgentSessionState>;
   control?(runId: string, kind: 'steer' | 'follow-up', prompt: string): Promise<AgentControlDisposition>;
+  /** Close reusable idle resources before profile-local session maintenance. */
+  closeIdleSessions?(): Promise<void>;
   setBotIdentity?(identity: AgentBotIdentity): void;
   setInteractionPort?(port: AgentInteractionPort): void;
   dispose?(): Promise<void>;

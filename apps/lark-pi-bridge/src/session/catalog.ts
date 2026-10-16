@@ -67,6 +67,30 @@ export class SessionCatalog {
     });
   }
 
+  async removeEntries(
+    expected: Array<Pick<SessionCatalogEntry, 'key' | 'sessionId' | 'updatedAt'>>,
+  ): Promise<{ removed: SessionCatalogEntry[]; remaining: SessionCatalogEntry[] }> {
+    return withFileMutationLock(this.path, async () => {
+      const latest = await readEntries(this.path);
+      const removed: SessionCatalogEntry[] = [];
+      for (const candidate of new Map(expected.map((entry) => [entry.key, entry])).values()) {
+        const entry = latest.get(candidate.key);
+        if (entry && entry.sessionId === candidate.sessionId && entry.updatedAt === candidate.updatedAt) {
+          removed.push(entry);
+          latest.delete(candidate.key);
+        }
+      }
+      if (removed.length > 0) {
+        await persistEntries(this.path, latest);
+      }
+      this.entriesByKey = latest;
+      return {
+        removed: removed.map((entry) => ({ ...entry })),
+        remaining: [...latest.values()].map((entry) => ({ ...entry })),
+      };
+    });
+  }
+
   values(): SessionCatalogEntry[] {
     return [...this.entriesByKey.values()].map((entry) => ({ ...entry }));
   }

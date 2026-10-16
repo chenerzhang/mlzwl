@@ -50,7 +50,7 @@ Pi events ──► strict translator ──► AgentEvent ──► card/text r
 | 配置         | `src/config/*`                                         | schema v3、私有凭据引用、模型配置、非机密 DTO、原子 mutation                    |
 | 飞书入口     | `src/bot/channel.ts`                                   | 建立 Channel、连接看门狗、入口授权、scope 计算、命令分流、评论和附件接入        |
 | 策略         | `src/policy/*`, `src/commands/*`                       | workspace 解析、access 上限、policy fingerprint、slash command                  |
-| 会话状态     | `src/session/*`                                        | scope 设置和 Pi session catalog 的并发安全持久化                                |
+| 会话状态     | `src/session/*`                                        | scope 设置、Pi session catalog 和分层 retention 的并发安全持久化与清理          |
 | 运行编排     | `src/runtime/*`                                        | scope 互斥、并发、控制、timeout、私有 runtime control 与整代 reload             |
 | Pi transport | `src/agent/pi/*`                                       | JSON/RPC argv、协议解码、事件翻译、连接池、图片编码和安全 fallback              |
 | 回复         | `src/card/*`                                           | 将 `AgentEvent` 渲染为流式 Markdown 或文本终态                                  |
@@ -81,6 +81,8 @@ profile + scopeId + canonical cwd + access policy fingerprint
 ```
 
 `SessionCatalog` 只在该身份完全匹配时返回活动 Pi session。每次消息、评论和 workspace 命令都重读 schema v3 的 alias registry/default 与 scope settings；不使用 watcher。scope override 优先于 `defaultAlias`，`defaultPath` 用于简单本地默认目录，三者不会静默 fallback。alias 删除、默认缺失或目录失效均明确失败。canonical cwd 或 access 改变会生成新 fingerprint；切回原 canonical cwd 可恢复原 identity 的 session。
+
+Session retention 默认按 `max(catalog.updatedAt, file.mtime)` 计算：active 90 天，archived/orphan 7 天。启动时和每 24 小时无 active/starting/ingress 时先关闭 idle RPC connection，再清理；忙时跳过。清理只识别 session 目录直接子级的普通 `.jsonl` 和有界首行 header，重复 ID、symlink、损坏文件只告警。catalog 在锁内按扫描快照 CAS 删除引用，再复核文件 inode/mtime/size 后删除；超过 512 MiB 只告警。手工 `sessions prune` 默认 dry-run，apply 通过 profile lock 与 runtime 互斥。
 
 RPC pool key 进一步包含 model 与 thinking level。Pi child 的实际 session ID 通过 `get_state` 与 catalog 逐次核对，不匹配时销毁旧连接，而不是把 prompt 发送给错误 session。会话内模型和思考级别选择写入私有 `scope-settings.json`，用于 Bridge 重启或 child 重建后的启动覆盖；恢复已有 session 时不再重复传 profile 默认 model，以免覆盖 session 已记录的模型。`/new`、workspace 或 access 改变会清除该覆盖，使新 identity/session 回到 Pi/profile 默认选择。
 
@@ -158,7 +160,7 @@ RPC fallback 由独立 adapter 实施。只有连接创建/握手等 prompt 写�
 - `config.json` 保存 profile 和非机密引用，不保存新式 App Secret；
 - App Secret 必须位于所选 profile 内，且不能是 symlink 或宽权限文件；
 - `user` scope 的 Pi settings/auth/resources 来自只读用户 `~/.pi/agent`，`profile` scope 的模型/auth 来自 profile-local 配置；session 与 Bridge prompt 始终 profile-local；
-- catalog 与 scope settings 使用进程内队列、跨进程锁、锁内重读和私有原子替换；
+- catalog 与 scope settings 使用进程内队列、跨进程锁、锁内重读和私有原子替换；session retention 删除 catalog 引用时也使用同一并发边界；
 - 相同 App ID 的共享锁位于默认用户级根目录，因而能跨 profile 和自定义 `--home` 互斥。
 
 ## 6. 管理面

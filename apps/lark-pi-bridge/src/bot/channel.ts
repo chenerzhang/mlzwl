@@ -33,12 +33,14 @@ import { acquireRuntimeLock, type AcquiredRuntimeLock } from '../runtime/locks.j
 import { ProcessPoolFullError, RunExecutor, ScopeBusyError } from '../runtime/run-executor.js';
 import { stopAfterIdle } from '../runtime/timeout.js';
 import { SessionCatalog } from '../session/catalog.js';
+import { pruneSessions, SESSION_STORAGE_SOFT_LIMIT_BYTES } from '../session/retention.js';
 import { ScopeSettingsStore } from '../session/scope-settings.js';
 import { LarkInteractionBroker } from './interaction-broker.js';
 
 const MAX_COMMENT_REPLY_CHARS = 12_000;
 export const CHANNEL_KEEPALIVE_INTERVAL_MS = 20_000;
 export const CHANNEL_RECONNECT_GRACE_MS = 2 * 60_000;
+export const SESSION_RETENTION_INTERVAL_MS = 24 * 60 * 60_000;
 
 export interface ChannelPort {
   connect(): Promise<void>;
@@ -127,6 +129,9 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   let failed = false;
   let rejectFailure: ((error: Error) => void) | undefined;
   let reconnectDeadline: NodeJS.Timeout | undefined;
+  let retentionTimer: NodeJS.Timeout | undefined;
+  let retentionTask: Promise<void> | undefined;
+  let shuttingDown = false;
   const failure = new Promise<never>((_resolve, reject) => {
     rejectFailure = reject;
   });
@@ -148,6 +153,60 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       clearTimeout(reconnectDeadline);
       reconnectDeadline = undefined;
     }
+  };
+  const runSessionRetention = (): Promise<void> => {
+    if (retentionTask) {
+      return retentionTask;
+    }
+    if (!profile.preferences.sessionRetention.enabled) {
+      return Promise.resolve();
+    }
+    const activity = executor.activity();
+    if (activity.active || activity.starting || ingress) {
+      log.info('session', 'retention-skipped-busy', {
+        active: activity.active,
+        starting: activity.starting,
+        ingress,
+      });
+      return Promise.resolve();
+    }
+    accepting = false;
+    const task = (async () => {
+      try {
+        await agent.closeIdleSessions?.();
+        const latestActivity = executor.activity();
+        if (latestActivity.active || latestActivity.starting || ingress) {
+          return;
+        }
+        const summary = await pruneSessions({
+          sessionDir: paths.piSessionDir,
+          catalogFile: paths.sessionCatalogFile,
+          policy: profile.preferences.sessionRetention,
+          dryRun: false,
+        });
+        log.info('session', 'retention-complete', { ...summary });
+        if (summary.softLimitExceeded) {
+          log.warn('session', 'storage-soft-limit-exceeded', {
+            storedBytes: summary.remainingBytes,
+            softLimitBytes: SESSION_STORAGE_SOFT_LIMIT_BYTES,
+          });
+        }
+        await catalog.load();
+      } catch (error) {
+        log.warn('session', 'retention-failed', { message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        if (!failed && !shuttingDown) {
+          accepting = true;
+        }
+      }
+    })();
+    retentionTask = task;
+    void task.then(() => {
+      if (retentionTask === task) {
+        retentionTask = undefined;
+      }
+    });
+    return task;
   };
   const channel = create({
     appId: profile.accounts.app.id,
@@ -430,7 +489,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   try {
     appLock = await acquireRuntimeLock(paths.appLockFile(profile.accounts.app.id));
     await attachments.initialize();
+    await runSessionRetention();
     await channel.connect();
+    retentionTimer = setInterval(() => void runSessionRetention(), SESSION_RETENTION_INTERVAL_MS);
+    retentionTimer.unref();
     const status = channel.getConnectionStatus?.();
     log.info('channel', 'connected', {
       state: status?.state,
@@ -468,7 +530,14 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       accepting = true;
     },
     async disconnect(): Promise<void> {
+      shuttingDown = true;
+      accepting = false;
       clearReconnectDeadline();
+      if (retentionTimer) {
+        clearInterval(retentionTimer);
+        retentionTimer = undefined;
+      }
+      await retentionTask;
       for (const scope of executor.activeScopes()) {
         await executor.stop(scope).catch(() => {});
       }

@@ -9,6 +9,20 @@ export type TenantBrand = 'feishu' | 'lark';
 export type PiTransport = 'spawn-per-turn' | 'rpc';
 export type PiConfigScope = 'user' | 'profile';
 
+export interface SessionRetentionPolicy {
+  enabled: boolean;
+  activeDays: number;
+  archivedDays: number;
+  orphanDays: number;
+}
+
+export const DEFAULT_SESSION_RETENTION: SessionRetentionPolicy = {
+  enabled: true,
+  activeDays: 90,
+  archivedDays: 7,
+  orphanDays: 7,
+};
+
 export interface AppCredentials {
   id: string;
   /** Inline secret is accepted for programmatic and test-created profiles. */
@@ -37,6 +51,7 @@ export interface ProfilePreferences {
   maxConcurrentRuns?: number;
   runIdleTimeoutMinutes?: number;
   agentStopGraceMs?: number;
+  sessionRetention: SessionRetentionPolicy;
 }
 
 export interface ProfileWorkspaces {
@@ -72,7 +87,9 @@ export interface CreateProfileInput {
   workspaces?: ProfileWorkspaces;
   app: AppCredentials;
   permissions?: Partial<PermissionConfig>;
-  preferences?: Partial<ProfilePreferences>;
+  preferences?: Omit<Partial<ProfilePreferences>, 'sessionRetention'> & {
+    sessionRetention?: Partial<SessionRetentionPolicy>;
+  };
   access?: Partial<ProfileAccess>;
   mode?: ProfileMode;
 }
@@ -158,7 +175,7 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
     app: validateApp(raw.accounts?.app),
     workspaces: raw.workspaces,
     permissions: raw.permissions,
-    preferences: raw.preferences,
+    preferences: raw.preferences as CreateProfileInput['preferences'],
     access: raw.access,
     mode: raw.mode,
   });
@@ -243,9 +260,13 @@ function isSafeWorkspaceAlias(alias: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(alias) && alias !== 'default';
 }
 
-function normalizePreferences(input: Partial<ProfilePreferences> | undefined): ProfilePreferences {
+function normalizePreferences(input: CreateProfileInput['preferences']): ProfilePreferences {
   if (!input || typeof input !== 'object') {
-    return { piConfigScope: 'user', transport: 'spawn-per-turn' };
+    return {
+      piConfigScope: 'user',
+      transport: 'spawn-per-turn',
+      sessionRetention: { ...DEFAULT_SESSION_RETENTION },
+    };
   }
   if (input.piConfigScope !== undefined && input.piConfigScope !== 'user' && input.piConfigScope !== 'profile') {
     throw new Error('preferences.piConfigScope must be user or profile');
@@ -261,7 +282,41 @@ function normalizePreferences(input: Partial<ProfilePreferences> | undefined): P
     ...(validPositive(input.maxConcurrentRuns) ? { maxConcurrentRuns: input.maxConcurrentRuns } : {}),
     ...(validPositive(input.runIdleTimeoutMinutes) ? { runIdleTimeoutMinutes: input.runIdleTimeoutMinutes } : {}),
     ...(validPositive(input.agentStopGraceMs) ? { agentStopGraceMs: input.agentStopGraceMs } : {}),
+    sessionRetention: normalizeSessionRetention(input.sessionRetention),
   };
+}
+
+export function normalizeSessionRetention(input: unknown): SessionRetentionPolicy {
+  if (input === undefined) {
+    return { ...DEFAULT_SESSION_RETENTION };
+  }
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new Error('preferences.sessionRetention must be an object');
+  }
+  const value = input as Partial<SessionRetentionPolicy>;
+  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+    throw new Error('preferences.sessionRetention.enabled must be boolean');
+  }
+  const activeDays = retentionDays(value.activeDays, DEFAULT_SESSION_RETENTION.activeDays, 7, 3_650, 'activeDays');
+  const archivedDays = retentionDays(
+    value.archivedDays,
+    DEFAULT_SESSION_RETENTION.archivedDays,
+    1,
+    365,
+    'archivedDays',
+  );
+  const orphanDays = retentionDays(value.orphanDays, DEFAULT_SESSION_RETENTION.orphanDays, 1, 365, 'orphanDays');
+  return { enabled: value.enabled ?? true, activeDays, archivedDays, orphanDays };
+}
+
+function retentionDays(value: unknown, fallback: number, min: number, max: number, field: string): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!Number.isSafeInteger(value) || Number(value) < min || Number(value) > max) {
+    throw new Error(`preferences.sessionRetention.${field} must be an integer from ${min} to ${max}`);
+  }
+  return Number(value);
 }
 
 function validPositive(value: unknown): value is number {

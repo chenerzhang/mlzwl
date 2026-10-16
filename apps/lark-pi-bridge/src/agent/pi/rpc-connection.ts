@@ -769,6 +769,13 @@ export class PiRpcPool {
     return this.exclusive(() => this.sweepUnlocked());
   }
 
+  disposeIdle(): Promise<void> {
+    return this.exclusive(async () => {
+      const idle = [...this.entries.values()].filter((entry) => !entry.busy);
+      await Promise.all(idle.map((entry) => this.invalidateUnlocked(entry)));
+    });
+  }
+
   dispose(): Promise<void> {
     return this.exclusive(async () => {
       const entries = [...this.entries.values()];
