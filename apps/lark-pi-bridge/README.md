@@ -232,6 +232,17 @@ lark-pi-bridge service-manifest --profile default
 
 <!-- npm-release:start -->
 
+### [0.1.3] - 2026-10-16
+
+#### Added
+
+- 新增可配置的 Pi session 自动保留策略：active 默认保留 90 天，archived 和 orphan 默认保留 7 天；runtime 会在启动和每日空闲时保守清理。
+- 新增 `sessions prune` dry-run/apply CLI，以及 session retention 的 profile 配置命令和存储空间告警。
+
+#### Security
+
+- 清理仅处理可验证的普通 session 文件；异常 header、symlink、重复 ID 和不确定扫描结果会跳过，并通过 catalog 快照匹配及文件身份复核避免并发误删。
+
 ### [0.1.2] - 2026-10-16
 
 #### Added
