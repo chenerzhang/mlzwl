@@ -177,6 +177,10 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
     return this.rpc.control(runId, kind, prompt);
   }
 
+  async closeIdleSessions(): Promise<void> {
+    await Promise.all([this.rpc.closeIdleSessions?.(), this.spawnPerTurn.closeIdleSessions?.()]);
+  }
+
   async dispose(): Promise<void> {
     await Promise.all([this.rpc.dispose?.(), this.spawnPerTurn.dispose?.()]);
   }

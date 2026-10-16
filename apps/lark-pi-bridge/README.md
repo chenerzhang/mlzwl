@@ -109,7 +109,16 @@ lark-pi-bridge init --profile default --app-id cli_xxx \
         }
       },
       "permissions": { "defaultAccess": "full", "maxAccess": "full" },
-      "preferences": { "piConfigScope": "user", "transport": "rpc" }
+      "preferences": {
+        "piConfigScope": "user",
+        "transport": "rpc",
+        "sessionRetention": {
+          "enabled": true,
+          "activeDays": 90,
+          "archivedDays": 7,
+          "orphanDays": 7
+        }
+      }
     }
   }
 }
@@ -146,6 +155,13 @@ lark-pi-bridge profile pi-config-scope set user --profile default
 lark-pi-bridge profile transport --profile default
 lark-pi-bridge profile transport rpc --profile default
 lark-pi-bridge profile transport spawn-per-turn --profile default
+# session 默认 active 保留 90 天，archived/orphan 保留 7 天；修改后刷新 runtime
+lark-pi-bridge profile session-retention get --profile default
+lark-pi-bridge profile session-retention set --profile default \
+  --active-days 90 --archived-days 7 --orphan-days 7
+# 默认 dry-run；--apply 要求对应 profile runtime 已停止
+lark-pi-bridge sessions prune --profile default
+lark-pi-bridge sessions prune --profile default --apply
 # 为 allowedChats 中的单个群开启/撤销免 @ 触发；修改后刷新 runtime
 lark-pi-bridge profile mention-optional list --profile default
 lark-pi-bridge profile mention-optional add oc_xxx --profile default
@@ -207,6 +223,7 @@ lark-pi-bridge service-manifest --profile default
 - `config refresh` 使用 profile 私有、认证的本机控制通道；runtime 运行时只在无 active/starting run 时重建 channel、policy 与 adapter，并释放旧 RPC pool；fingerprint 只保存 App Secret 和有效 Pi settings/models/auth/资源元数据的摘要，不泄露内容。runtime 未运行时只做本地验证。
 - `update` 只支持可确认的全局 npm ownership，固定查询公共 npm registry，使用结构化 argv、用户级锁和 exact latest；它不隐式降级，也不触碰无 ownership marker 的 service。首次公开发布前该命令无法从公共 registry 解析包；发布后才可用于后续版本更新。
 - Meeting ingress 当前不在产品范围内。
+- Pi session 默认按最后使用时间保留：active 90 天，`/new` 后的 archived 与 catalog 无引用的 orphan 各 7 天。runtime 启动和此后每日只在无 active/starting/ingress 时关闭空闲 RPC child 后清理；异常、重复 ID、symlink 或无法确认的文件只告警不删除，超过 512 MiB 只告警而不强删未过期 active session。`sessions prune` 默认 dry-run，`--apply` 要求 runtime 已停止。
 - 图片使用 run-owned 私有目录；完成/失败/中断后删除，崩溃残留按 24 小时和最多 32 个 run 的界限在启动时清理。RPC 会安全重开并复核文件，再发送有数量/大小上限的 base64 `ImageContent`；spawn-per-turn 继续使用受控 `@file` 参数。自定义模型默认声明为仅文本；只有上游 endpoint/model 已确认支持图片时才使用 `model-config --input text,image`，否则 Pi 会按其模型能力声明省略图片。完整验证边界见[源码仓库验证说明](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/verification.md)。
 
 完整使用说明见 [GitHub 源文档](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/user-guide.md)。维护者可查阅源码仓库中的[技术架构](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/tech.md)、[安全说明](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/security.md)、[验证边界](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/verification.md)和[来源说明](https://github.com/chenerzhang/mlzwl/blob/master/apps/lark-pi-bridge/docs/provenance.md)；仓库 `docs/` 不进入发布包。

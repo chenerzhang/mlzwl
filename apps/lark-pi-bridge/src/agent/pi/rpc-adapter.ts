@@ -233,6 +233,10 @@ export class PiRpcAdapter implements AgentAdapter {
     return kind === 'steer' ? entry.connection.steer(message) : entry.connection.followUp(message);
   }
 
+  async closeIdleSessions(): Promise<void> {
+    await this.pool.disposeIdle();
+  }
+
   async dispose(): Promise<void> {
     for (const [runId, entry] of this.activeByRunId) {
       this.interactionPort?.cancelRun(runId);

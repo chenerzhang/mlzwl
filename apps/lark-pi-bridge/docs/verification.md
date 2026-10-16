@@ -39,7 +39,7 @@ pnpm verify
 至少覆盖：
 
 - schema v3 的严格解析、显式 `piConfigScope`、权限/transport/model 保留和未知 schema 拒绝；
-- workspace canonicalization、default get/set、删除保护、不可用标记、按次读取、policy fingerprint、session catalog 和 scope settings；
+- workspace canonicalization、default get/set、删除保护、不可用标记、按次读取、policy fingerprint、session catalog、scope settings，以及 active/archived/orphan retention、dry-run、损坏/symlink/重复 ID 保守跳过；
 - Pi argv、model/thinking 启动覆盖、受限环境、最低版本与所需 CLI flags；
 - 严格 LF JSONL：malformed、非法 UTF-8、空行、未终止、单行/单 run 累计越界、工具密集型多 MiB `agent_end` 与 pooled run 预算重置；
 - 事件 translator：未知/非法顺序/未结束工具/缺少 `agent_settled`/terminal 后记录；
@@ -66,7 +66,7 @@ pnpm verify
 - 一次性卡片 token 的 actor 绑定、伪造/重放拒绝、群聊私发、confirm 往返与停止/teardown 取消；
 - `/model`、`/thinking` 的 RPC state/list/set、模型元数据投影、支持级别校验、同 scope child 复用、重建恢复与 spawn 明确不支持；
 - `/pi commands` 投影、跨来源重名稳定去重、extension/prompt/skill allowlist、原始命令不包装、unknown/TUI 内建拒绝、handled quiet-period 无模型 turn、延迟独立模型流与 spawn 明确不支持；
-- pool reuse、TTL、LRU、busy/full、child death、dispose；
+- pool reuse、TTL、LRU、busy/full、child death、idle-only dispose 和完整 dispose；
 - `/steer`、`/follow-up`、`abort`；
 - 只有 prompt 明确未接受时 fallback，写入后不确定失败绝不重放；
 - RPC 图片 base64、私有文件重开和 symlink/类型/大小拒绝。
@@ -76,7 +76,7 @@ pnpm verify
 使用 fake Channel、临时 home 和注入 runner 验证：
 
 - personal/team 入口策略、真实 mention 语义、仅限 `allowedChats` 子集的按群免 `@` 例外和 scope 隔离；
-- `/new`、`/resume`、增强模型状态的 `/status`、`/model`、`/thinking`、`/stop`、`/timeout`、`/access`、`/pi` 与 `/workspace` current/list/use/default；
+- `/new`、`/resume`、增强模型状态的 `/status`、`/model`、`/thinking`、`/stop`、`/timeout`、`/access`、`/pi` 与 `/workspace` current/list/use/default，以及 session retention 配置和 `sessions prune` CLI；
 - 所有未知 slash command 拦截；
 - 活动控制命令绕过普通 run 互斥，并发普通 prompt 返回明确的 scope 忙提示而不是 Pi 启动失败；
 - 文档评论 scope 与文本回复；

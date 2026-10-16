@@ -16,16 +16,20 @@ function command(...names: string[]) {
 describe('CLI public help hierarchy', () => {
   it('lists the required top-level and nested command groups', () => {
     expect(program.helpInformation()).toContain('config');
+    expect(program.helpInformation()).toContain('sessions');
     expect(program.helpInformation()).toContain('update');
     expect(program.helpInformation()).toContain('默认 ~/.lark-pi-bridge');
     expect(command('profile').helpInformation()).toMatch(
-      /list|status|pi-config-scope|mention-optional|transport|activate/,
+      /list|status|pi-config-scope|mention-optional|transport|session-retention|activate/,
     );
     expect(command('profile', 'mention-optional').helpInformation()).toMatch(/list|add|remove/);
     expect(command('profile', 'mention-optional', 'add').helpInformation()).toMatch(/<chat-id>|--profile/);
     expect(command('profile', 'pi-config-scope').helpInformation()).toMatch(/get|set/);
     expect(command('profile', 'pi-config-scope', 'get').helpInformation()).toContain('--profile');
     expect(command('profile', 'pi-config-scope', 'set').helpInformation()).toMatch(/<scope>|--profile/);
+    expect(command('profile', 'session-retention').helpInformation()).toMatch(/get|set/);
+    expect(command('profile', 'session-retention', 'set').helpInformation()).toMatch(/--active-days|--orphan-days/);
+    expect(command('sessions', 'prune').helpInformation()).toMatch(/--dry-run|--apply|--profile/);
     expect(command('init').helpInformation()).toContain('--pi-config-scope');
     expect(command('init').helpInformation()).toMatch(/--transport[\s\S]*新 profile 默认 rpc/);
     expect(command('workspace').helpInformation()).toMatch(/list|set|remove|default/);

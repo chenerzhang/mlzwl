@@ -84,6 +84,7 @@ Probe 不读取默认 Pi auth、不连接真实 provider，并移除可能在 No
 - catalog/settings 在跨进程锁内重读、合并并私有原子替换；scope settings 只保存 workspace/access/timeout 及非机密 `provider/model`、thinking level，不保存模型定义、endpoint 或凭据；workspace registry/default 和 scope settings 按 ingress 重读，损坏、alias 删除、默认缺失或目录失效均 fail-closed；
 - 模型和 thinking RPC 响应只投影 provider、ID、名称、reasoning 与受支持级别；不把 base URL、cost 或其他模型元数据发送到飞书；
 - schema v3 配置必须通过严格校验，未知 schema 会被拒绝；
+- session retention 默认 active 90 天、archived/orphan 7 天；只在 runtime 空闲边界关闭 idle RPC child 后执行。扫描不跟随 symlink，只解析有界首行 header；重复 ID、损坏或不确定目录状态均保守跳过。catalog 引用先在锁内按 key/session ID/updatedAt 快照删除，文件随后按 inode/mtime/size 复核再删除；手工 apply 使用 profile lock 拒绝运行中并发。512 MiB 是告警阈值，不会触发强制删除未过期 active session；
 - 图片只接受 PNG/JPEG/GIF/WebP，规范化 MIME 必须和 magic bytes 一致；
 - 图片按 run 保存在 profile-local 私有目录，完成、失败或中断后删除；崩溃残留按年龄和数量有界清理；
 - RPC 以 `O_NOFOLLOW` 重开图片并复核普通文件、inode、大小和类型，再发送有数量/总量上限的 base64 object；路径不进入 RPC prompt；

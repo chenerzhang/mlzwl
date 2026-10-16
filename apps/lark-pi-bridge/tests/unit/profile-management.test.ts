@@ -15,6 +15,7 @@ import {
   updateProfileMentionOptionalChat,
   updateProfilePermissions,
   updateProfilePiConfigScope,
+  updateProfileSessionRetention,
   updateProfileTransport,
 } from '../../src/config/profile-management.js';
 import { createProfileConfig, type RootConfig } from '../../src/config/profile-schema.js';
@@ -113,6 +114,24 @@ describe('profile and workspace management', () => {
       enabled: false,
       mentionOptionalChats: [],
     });
+  });
+
+  it('updates and publishes validated session retention settings', async () => {
+    const { root, paths } = await fixture();
+    cleanup.push(root);
+    await expect(updateProfileSessionRetention(paths, { activeDays: 180, enabled: false })).resolves.toEqual({
+      enabled: false,
+      activeDays: 180,
+      archivedDays: 7,
+      orphanDays: 7,
+    });
+    expect((await getPublicProfile(paths)).preferences.sessionRetention).toEqual({
+      enabled: false,
+      activeDays: 180,
+      archivedDays: 7,
+      orphanDays: 7,
+    });
+    await expect(updateProfileSessionRetention(paths, { orphanDays: 0 })).rejects.toThrow(/orphanDays/);
   });
 
   it('updates only the explicit Pi transport enum', async () => {

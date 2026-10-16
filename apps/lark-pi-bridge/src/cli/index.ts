@@ -20,6 +20,7 @@ import {
   setWorkspace,
   updateProfileMentionOptionalChat,
   updateProfilePiConfigScope,
+  updateProfileSessionRetention,
   updateProfileTransport,
   validateWorkspaceAlias,
 } from '../config/profile-management.js';
@@ -57,6 +58,8 @@ import {
   startRuntimeControlServer,
 } from '../runtime/control.js';
 import { loadProfileRuntimeFingerprint, ReloadableBridgeRuntime } from '../runtime/reloadable.js';
+import { acquireRuntimeLock, RuntimeLockConflictError } from '../runtime/locks.js';
+import { pruneSessions } from '../session/retention.js';
 import { updateBridge } from '../update/updater.js';
 import { resolveEffectiveWorkspace } from '../policy/workspace.js';
 import { startWebConsole } from '../web/server.js';
@@ -359,6 +362,48 @@ profileCommand
     await updateProfileTransport(paths, transport);
     console.log(JSON.stringify({ ok: true, profile: paths.profile, transport }));
   });
+const sessionRetentionCommand = profileCommand
+  .command('session-retention')
+  .description('查看或设置自动 session 保留策略；修改后需 config refresh');
+sessionRetentionCommand
+  .command('get')
+  .option('--profile <name>', 'profile 名称；省略时使用 active profile')
+  .action(async (opts: ProfileOption) => {
+    const paths = await managementPaths(opts);
+    const profile = await getPublicProfile(paths);
+    console.log(JSON.stringify({ profile: paths.profile, sessionRetention: profile.preferences.sessionRetention }));
+  });
+sessionRetentionCommand
+  .command('set')
+  .option('--profile <name>', 'profile 名称；省略时使用 active profile')
+  .option('--enabled <true|false>', '启用或关闭自动清理')
+  .option('--active-days <days>', 'active session 保留天数，7–3650')
+  .option('--archived-days <days>', 'archived session 保留天数，1–365')
+  .option('--orphan-days <days>', 'orphan session 保留天数，1–365')
+  .action(
+    async (
+      opts: ProfileOption & { enabled?: string; activeDays?: string; archivedDays?: string; orphanDays?: string },
+    ) => {
+      if (
+        opts.enabled === undefined &&
+        opts.activeDays === undefined &&
+        opts.archivedDays === undefined &&
+        opts.orphanDays === undefined
+      ) {
+        throw new Error('至少指定一个 session retention 设置');
+      }
+      const paths = await managementPaths(opts);
+      const sessionRetention = await updateProfileSessionRetention(paths, {
+        ...(opts.enabled !== undefined ? { enabled: booleanOption(opts.enabled, '--enabled') } : {}),
+        ...(opts.activeDays !== undefined ? { activeDays: integerOption(opts.activeDays, '--active-days') } : {}),
+        ...(opts.archivedDays !== undefined
+          ? { archivedDays: integerOption(opts.archivedDays, '--archived-days') }
+          : {}),
+        ...(opts.orphanDays !== undefined ? { orphanDays: integerOption(opts.orphanDays, '--orphan-days') } : {}),
+      });
+      console.log(JSON.stringify({ ok: true, profile: paths.profile, sessionRetention, refreshRequired: true }));
+    },
+  );
 profileCommand
   .command('activate')
   .description('设置 active profile')
@@ -367,6 +412,46 @@ profileCommand
     const paths = await managementPaths({});
     await activateProfile(paths, name);
     console.log(JSON.stringify({ ok: true, activeProfile: name }));
+  });
+
+const sessionsCommand = program.command('sessions').description('查看和清理当前 profile 的 Pi session');
+sessionsCommand
+  .command('prune')
+  .description('按 profile 保留策略预览或删除过期 session；默认只预览')
+  .option('--profile <name>', 'profile 名称；省略时使用 active profile')
+  .option('--dry-run', '只预览，不删除（默认）')
+  .option('--apply', '实际删除；profile 运行中时拒绝')
+  .action(async (opts: ProfileOption & { dryRun?: boolean; apply?: boolean }) => {
+    if (opts.apply && opts.dryRun) {
+      throw new Error('--apply 与 --dry-run 不能同时使用');
+    }
+    const { paths, profile } = await selectedProfile(opts);
+    let lock: Awaited<ReturnType<typeof acquireRuntimeLock>> | undefined;
+    if (opts.apply) {
+      try {
+        lock = await acquireRuntimeLock(paths.profileLockFile);
+      } catch (error) {
+        if (error instanceof RuntimeLockConflictError) {
+          throw new Error('profile 正在运行；请停止 runtime 后执行 sessions prune --apply', { cause: error });
+        }
+        throw error;
+      }
+    }
+    try {
+      console.log(
+        JSON.stringify({
+          profile: paths.profile,
+          ...(await pruneSessions({
+            sessionDir: paths.piSessionDir,
+            catalogFile: paths.sessionCatalogFile,
+            policy: profile.preferences.sessionRetention,
+            dryRun: !opts.apply,
+          })),
+        }),
+      );
+    } finally {
+      await lock?.release();
+    }
   });
 
 const workspaceCommand = program.command('workspace').description('查看和管理当前 profile 的命名 workspace');
@@ -878,6 +963,24 @@ async function parseWorkspaceAliases(values: string[] | undefined): Promise<Reco
       }),
     ),
   );
+}
+
+function booleanOption(value: string, option: string): boolean {
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  throw new Error(`${option} 只能是 true 或 false`);
+}
+
+function integerOption(value: string, option: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${option} 必须是整数`);
+  }
+  return parsed;
 }
 
 function accessMode(value: string, option: string): 'read-only' | 'full' {
