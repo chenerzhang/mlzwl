@@ -19,10 +19,10 @@ description: 管理 mlzwl monorepo 公共 npm 子包的 Changelog、首次发布
 ## 请求与授权
 
 - 用户询问差异、流程或 Changelog 草稿时只读。
-- 用户说“发布”“发一个版本”或“发一个 patch/minor/major 版本”即授权完成整个对应发布流程：版本准备、commit、普通 push、创建版本 PR、用允许的 merge commit 合入、从本机发布 npm、创建并 push annotated tag、创建 GitHub Release。
+- 用户说“发布”“发一个版本”或“发一个 patch/minor/major 版本”即授权完成整个对应发布流程：版本准备、commit、普通 push、创建版本 PR、用 rebase merge 合入、从本机发布 npm、创建并 push annotated tag、创建 GitHub Release。
 - 用户说“发布当前版本”或“仅发布”时不隐式 bump；校验当前 `master` manifest 后执行本地发布、tag 和 GitHub Release。
 - 用户明确说“首次发布”时发布当前 manifest，不隐式 bump。
-- 完整发布请求不在版本 PR 创建后等待二次人工确认；验证和 GitHub 分支规则满足后直接使用 `gh pr merge --merge`。不得使用 `--admin`、auto-merge、squash、force push、覆盖 tag或绕过分支保护。
+- 完整发布请求不在版本 PR 创建后等待二次人工确认；验证和 GitHub 分支规则满足后直接使用 `gh pr merge --rebase`。不得使用 `--admin`、auto-merge、merge commit、squash、force push、覆盖 tag 或绕过分支保护。
 - bump 类型不明确时：若用户只说“发布”，当前 manifest 已高于 npm latest 则发布当前版本，否则默认 patch。发现 breaking change、版本历史冲突或无法证明候选版本正确时停止询问。
 
 ## 凭据与本地发布入口
@@ -113,23 +113,23 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
 
 7. 按 `.agents/skills/create-pr/SKILL.md` 的验证、commit、普通 push 和 PR 规则交付版本 PR；上游授权来自本次完整发布请求。create-pr 不负责合并或发布。
 8. 回读 PR 的 base/head SHA、文件列表、checks、mergeability 和 merge state。必须满足：base=`master`、head 为刚 push 的 SHA、路径严格等于允许列表、非 draft、没有失败或进行中的 required checks、GitHub 允许 merge。
-9. 执行并回读：
+9. 合入前再次 `git fetch origin --prune`，确认 `origin/master` 仍等于第 6 步验证的 base SHA；若已变化，停止合入，并基于最新 `origin/master` 重新准备候选和执行第 6 步。随后执行并回读：
 
    ```bash
-   gh pr merge <url> --repo chenerzhang/mlzwl --merge
+   gh pr merge <url> --repo chenerzhang/mlzwl --rebase
    gh pr view <url> --repo chenerzhang/mlzwl \
      --json state,mergedAt,mergeCommit,headRefOid,baseRefName
    ```
 
    不用 `--admin`，不删除远端分支。结果不明确时只回读，不能重复提交替代 PR。
 
-10. `git fetch origin --prune --tags`，切换本地 `master` 并只做 `git merge --ff-only origin/master`。若本地 master 不能 fast-forward，停止；不 reset、不 rebase。确认版本 PR 的 merge commit 是 `origin/master` 祖先，manifest/Changelog/candidate 一致。
-11. 不重复运行第 6 步的完整测试，但必须证明合并结果未改变已验证版本 tree：
+10. `git fetch origin --prune --tags`，切换本地 `master` 并只做 `git merge --ff-only origin/master`。若本地 master 不能 fast-forward，停止；不 reset、不执行本地 rebase。确认 PR 回读的 `mergeCommit.oid` 是 `origin/master` 祖先，manifest/Changelog/candidate 一致。
+11. 不重复运行第 6 步的完整测试，但必须证明 rebase merge 结果没有改变已验证版本 tree：
 
-    - 第 6 步前记录经过验证的 base SHA，并在验证后确认 `git diff --exit-code <baseSha> -- . ":(exclude)<package-directory>/package.json" ":(exclude)<package-directory>/README.md" ":(exclude)pnpm-lock.yaml"` 为空，即该 commit 除允许的版本文件外与 base tree 完全一致；PR 回读的 `headRefOid` 必须是这个精确版本 commit；
-    - merge commit 必须是普通双亲 merge commit，其第一父提交等于已验证的 base SHA，第二父提交等于 PR `headRefOid`；
-    - `master` 中 manifest、Changelog 和 candidate 必须与版本分支一致；
-    - 任一 SHA 不明确、父提交不符合预期或出现并发 `master` 变更时，退回完整执行第 6 步。
+    - 第 6 步前记录经过验证的 base SHA，并在验证后确认 `git diff --exit-code <baseSha> -- . ":(exclude)<package-directory>/package.json" ":(exclude)<package-directory>/README.md" ":(exclude)pnpm-lock.yaml"` 为空，即 PR head 除允许的版本文件外与 base tree 完全一致；PR 回读的 `headRefOid` 必须是这个精确版本 commit；
+    - 合入前确认 `origin/master` 仍等于已验证的 base SHA；合入后 `mergeCommit.oid` 必须是单亲提交、以已验证 base 为祖先，并且 `git diff --exit-code <headRefOid> <mergeCommit.oid> -- .` 为空，证明 GitHub rebase 后的最终 tree 与已验证 PR head 完全一致；
+    - `master` 中 manifest、Changelog 和 candidate 必须与版本分支一致；若 `origin/master` 在合入后已前进到 `mergeCommit.oid` 之外，必须在当前 `origin/master` 上重新执行第 6 步后才能发布；
+    - 任一 SHA 不明确、提交不是线性历史、tree 不一致或出现未经验证的并发 `master` 变更时，退回完整执行第 6 步。
 
     证据成立后直接执行真实发布；`npm:publish:local` 内部已包含 `preflight` 的全部 Git、Changelog、凭据、打包和 registry 前置校验，因此不再先单独运行 `npm:publish:preflight`：
 
