@@ -251,7 +251,7 @@ async function fakePi(root) {
   await writeFile(
     path,
     `#!/usr/bin/env node
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 const flags = ${JSON.stringify([
       '--mode',
@@ -261,6 +261,8 @@ const flags = ${JSON.stringify([
       '--session-dir',
       '--tools',
       '--append-system-prompt',
+      '--fork',
+      '--approve',
       '--no-approve',
       '--no-extensions',
       '--no-skills',
@@ -270,6 +272,13 @@ const flags = ${JSON.stringify([
 appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }) + '\\n');
 if (process.argv[2] === '--version') process.stdout.write('0.99.1\\n');
 else if (process.argv[2] === '--help') process.stdout.write(flags.join('\\n'));
+else if (process.argv.includes('--fork')) {
+  const source = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--fork') + 1], 'utf8').split('\\n')[0]);
+  const sessionDir = process.argv[process.argv.indexOf('--session-dir') + 1];
+  const fork = { ...source, id: 'abcdef12-1234-4234-8234-123456789abc', cwd: process.cwd() };
+  writeFileSync(join(sessionDir, 'fork.jsonl'), JSON.stringify(fork) + '\\n');
+  process.stdout.write(JSON.stringify(fork) + '\\n');
+}
 else if (process.argv.includes('rpc')) {
   const models = JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR, 'models.json'), 'utf8'));
   let buffered = '';

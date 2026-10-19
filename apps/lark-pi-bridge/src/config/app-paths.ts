@@ -20,6 +20,7 @@ export interface AppPaths {
   sessionsFile: string;
   sessionCatalogFile: string;
   scopeSettingsFile: string;
+  handoffBindingsFile: string;
   /** Profile-owned Pi files that must never be shared with ordinary Pi. */
   profilePiAgentDir: string;
   piSessionDir: string;
@@ -54,6 +55,7 @@ export function resolveAppPaths(opts: ResolveAppPathsOptions = {}): AppPaths {
     sessionsFile: join(profileDir, 'sessions.json'),
     sessionCatalogFile: join(profileDir, 'sessions.json.catalog.json'),
     scopeSettingsFile: join(profileDir, 'scope-settings.json'),
+    handoffBindingsFile: join(profileDir, 'handoff-bindings.json'),
     profilePiAgentDir: join(profileDir, 'pi-agent'),
     piSessionDir: join(profileDir, 'pi-agent', 'sessions'),
     bridgeSystemPromptFile: join(profileDir, 'pi-agent', 'lark-pi-bridge-system-prompt.md'),

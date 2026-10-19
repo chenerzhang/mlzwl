@@ -60,6 +60,16 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
     return this.rpc.probeModel(opts);
   }
 
+  forkSession(opts: AgentRunOptions): Promise<AgentSessionState> {
+    // Native fork is a local pre-prompt operation. Spawn-per-turn reads the
+    // authoritative JSON session event and cannot accidentally replay a model
+    // prompt across transports.
+    if (!this.spawnPerTurn.forkSession) {
+      return Promise.reject(new Error('当前 adapter 不支持原生 Pi session fork。'));
+    }
+    return this.spawnPerTurn.forkSession(opts);
+  }
+
   listCommands(opts: AgentRunOptions): Promise<AgentSlashCommand[]> {
     if (!this.rpc.listCommands) {
       return Promise.reject(new Error('当前 RPC adapter 不支持 /pi 命令。'));
@@ -102,6 +112,10 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
     return this.rpc.setThinkingLevel(opts, level);
   }
 
+  invalidateSession(opts: AgentRunOptions): Promise<void> {
+    return this.rpc.invalidateSession?.(opts) ?? Promise.resolve();
+  }
+
   run(opts: AgentRunOptions): AgentRun {
     const rpcRun = this.rpc.run(opts);
     let active = rpcRun;
@@ -124,8 +138,13 @@ export class PiRpcFallbackAdapter implements AgentAdapter {
               if (!(error instanceof RpcCommandError) || !error.fallbackSafe) {
                 throw error;
               }
-              if (opts.promptMode === 'pi-command') {
-                throw new Error('/pi 命令无法安全回退到 spawn-per-turn transport。', { cause: error });
+              if (opts.promptMode === 'pi-command' || opts.handoff) {
+                throw new Error(
+                  opts.handoff
+                    ? 'handoff 运行不会跨 transport 重放；请重试。'
+                    : '/pi 命令无法安全回退到 spawn-per-turn transport。',
+                  { cause: error },
+                );
               }
               log.warn('agent', 'pi-rpc-safe-fallback', { reason: 'prompt-not-accepted' });
               await spawnPerTurn.prepareRun?.(opts);

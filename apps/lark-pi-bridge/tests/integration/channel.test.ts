@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { CardActionEvent, CommentEvent } from '@larksuite/channel';
 import type { AgentAdapter, AgentInteractionPort, AgentRun, AgentRunOptions } from '../../src/agent/types.js';
@@ -33,6 +33,17 @@ class FakeChannel implements ChannelPort {
   }
   commentHandler?: (comment: CommentEvent) => Promise<void>;
   replies: string[] = [];
+  replyCalls: Array<{
+    message: Parameters<ChannelPort['reply']>[0];
+    options: Parameters<ChannelPort['reply']>[2];
+  }> = [];
+  fetchMessageOverride?: (messageId: string) => ReturnType<ChannelPort['fetchMessage']>;
+  replyOverride?: (
+    message: Parameters<ChannelPort['reply']>[0],
+    input: Parameters<ChannelPort['reply']>[1],
+    options: Parameters<ChannelPort['reply']>[2],
+    call: number,
+  ) => Promise<{ messageId: string } | undefined>;
   sent: Array<{ to: string; input: Parameters<ChannelPort['send']>[1] }> = [];
   commentReplies: string[] = [];
   connected = false;
@@ -62,10 +73,36 @@ class FakeChannel implements ChannelPort {
     return { messageId: `sent-${this.sent.length}` };
   }
   async reply(
-    _message: Parameters<ChannelPort['reply']>[0],
+    message: Parameters<ChannelPort['reply']>[0],
     input: Parameters<ChannelPort['reply']>[1],
-  ): Promise<void> {
+    options?: Parameters<ChannelPort['reply']>[2],
+  ): Promise<{ messageId: string }> {
+    this.replyCalls.push({ message, options });
     this.replies.push('text' in input ? input.text : 'markdown' in input ? input.markdown : '[non-text reply]');
+    if (this.replyOverride) {
+      return (await this.replyOverride(message, input, options, this.replyCalls.length)) as { messageId: string };
+    }
+    return { messageId: `reply-${this.replies.length}` };
+  }
+  async fetchMessage(messageId: string) {
+    if (this.fetchMessageOverride) {
+      return this.fetchMessageOverride(messageId);
+    }
+    return {
+      messageId,
+      chatId: 'chat',
+      chatType: 'p2p' as const,
+      chatMode: 'p2p' as const,
+      senderId: 'ou_bot',
+      content: '',
+      threadId: `thread-${messageId}`,
+      rawContentType: 'text' as const,
+      resources: [],
+      mentions: [],
+      mentionAll: false,
+      mentionedBot: false,
+      createTime: Date.now(),
+    };
   }
   async stream(to: string, input: Parameters<ChannelPort['stream']>[1]): Promise<{ messageId: string }> {
     if (!('markdown' in input)) {
@@ -230,6 +267,842 @@ describe('startChannel with a typed fake channel', () => {
         createChannel: () => new FakeChannel(),
       });
       await second.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('creates the first profile session directory safely before a successful handoff', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-first-handoff-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceRoot = join(root, 'source-sessions');
+      await mkdir(sourceRoot, { recursive: true });
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      await writeFile(
+        join(sourceRoot, 'source.jsonl'),
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`,
+      );
+      const profile = createProfileConfig({
+        app: { id: 'cli_first_handoff', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          const forkId = 'abcdef12-1234-4234-8234-123456789abc';
+          await writeFile(
+            join(paths.piSessionDir, 'fork.jsonl'),
+            `${JSON.stringify({ type: 'session', version: 3, id: forkId, cwd })}\n`,
+          );
+          return { sessionId: forkId, isStreaming: false };
+        },
+        run() {
+          throw new Error('not used');
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({
+        profile,
+        paths,
+        agent,
+        createChannel: () => fake,
+        handoffRoots: [sourceRoot],
+      });
+      await fake.deliver({
+        messageId: 'handoff',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: `/handoff ${sourceId}`,
+      });
+      expect(fake.replies.at(-1)).toContain('handoff 已建立');
+      expect((await stat(paths.piSessionDir)).mode & 0o777).toBe(0o700);
+      expect(fake.replyCalls.every((call) => call.options?.replyInThread === true)).toBe(true);
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps malformed handoff errors in-thread without locating, forking, or binding', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-invalid-handoff-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const profile = createProfileConfig({
+        app: { id: 'cli_invalid_handoff', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      let forks = 0;
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          forks += 1;
+          throw new Error('must not fork');
+        },
+        run() {
+          throw new Error('must not run');
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake, handoffRoots: [root] });
+      for (const [index, input] of ['/handoff partial', '/handoff ../../source.jsonl'].entries()) {
+        await fake.deliver({
+          messageId: `top-${index}`,
+          chatId: 'chat',
+          chatType: 'p2p',
+          senderId: 'ou_allowed',
+          content: input,
+        });
+      }
+      await fake.deliver({
+        messageId: 'topic-invalid',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'existing-topic',
+        senderId: 'ou_allowed',
+        content: '/handoff short',
+      });
+      await fake.deliver({
+        messageId: 'top-off',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: '/handoff off',
+      });
+      expect(fake.replies).toHaveLength(4);
+      expect(fake.replies.slice(0, 3).every((reply) => reply.includes('完整合法的 Pi session ID'))).toBe(true);
+      expect(fake.replies.at(-1)).toContain('/handoff off 必须在 handoff 话题内执行');
+      expect(fake.replyCalls.at(-1)?.options?.replyInThread).toBe(true);
+      expect(fake.replyCalls.every((call) => call.options?.replyInThread === true)).toBe(true);
+      expect(forks).toBe(0);
+      await expect(stat(paths.handoffBindingsFile)).rejects.toMatchObject({ code: 'ENOENT' });
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps every handoff topic failure reply in-thread', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-topic-failures-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const profile = createProfileConfig({
+        app: { id: 'cli_topic_failures', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        run() {
+          throw new Error('not used');
+        },
+      };
+      for (const mode of [
+        'reply-throw',
+        'missing-id',
+        'fetch-throw',
+        'fetch-undefined',
+        'chat-mismatch',
+        'missing-thread',
+      ] as const) {
+        const fake = new FakeChannel();
+        if (mode === 'reply-throw') {
+          fake.replyOverride = async () => {
+            throw new Error('reply failed');
+          };
+        }
+        if (mode === 'missing-id') {
+          fake.replyOverride = async () => undefined;
+        }
+        if (mode === 'fetch-throw') {
+          fake.fetchMessageOverride = async () => {
+            throw new Error('fetch failed');
+          };
+        }
+        if (mode === 'fetch-undefined') {
+          fake.fetchMessageOverride = async () => undefined;
+        }
+        if (mode === 'chat-mismatch') {
+          fake.fetchMessageOverride = async (messageId) => {
+            const value = await new FakeChannel().fetchMessage(messageId);
+            return { ...value!, chatId: 'other' };
+          };
+        }
+        if (mode === 'missing-thread') {
+          fake.fetchMessageOverride = async (messageId) => {
+            const value = await new FakeChannel().fetchMessage(messageId);
+            return { ...value!, threadId: undefined };
+          };
+        }
+        const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+        await fake.deliver({
+          messageId: mode,
+          chatId: 'chat',
+          chatType: 'p2p',
+          senderId: 'ou_allowed',
+          content: '/handoff 12345678-1234-4234-8234-123456789abc',
+        });
+        expect(fake.replyCalls.every((call) => call.options?.replyInThread === true)).toBe(true);
+        await bridge.disconnect();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts an authorized existing group topic handoff and rejects unauthorized or unmentioned group ingress', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-group-handoff-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      await writeFile(
+        join(paths.piSessionDir, 'source.jsonl'),
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`,
+      );
+      const profile = createProfileConfig({
+        app: { id: 'cli_group_handoff', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: {
+          allowedUsers: ['ou_allowed'],
+          allowedChats: ['group', 'personal-group'],
+          mentionOptionalChats: ['personal-group'],
+        },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      let forks = 0;
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          forks += 1;
+          const id = `abcdef12-1234-4234-8234-${String(forks).padStart(12, '0')}`;
+          await writeFile(
+            join(paths.piSessionDir, `fork-${forks}.jsonl`),
+            `${JSON.stringify({ type: 'session', version: 3, id, cwd })}\n`,
+          );
+          return { sessionId: id, isStreaming: false };
+        },
+        run() {
+          throw new Error('not used');
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      await fake.deliver({
+        messageId: 'unauthorized',
+        chatId: 'other-group',
+        chatType: 'group',
+        threadId: 'topic-0',
+        senderId: 'ou_bad',
+        mentionedBot: true,
+        content: `/handoff ${sourceId}`,
+      });
+      await fake.deliver({
+        messageId: 'unmentioned',
+        chatId: 'group',
+        chatType: 'group',
+        threadId: 'topic-1',
+        senderId: 'ou_allowed',
+        mentionedBot: false,
+        content: `/handoff ${sourceId}`,
+      });
+      expect(forks).toBe(0);
+      await fake.deliver({
+        messageId: 'authorized',
+        chatId: 'group',
+        chatType: 'group',
+        threadId: 'topic-2',
+        senderId: 'ou_allowed',
+        mentionedBot: true,
+        content: `/handoff ${sourceId}`,
+      });
+      expect(forks).toBe(1);
+      await fake.deliver({
+        messageId: 'personal-unmentioned',
+        chatId: 'personal-group',
+        chatType: 'group',
+        threadId: 'topic-personal',
+        senderId: 'ou_allowed',
+        mentionedBot: false,
+        content: `/handoff ${sourceId}`,
+      });
+      expect(forks).toBe(2);
+      expect(fake.replyCalls.every((call) => call.options?.replyInThread === true)).toBe(true);
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a success-reply rejection inside the handoff path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-success-reject-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      await writeFile(
+        join(paths.piSessionDir, 'source.jsonl'),
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`,
+      );
+      const profile = createProfileConfig({
+        app: { id: 'cli_success_reject', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          const id = 'abcdef12-1234-4234-8234-123456789abc';
+          await writeFile(
+            join(paths.piSessionDir, 'fork.jsonl'),
+            `${JSON.stringify({ type: 'session', version: 3, id, cwd })}\n`,
+          );
+          return { sessionId: id, isStreaming: false };
+        },
+        run() {
+          throw new Error('not used');
+        },
+      };
+      const fake = new FakeChannel();
+      fake.replyOverride = async (_message, _input, _options, call) => {
+        if (call === 2) {
+          throw new Error('success rejected');
+        }
+        return { messageId: `reply-${call}` };
+      };
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      await fake.deliver({
+        messageId: 'handoff',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: `/handoff ${sourceId}`,
+      });
+      expect(fake.replyCalls).toHaveLength(2);
+      expect(fake.replyCalls.every((call) => call.options?.replyInThread === true)).toBe(true);
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('creates a native handoff in an authoritative topic and restores its full+approve route', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-handoff-channel-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      const sourcePath = join(paths.piSessionDir, 'source.jsonl');
+      await writeFile(
+        sourcePath,
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, timestamp: new Date().toISOString(), cwd })}\n`,
+      );
+      const sourceContentBefore = await readFile(sourcePath, 'utf8');
+      const sourceBefore = await stat(sourcePath);
+      const profile = createProfileConfig({
+        app: { id: 'cli_handoff', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspaces: { defaultAlias: 'alpha', named: { alpha: cwd } },
+        access: { allowedUsers: ['ou_allowed'] },
+        permissions: { defaultAccess: 'read-only', maxAccess: 'read-only' },
+        preferences: { transport: 'rpc' },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const runs: AgentRunOptions[] = [];
+      const controls: AgentRunOptions[] = [];
+      let selectedModel = { provider: 'provider-a', id: 'model-a', reasoning: true };
+      let selectedThinking: import('../../src/agent/types.js').AgentThinkingLevel = 'medium';
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async getSessionState(options) {
+          controls.push(options);
+          return {
+            sessionId: options.sessionId ?? 'bbbbbbbb-1234-4234-8234-123456789abc',
+            isStreaming: false,
+            model: selectedModel,
+            thinkingLevel: selectedThinking,
+          };
+        },
+        async listModels(options) {
+          controls.push(options);
+          return {
+            state: await this.getSessionState!(options),
+            models: [selectedModel, { provider: 'provider-a', id: 'model-b', reasoning: true }],
+          };
+        },
+        async setModel(options, provider, id) {
+          controls.push(options);
+          selectedModel = { provider, id, reasoning: true };
+          return {
+            sessionId: options.sessionId!,
+            isStreaming: false,
+            model: selectedModel,
+            thinkingLevel: selectedThinking,
+          };
+        },
+        async listThinkingLevels(options) {
+          controls.push(options);
+          return { state: await this.getSessionState!(options), levels: ['off', 'medium', 'high'] };
+        },
+        async setThinkingLevel(options, level) {
+          controls.push(options);
+          selectedThinking = level;
+          return {
+            sessionId: options.sessionId!,
+            isStreaming: false,
+            model: selectedModel,
+            thinkingLevel: selectedThinking,
+          };
+        },
+        async listCommands(options) {
+          controls.push(options);
+          return [{ name: 'plan', source: 'extension' }];
+        },
+        async forkSession(options) {
+          runs.push(options);
+          const forkId = 'abcdef12-1234-4234-8234-123456789abc';
+          await writeFile(
+            join(paths.piSessionDir, 'fork.jsonl'),
+            `${JSON.stringify({ type: 'session', version: 3, id: forkId, timestamp: new Date().toISOString(), cwd })}\n`,
+          );
+          return { sessionId: forkId, isStreaming: false };
+        },
+        run(options) {
+          runs.push(options);
+          const sessionId = options.sessionId ?? 'bbbbbbbb-1234-4234-8234-123456789abc';
+          return {
+            runId: options.runId,
+            events: {
+              async *[Symbol.asyncIterator]() {
+                if (!options.sessionId) {
+                  await writeFile(
+                    join(paths.piSessionDir, 'new-handoff.jsonl'),
+                    `${JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd })}\n`,
+                  );
+                }
+                yield { type: 'system' as const, sessionId };
+                yield { type: 'done' as const, sessionId, terminationReason: 'normal' as const };
+              },
+            },
+            async stop() {},
+            async waitForExit() {
+              return true;
+            },
+          };
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      await fake.deliver({
+        messageId: 'handoff',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: `/handoff ${sourceId}`,
+      });
+      expect(runs[0]).toMatchObject({
+        scopeId: 'chat:thread-reply-1',
+        cwd,
+        accessMode: 'full',
+        handoff: { sourceSessionId: sourceId },
+      });
+      expect(fake.replies.at(-1)).toContain('handoff 已建立');
+      await fake.deliver({
+        messageId: 'handoff-status',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/status',
+      });
+      const statusReply = fake.replies.at(-1)!;
+      expect(statusReply).toContain(`目录：${basename(cwd)}`);
+      expect(statusReply).not.toContain('source.jsonl');
+      expect(statusReply).not.toContain(cwd);
+      expect(await readFile(sourcePath, 'utf8')).toBe(sourceContentBefore);
+      const sourceAfter = await stat(sourcePath);
+      expect({
+        dev: sourceAfter.dev,
+        ino: sourceAfter.ino,
+        size: sourceAfter.size,
+        mtimeMs: sourceAfter.mtimeMs,
+      }).toEqual({
+        dev: sourceBefore.dev,
+        ino: sourceBefore.ino,
+        size: sourceBefore.size,
+        mtimeMs: sourceBefore.mtimeMs,
+      });
+      await fake.deliver({
+        messageId: 'topic-run',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: 'continue handoff',
+      });
+      expect(runs[1]).toMatchObject({
+        scopeId: 'chat:thread-reply-1',
+        accessMode: 'full',
+        sessionId: 'abcdef12-1234-4234-8234-123456789abc',
+        handoff: { sourceSessionId: sourceId },
+      });
+      await fake.deliver({
+        messageId: 'access',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/access read-only',
+      });
+      expect(fake.replies.at(-1)).toContain('固定使用 full tools + --approve');
+      for (const content of [
+        '/model',
+        '/model list',
+        '/model use provider-a/model-b',
+        '/thinking',
+        '/thinking list',
+        '/thinking high',
+        '/pi commands',
+        '/pi /plan',
+      ]) {
+        await fake.deliver({
+          messageId: randomId(),
+          chatId: 'chat',
+          chatType: 'p2p',
+          threadId: 'thread-reply-1',
+          senderId: 'ou_allowed',
+          content,
+        });
+      }
+      for (const options of controls) {
+        expect(options).toMatchObject({
+          cwd,
+          accessMode: 'full',
+          sessionId: 'abcdef12-1234-4234-8234-123456789abc',
+          handoff: { sourceSessionId: sourceId },
+        });
+      }
+      expect(runs.at(-1)).toMatchObject({
+        prompt: '/plan',
+        promptMode: 'pi-command',
+        cwd,
+        accessMode: 'full',
+        sessionId: 'abcdef12-1234-4234-8234-123456789abc',
+        handoff: { sourceSessionId: sourceId },
+      });
+      await fake.deliver({
+        messageId: 'resume',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/resume',
+      });
+      expect(fake.replies.at(-1)).toContain('有可恢复的 Pi session');
+      await fake.deliver({
+        messageId: 'current',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/workspace current',
+      });
+      expect(fake.replies.at(-1)).toContain('handoff source workspace');
+      await fake.deliver({
+        messageId: 'list',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/workspace list',
+      });
+      expect(fake.replies.at(-1)).toContain('alpha [default]');
+      expect(fake.replies.at(-1)).not.toContain(cwd);
+      await fake.deliver({
+        messageId: 'new',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/new',
+      });
+      expect(fake.replies.at(-1)).toContain('已归档当前 handoff fork');
+      expect(await stat(join(paths.piSessionDir, 'fork.jsonl'))).toBeDefined();
+      await fake.deliver({
+        messageId: 'after-new',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: 'new handoff turn',
+      });
+      expect(runs.at(-1)?.sessionId).toBeUndefined();
+      await fake.deliver({
+        messageId: 'status-b',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/status',
+      });
+      expect(fake.replies.at(-1)).toContain('bbbbbbbb-1234-4234-8234-123456789abc');
+      await bridge.disconnect();
+
+      const spawnProfile = {
+        ...profile,
+        preferences: { ...profile.preferences, transport: 'spawn-per-turn' as const },
+      };
+      const spawnChannel = new FakeChannel();
+      const spawnBridge = await startChannel({
+        profile: spawnProfile,
+        paths,
+        agent,
+        createChannel: () => spawnChannel,
+      });
+      const controlsBeforeSpawnStatus = controls.length;
+      await spawnChannel.deliver({
+        messageId: 'spawn-status',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/status',
+      });
+      const spawnStatus = spawnChannel.replies.at(-1)!;
+      expect(spawnStatus).toContain('handoff：active');
+      expect(spawnStatus).toContain(`source：${sourceId}`);
+      expect(spawnStatus).toContain('fork：bbbbbbbb-1234-4234-8234-123456789abc');
+      expect(spawnStatus).toContain(`目录：${basename(cwd)}`);
+      expect(spawnStatus).toContain('策略：full tools + approve');
+      expect(spawnStatus).toContain('模型与思考级别仅 RPC transport 可查询');
+      expect(spawnStatus).not.toContain(cwd);
+      expect(controls).toHaveLength(controlsBeforeSpawnStatus);
+      await spawnBridge.disconnect();
+
+      const restartedChannel = new FakeChannel();
+      const restarted = await startChannel({ profile, paths, agent, createChannel: () => restartedChannel });
+      await restartedChannel.deliver({
+        messageId: 'restart-status',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/status',
+      });
+      expect(restartedChannel.replies.at(-1)).toContain('bbbbbbbb-1234-4234-8234-123456789abc');
+      await restartedChannel.deliver({
+        messageId: 'restart-run',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: 'after restart',
+      });
+      expect(runs.at(-1)).toMatchObject({ sessionId: 'bbbbbbbb-1234-4234-8234-123456789abc', accessMode: 'full' });
+      await restartedChannel.deliver({
+        messageId: 'off',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: '/handoff off',
+      });
+      expect(restartedChannel.replies.at(-1)).toContain('已退出 handoff');
+      expect(await stat(join(paths.piSessionDir, 'fork.jsonl'))).toBeDefined();
+      expect(await stat(join(paths.piSessionDir, 'source.jsonl'))).toBeDefined();
+      await restarted.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['modify', 'delete'] as const)('rejects a source %s race and removes only its owned fork', async (race) => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-source-race-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      const forkId = 'abcdef12-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      const sourcePath = join(paths.piSessionDir, 'source.jsonl');
+      const forkPath = join(paths.piSessionDir, 'owned-fork.jsonl');
+      await writeFile(sourcePath, `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`);
+      const profile = createProfileConfig({
+        app: { id: `cli_source_${race}`, secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          await writeFile(forkPath, `${JSON.stringify({ type: 'session', version: 3, id: forkId, cwd })}\n`);
+          if (race === 'modify') {
+            await writeFile(sourcePath, `${await readFile(sourcePath, 'utf8')}changed`);
+          } else {
+            await rm(sourcePath);
+          }
+          return { sessionId: forkId, isStreaming: false };
+        },
+        run() {
+          throw new Error('must not run');
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      await fake.deliver({
+        messageId: 'handoff',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: `/handoff ${sourceId}`,
+      });
+      expect(fake.replies.at(-1)).toContain('请等待电脑端 Pi 任务结束后重试');
+      await expect(stat(forkPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      if (race === 'modify') {
+        expect(await readFile(sourcePath, 'utf8')).toContain('changed');
+      } else {
+        await expect(stat(sourcePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+      expect(JSON.parse(await readFile(paths.handoffBindingsFile, 'utf8'))).toEqual([]);
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('restores catalog and binding when a new handoff system session cannot update the binding store', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-binding-system-failure-'));
+    let bindingWrites = 0;
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      const forkId = 'abcdef12-1234-4234-8234-123456789abc';
+      const nextId = 'bbbbbbbb-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      await writeFile(
+        join(paths.piSessionDir, 'source.jsonl'),
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`,
+      );
+      const profile = createProfileConfig({
+        app: { id: 'cli_binding_failure', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: cwd,
+        access: { allowedUsers: ['ou_allowed'] },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi',
+        async isAvailable() {
+          return true;
+        },
+        async forkSession() {
+          await writeFile(
+            join(paths.piSessionDir, 'fork.jsonl'),
+            `${JSON.stringify({ type: 'session', version: 3, id: forkId, cwd })}\n`,
+          );
+          return { sessionId: forkId, isStreaming: false };
+        },
+        run(options): AgentRun {
+          return {
+            runId: options.runId,
+            events: {
+              async *[Symbol.asyncIterator]() {
+                yield { type: 'system' as const, sessionId: nextId };
+                yield { type: 'done' as const, terminationReason: 'normal' as const };
+              },
+            },
+            async stop() {},
+            async waitForExit() {
+              return true;
+            },
+          };
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({
+        profile,
+        paths,
+        agent,
+        createChannel: () => fake,
+        persistenceHooks: {
+          handoffs: {
+            beforeRename: async () => {
+              bindingWrites += 1;
+              if (bindingWrites === 2) {
+                throw new Error('binding commit failed');
+              }
+            },
+          },
+        },
+      });
+      await fake.deliver({
+        messageId: 'handoff',
+        chatId: 'chat',
+        chatType: 'p2p',
+        senderId: 'ou_allowed',
+        content: `/handoff ${sourceId}`,
+      });
+      await fake.deliver({
+        messageId: 'run',
+        chatId: 'chat',
+        chatType: 'p2p',
+        threadId: 'thread-reply-1',
+        senderId: 'ou_allowed',
+        content: 'next',
+      });
+      expect(fake.replies).not.toContain(expect.stringContaining(nextId));
+      await bridge.disconnect();
+      const catalog = JSON.parse(await readFile(paths.sessionCatalogFile, 'utf8')) as Array<{
+        sessionId: string;
+        status: string;
+      }>;
+      const bindings = JSON.parse(await readFile(paths.handoffBindingsFile, 'utf8')) as Array<{
+        forkSessionId: string;
+      }>;
+      expect(catalog.find((entry) => entry.status === 'active')?.sessionId).toBe(forkId);
+      expect(bindings[0]?.forkSessionId).toBe(forkId);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -520,6 +1393,145 @@ describe('startChannel with a typed fake channel', () => {
       expect(runs.at(-1)?.sessionId).toBeUndefined();
       expect(runs.at(-1)?.model).toBeUndefined();
       expect(runs.at(-1)?.thinkingLevel).toBeUndefined();
+      await bridge.disconnect();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['model', 'thinking'] as const)(
+    'fails closed before %s mutation when authoritative state lacks recoverable fields',
+    async (kind) => {
+      const root = await mkdtemp(join(tmpdir(), 'lark-pi-state-incomplete-'));
+      try {
+        const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+        const profile = createProfileConfig({
+          app: { id: `cli_incomplete_${kind}`, secret: '${TEST_SECRET}', tenant: 'feishu' },
+          workspace: await realpath(root),
+          access: { allowedUsers: ['ou_allowed'] },
+          preferences: { transport: 'rpc' },
+        });
+        await saveRootConfig(paths.configFile, {
+          schemaVersion: 3,
+          activeProfile: 'test',
+          profiles: { test: profile },
+        });
+        const setModel = vi.fn();
+        const setThinkingLevel = vi.fn();
+        const state =
+          kind === 'model'
+            ? { sessionId: 'session-incomplete', isStreaming: false, thinkingLevel: 'medium' as const }
+            : {
+                sessionId: 'session-incomplete',
+                isStreaming: false,
+                model: { provider: 'provider-a', id: 'model-a', reasoning: true },
+              };
+        const agent: AgentAdapter = {
+          id: 'pi',
+          displayName: 'Pi RPC',
+          async isAvailable() {
+            return true;
+          },
+          async getSessionState() {
+            return state;
+          },
+          async listThinkingLevels() {
+            return { state, levels: ['off', 'medium', 'high'] };
+          },
+          setModel,
+          setThinkingLevel,
+          run(options): AgentRun {
+            return {
+              runId: options.runId,
+              events: {
+                async *[Symbol.asyncIterator]() {
+                  yield { type: 'system' as const, sessionId: 'session-incomplete' };
+                  yield { type: 'done' as const, terminationReason: 'normal' as const };
+                },
+              },
+              async stop() {},
+              async waitForExit() {
+                return true;
+              },
+            };
+          },
+        };
+        const fake = new FakeChannel();
+        const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+        const deliver = (content: string) =>
+          fake.deliver({ messageId: randomId(), chatId: 'chat', chatType: 'p2p', senderId: 'ou_allowed', content });
+        await deliver('start');
+        await deliver(kind === 'model' ? '/model use provider-a/model-b' : '/thinking high');
+        expect(fake.replies.at(-1)).toContain('未返回可恢复');
+        expect(setModel).not.toHaveBeenCalled();
+        expect(setThinkingLevel).not.toHaveBeenCalled();
+        await bridge.disconnect();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('rolls RPC model mutation back before file state and evicts on uncertain compensation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-model-rollback-'));
+    try {
+      const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'locks') });
+      const profile = createProfileConfig({
+        app: { id: 'cli_model_rollback', secret: '${TEST_SECRET}', tenant: 'feishu' },
+        workspace: await realpath(root),
+        access: { allowedUsers: ['ou_allowed'] },
+        preferences: { transport: 'rpc' },
+      });
+      await saveRootConfig(paths.configFile, { schemaVersion: 3, activeProfile: 'test', profiles: { test: profile } });
+      let model = { provider: 'provider-a', id: 'model-a', reasoning: true };
+      const setModel = vi.fn(async (_options: AgentRunOptions, provider: string, id: string) => {
+        model = { provider, id, reasoning: id === 'model-a' };
+        if (id === 'model-a') {
+          throw new Error('rollback rpc failed');
+        }
+        return { sessionId: 'session-model', isStreaming: false, model, thinkingLevel: 'medium' as const };
+      });
+      const invalidateSession = vi.fn(async () => {});
+      const agent: AgentAdapter = {
+        id: 'pi',
+        displayName: 'Pi RPC',
+        async isAvailable() {
+          return true;
+        },
+        async getSessionState() {
+          return { sessionId: 'session-model', isStreaming: false, model, thinkingLevel: 'medium' as const };
+        },
+        setModel,
+        invalidateSession,
+        run(options): AgentRun {
+          return {
+            runId: options.runId,
+            events: {
+              async *[Symbol.asyncIterator]() {
+                yield { type: 'system' as const, sessionId: 'session-model' };
+                yield { type: 'done' as const, terminationReason: 'normal' as const };
+              },
+            },
+            async stop() {},
+            async waitForExit() {
+              return true;
+            },
+          };
+        },
+      };
+      const fake = new FakeChannel();
+      const bridge = await startChannel({ profile, paths, agent, createChannel: () => fake });
+      const deliver = (content: string) =>
+        fake.deliver({ messageId: randomId(), chatId: 'chat', chatType: 'p2p', senderId: 'ou_allowed', content });
+      await deliver('start');
+      const catalogRename = paths.sessionCatalogFile;
+      await rm(catalogRename, { force: true });
+      await mkdir(catalogRename);
+      await deliver('/model use provider-a/model-b');
+      expect(setModel).toHaveBeenNthCalledWith(1, expect.anything(), 'provider-a', 'model-b');
+      expect(setModel).toHaveBeenNthCalledWith(2, expect.anything(), 'provider-a', 'model-a');
+      expect(invalidateSession).toHaveBeenCalledTimes(1);
+      expect(fake.replies.at(-1)).not.toContain('已切换');
       await bridge.disconnect();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -845,9 +1857,16 @@ describe('startChannel with a typed fake channel', () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-channel-mention-policy-'));
     try {
       const paths = resolveAppPaths({ rootDir: root, profile: 'test', appLockRoot: join(root, 'app-locks') });
+      const cwd = await realpath(root);
+      const sourceId = '12345678-1234-4234-8234-123456789abc';
+      await mkdir(paths.piSessionDir, { recursive: true });
+      await writeFile(
+        join(paths.piSessionDir, 'source.jsonl'),
+        `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd })}\n`,
+      );
       const profile = createProfileConfig({
         app: { id: 'cli_mention_policy', secret: '${TEST_SECRET}', tenant: 'feishu' },
-        workspace: await realpath(root),
+        workspace: cwd,
         access: {
           allowedChats: ['oc_quiet', 'oc_active'],
           mentionOptionalChats: ['oc_active'],

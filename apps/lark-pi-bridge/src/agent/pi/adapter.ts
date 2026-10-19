@@ -1,7 +1,8 @@
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
-import { log } from '../../core/logger.js';
+import { log, redactKnownPaths, redactText } from '../../core/logger.js';
 import { buildPiChildEnv } from '../../platform/pi-env.js';
 import { spawnProcessPrivate, type SpawnedProcessByStdio } from '../../platform/spawn.js';
 import { BRIDGE_SYSTEM_PROMPT, buildBridgeUserPrompt } from '../bridge-system-prompt.js';
@@ -22,6 +23,7 @@ import { checkPiCompatibility } from './preflight.js';
 export interface PiAdapterOptions {
   binary?: string;
   piConfigDir: string;
+  handoffPiConfigDir?: string;
   piSessionDir: string;
   bridgeSystemPromptFile: string;
   larkChannel?: LarkChannelEnvContext;
@@ -70,6 +72,59 @@ export class PiAdapter implements AgentAdapter {
     await chmod(this.opts.bridgeSystemPromptFile, 0o600);
   }
 
+  async forkSession(opts: AgentRunOptions) {
+    if (!opts.handoff?.sourcePath) {
+      throw new Error('Pi fork requires an exact source path resolved by the bridge.');
+    }
+    const args = buildPiArgs({
+      accessMode: 'full',
+      handoff: true,
+      forkPath: opts.handoff.sourcePath,
+      sessionDir: this.opts.piSessionDir,
+      bridgeSystemPromptFile: this.opts.bridgeSystemPromptFile,
+    });
+    const child = spawnProcessPrivate(this.binary, args, {
+      cwd: opts.cwd,
+      env: buildPiChildEnv({
+        bridgeEnv: buildLarkChannelEnv(this.opts.larkChannel),
+        piConfigDir: this.opts.handoffPiConfigDir ?? join(homedir(), '.pi', 'agent'),
+      }),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as PiChild;
+    child.stdin.end();
+    const decoder = new StrictPiJsonlDecoder();
+    const translator = new PiJsonTranslator({
+      knownSensitivePaths: [
+        opts.cwd,
+        this.opts.piSessionDir,
+        this.opts.bridgeSystemPromptFile,
+        opts.handoff.sourcePath,
+      ],
+    });
+    const deadline = setTimeout(() => child.kill('SIGTERM'), 10_000);
+    deadline.unref();
+    try {
+      for await (const chunk of child.stdout) {
+        for (const raw of decoder.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array))) {
+          for (const event of translator.translate(raw)) {
+            if (event.type === 'system' && event.sessionId) {
+              child.kill('SIGTERM');
+              await waitForExit(child, 1_000);
+              return { sessionId: event.sessionId, isStreaming: false };
+            }
+          }
+        }
+      }
+      throw new Error('Pi native fork exited without an authoritative session event.');
+    } finally {
+      clearTimeout(deadline);
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await waitForExit(child, 1_000);
+      }
+    }
+  }
+
   async probeModel(opts: Omit<AgentRunOptions, 'runId' | 'prompt' | 'sessionId' | 'attachments'>): Promise<void> {
     await this.prepareRun();
     const run = this.run({
@@ -104,6 +159,8 @@ export class PiAdapter implements AgentAdapter {
     }
     const args = buildPiArgs({
       accessMode: opts.accessMode,
+      handoff: Boolean(opts.handoff),
+      forkPath: opts.handoff?.sourcePath,
       sessionDir: this.opts.piSessionDir,
       sessionId: opts.sessionId,
       model: opts.model,
@@ -115,16 +172,25 @@ export class PiAdapter implements AgentAdapter {
       cwd: opts.cwd,
       env: buildPiChildEnv({
         bridgeEnv: buildLarkChannelEnv(this.opts.larkChannel),
-        piConfigDir: this.opts.piConfigDir,
+        piConfigDir: opts.handoff
+          ? (this.opts.handoffPiConfigDir ?? join(homedir(), '.pi', 'agent'))
+          : this.opts.piConfigDir,
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as PiChild;
     const stderr = new BoundedText(4_096);
+    const logSensitivePaths = [opts.cwd, this.opts.piSessionDir, this.opts.bridgeSystemPromptFile];
+    if (opts.handoff?.sourcePath) {
+      logSensitivePaths.push(opts.handoff.sourcePath);
+    }
     let runtimeError: Error | undefined;
     let stopReason: PiFinishReason | undefined;
     child.stderr.on('data', (chunk: Buffer) => {
-      stderr.append(chunk.toString('utf8'));
-      log.warn('agent', 'pi-stderr', { message: truncate(chunk.toString('utf8').replace(/[\r\n]+/g, ' '), 500) });
+      const text = chunk.toString('utf8');
+      stderr.append(text);
+      log.warn('agent', 'pi-stderr', {
+        message: truncate(redactText(redactKnownPaths(text, logSensitivePaths)).replace(/[\r\n]+/g, ' '), 500),
+      });
     });
     child.on('error', (error) => {
       runtimeError = error;
@@ -136,7 +202,6 @@ export class PiAdapter implements AgentAdapter {
     child.stdin.end(buildBridgeUserPrompt(withAttachments(opts.prompt, opts.attachments), this.identity), 'utf8');
     log.info('agent', 'pi-spawn', {
       pid: child.pid ?? null,
-      cwd: opts.cwd,
       hasSession: Boolean(opts.sessionId),
       accessMode: opts.accessMode,
       promptChars: opts.prompt.length,
@@ -150,6 +215,7 @@ export class PiAdapter implements AgentAdapter {
         stderr,
         () => runtimeError,
         () => stopReason,
+        logSensitivePaths,
         this.opts.jsonlLimits,
       ),
       async stop(reason = 'interrupted') {
@@ -177,9 +243,10 @@ async function* eventStream(
   stderr: BoundedText,
   getError: () => Error | undefined,
   getStopReason: () => PiFinishReason | undefined,
+  knownSensitivePaths: readonly string[],
   limits?: PiJsonlLimits,
 ): AsyncGenerator<AgentEvent> {
-  const translator = new PiJsonTranslator();
+  const translator = new PiJsonTranslator({ knownSensitivePaths });
   const decoder = new StrictPiJsonlDecoder(limits);
   let terminal: AgentEvent | undefined;
   let protocolError: Error | undefined;
@@ -203,7 +270,9 @@ async function* eventStream(
     decoder.finish();
   } catch (error) {
     protocolError = error instanceof Error ? error : new Error(String(error));
-    log.warn('pi-json', 'protocol-error', { message: truncate(protocolError.message, 500) });
+    log.warn('pi-json', 'protocol-error', {
+      message: truncate(redactText(redactKnownPaths(protocolError.message, knownSensitivePaths)), 500),
+    });
     if (child.exitCode === null && child.signalCode === null) {
       child.kill('SIGTERM');
       if (!(await waitForExit(child, 1_000))) {

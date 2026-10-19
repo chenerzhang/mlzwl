@@ -2,6 +2,7 @@ import { isAgentThinkingLevel, type AgentThinkingLevel } from '../agent/types.js
 import { isAccessMode, type AccessMode } from '../config/permissions.js';
 import { parseSelectedModel } from '../config/pi-models.js';
 import type { SessionCatalog, SessionCatalogIdentity } from '../session/catalog.js';
+import { isExactPiSessionId } from '../session/handoff.js';
 
 export type WorkspaceBridgeCommand =
   | { type: 'workspace-current' }
@@ -11,6 +12,8 @@ export type WorkspaceBridgeCommand =
   | { type: 'workspace-default-set'; alias: string };
 
 export type BridgeCommand =
+  | { type: 'handoff'; sessionId: string }
+  | { type: 'handoff-off' }
   | { type: 'new' }
   | { type: 'resume' }
   | { type: 'status' }
@@ -37,6 +40,16 @@ export function parseBridgeCommand(text: string): BridgeCommand | undefined {
   }
   const [name = '', ...args] = trimmed.split(/\s+/);
   switch (name.toLowerCase()) {
+    case '/handoff':
+      if (args.length !== 1) {
+        return invalid(name, '用法：/handoff <exact-session-id>|off');
+      }
+      if (args[0]?.toLowerCase() === 'off') {
+        return { type: 'handoff-off' };
+      }
+      return isExactPiSessionId(args[0]!)
+        ? { type: 'handoff', sessionId: args[0]! }
+        : invalid(name, 'handoff 只接受完整合法的 Pi session ID，不接受 partial 或路径。');
     case '/new':
       return noArgs(name, args, { type: 'new' });
     case '/resume':

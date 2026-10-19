@@ -71,6 +71,49 @@ describe('concurrent private session persistence', () => {
     }
   });
 
+  it('keeps old catalog and settings values when a pre-rename permission step fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-pre-rename-'));
+    paths.push(root);
+    const catalogPath = join(root, 'catalog.json');
+    const settingsPath = join(root, 'settings.json');
+    const identity = { scopeId: 'scope', cwdRealpath: '/repo', policyFingerprint: 'policy' };
+    const catalog = new SessionCatalog(catalogPath);
+    const settings = new ScopeSettingsStore(settingsPath);
+    await catalog.upsertActive(identity, 'old-session');
+    await settings.update('scope', { workspaceAlias: 'old' });
+    const fail = { beforeRename: async () => Promise.reject(new Error('permission failed')) };
+    await expect(new SessionCatalog(catalogPath, fail).upsertActive(identity, 'new-session')).rejects.toThrow(
+      /permission failed/,
+    );
+    await expect(new ScopeSettingsStore(settingsPath, fail).update('scope', { workspaceAlias: 'new' })).rejects.toThrow(
+      /permission failed/,
+    );
+    const catalogReloaded = new SessionCatalog(catalogPath);
+    const settingsReloaded = new ScopeSettingsStore(settingsPath);
+    await Promise.all([catalogReloaded.load(), settingsReloaded.load()]);
+    expect(catalogReloaded.activeFor(identity)?.sessionId).toBe('old-session');
+    expect(settingsReloaded.get('scope')?.workspaceAlias).toBe('old');
+  });
+
+  it('reloads committed catalog and settings with mode 0600 and no post-rename failure point', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-atomic-commit-'));
+    paths.push(root);
+    const catalogPath = join(root, 'catalog.json');
+    const settingsPath = join(root, 'settings.json');
+    const identity = { scopeId: 'scope', cwdRealpath: '/repo', policyFingerprint: 'policy' };
+    await new SessionCatalog(catalogPath).upsertActive(identity, 'committed');
+    await new ScopeSettingsStore(settingsPath).update('scope', { idleTimeoutMinutes: 9 });
+    const catalogReloaded = new SessionCatalog(catalogPath);
+    const settingsReloaded = new ScopeSettingsStore(settingsPath);
+    await Promise.all([catalogReloaded.load(), settingsReloaded.load()]);
+    expect(catalogReloaded.activeFor(identity)?.sessionId).toBe('committed');
+    expect(settingsReloaded.get('scope')?.idleTimeoutMinutes).toBe(9);
+    if (process.platform !== 'win32') {
+      expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(settingsPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
   it('fails closed on corrupted persisted state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-persistence-corrupt-'));
     paths.push(root);

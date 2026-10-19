@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildPiChildEnv } from '../../platform/pi-env.js';
@@ -15,6 +15,8 @@ export const REQUIRED_PI_FLAGS = [
   '--session-dir',
   '--tools',
   '--append-system-prompt',
+  '--fork',
+  '--approve',
   '--no-approve',
 ] as const;
 
@@ -186,12 +188,86 @@ export async function checkPiCompatibility(options: PiCompatibilityOptions = {})
     if (stream.eventTypes.at(-1) !== 'agent_settled') {
       throw new Error('Pi JSON protocol probe did not end at the required agent_settled terminal event');
     }
+
+    await probeNativeFork(binary, env, root, piSessionDir);
     return { version: version! };
   } finally {
     if (server) {
       await closeServer(server);
     }
     await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
+async function probeNativeFork(
+  binary: string,
+  env: NodeJS.ProcessEnv,
+  root: string,
+  sessionDir: string,
+): Promise<void> {
+  const cwd = join(root, 'fork-cwd');
+  await mkdir(cwd, { mode: 0o700 });
+  const cwdRealpath = await realpath(cwd);
+  const sourceId = '12345678-1234-4234-8234-123456789abc';
+  const sourcePath = join(root, 'source.jsonl');
+  const source = `${JSON.stringify({
+    type: 'session',
+    version: 3,
+    id: sourceId,
+    timestamp: new Date(0).toISOString(),
+    cwd: cwdRealpath,
+  })}\n`;
+  await writeFile(sourcePath, source, { mode: 0o600 });
+  const sourceBefore = await stat(sourcePath);
+  const fork = await capture(
+    binary,
+    ['--mode', 'json', '--fork', sourcePath, '--session-dir', sessionDir, '--approve'],
+    env,
+    '',
+    10_000,
+    cwdRealpath,
+  );
+  if (fork.code !== 0) {
+    throw new Error(`Pi native fork probe exited with ${fork.code ?? 'signal'}`);
+  }
+  const firstLine = fork.stdout.split('\n').find((line) => line.trim());
+  let header: { type?: unknown; id?: unknown; cwd?: unknown };
+  try {
+    header = JSON.parse(firstLine ?? '') as typeof header;
+  } catch {
+    throw new Error('Pi native fork probe did not emit a JSON session header');
+  }
+  if (
+    header.type !== 'session' ||
+    typeof header.id !== 'string' ||
+    header.id === sourceId ||
+    header.cwd !== cwdRealpath
+  ) {
+    throw new Error('Pi native fork probe returned an invalid fork identity');
+  }
+  const candidates = await readdir(sessionDir);
+  const matching = [];
+  for (const name of candidates.filter((value) => value.endsWith('.jsonl'))) {
+    const line = (await readFile(join(sessionDir, name), 'utf8')).split('\n', 1)[0];
+    try {
+      const value = JSON.parse(line ?? '') as { id?: unknown };
+      if (value.id === header.id) {
+        matching.push(name);
+      }
+    } catch {
+      // Other probe sessions are irrelevant; the authoritative fork must be unique.
+    }
+  }
+  const sourceAfter = await stat(sourcePath);
+  if (
+    matching.length !== 1 ||
+    (await readFile(sourcePath, 'utf8')) !== source ||
+    sourceAfter.dev !== sourceBefore.dev ||
+    sourceAfter.ino !== sourceBefore.ino ||
+    sourceAfter.size !== sourceBefore.size ||
+    sourceAfter.mtimeMs !== sourceBefore.mtimeMs
+  ) {
+    throw new Error('Pi native fork probe did not preserve source or create one isolated fork');
   }
 }
 
@@ -235,9 +311,10 @@ function capture(
   env: NodeJS.ProcessEnv,
   stdin: string,
   timeoutMs: number,
+  cwd?: string,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawnProcess(command, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnProcess(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let timedOut = false;

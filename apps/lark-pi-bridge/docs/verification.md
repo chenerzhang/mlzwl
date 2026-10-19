@@ -40,6 +40,7 @@ pnpm verify
 
 - schema v3 的严格解析、显式 `piConfigScope`、权限/transport/model 保留和未知 schema 拒绝；
 - workspace canonicalization、default get/set、删除保护、不可用标记、按次读取、policy fingerprint、session catalog、scope settings，以及 active/archived/orphan retention、dry-run、损坏/symlink/重复 ID 保守跳过；
+- handoff 完整 ID 解析与路径/partial 拒绝、可信 roots 有界 locator、cwd workspace bypass、symlink/corrupt/duplicate 拒绝、0600 binding 重启恢复、`/status` 仅显示 source cwd 目录 basename 且不显示 session 文件名/绝对 cwd、native fork full+approve argv 与普通 no-approve 分离；
 - Pi argv、model/thinking 启动覆盖、受限环境、最低版本与所需 CLI flags；
 - 严格 LF JSONL：malformed、非法 UTF-8、空行、未终止、单行/单 run 累计越界、工具密集型多 MiB `agent_end` 与 pooled run 预算重置；
 - 事件 translator：未知/非法顺序/未结束工具/缺少 `agent_settled`/terminal 后记录；
@@ -76,7 +77,7 @@ pnpm verify
 使用 fake Channel、临时 home 和注入 runner 验证：
 
 - personal/team 入口策略、真实 mention 语义、仅限 `allowedChats` 子集的按群免 `@` 例外和 scope 隔离；
-- `/new`、`/resume`、增强模型状态的 `/status`、`/model`、`/thinking`、`/stop`、`/timeout`、`/access`、`/pi` 与 `/workspace` current/list/use/default，以及 session retention 配置和 `sessions prune` CLI；
+- typed fake Channel 自动覆盖 `/handoff <exact-id>|off` 的强制 topic/权威 thread binding、首次目录创建、fork/后续 turn，以及 handoff→`/new`→新 session→disconnect/restart→`/status`/继续 run/`off` 的持久恢复；native fork 真实架构由 spawn-per-turn adapter 执行，后续 turn 才由 RPC adapter 按 catalog session `get_state` 校验并复用 pool，自动测试不伪造 RPC 原生 fork；workspace/timeout/retention 的底层 store、命令解析和 prune CLI 另有自动测试，但未据此声称完整真实飞书 handoff E2E；
 - 所有未知 slash command 拦截；
 - 活动控制命令绕过普通 run 互斥，并发普通 prompt 返回明确的 scope 忙提示而不是 Pi 启动失败；
 - 文档评论 scope 与文本回复；
@@ -142,3 +143,5 @@ pnpm verify
 | 真实权限/provider/platform 结论 | 自动门禁通过后，另行取得真实 E2E 授权                             |
 
 验证结束必须清理临时 server、fake credential、媒体目录、PID/锁、mock、bridge/Pi child 和已授权 service 状态。
+
+平台无关的普通 Bridge 路径由通用 typed Channel 集成测试覆盖；Windows handoff 仅由可注入 platform 测试证明 locator 因 no-follow 能力缺失而 fail-closed。真实 Windows 目前只有实现与代理验证，未声称完成真实平台 E2E。

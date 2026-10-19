@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { writePrivateAtomicFile, type AtomicFileHooks } from '../runtime/atomic-json-file.js';
 import { isAgentThinkingLevel, type AgentThinkingLevel } from '../agent/types.js';
 import { isAccessMode, type AccessMode } from '../config/permissions.js';
 import { parseSelectedModel } from '../config/pi-models.js';
@@ -20,7 +19,10 @@ export interface ScopeSettings {
 export class ScopeSettingsStore {
   private valuesByScope = new Map<string, ScopeSettings>();
 
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly hooks?: AtomicFileHooks,
+  ) {}
 
   async load(): Promise<void> {
     this.valuesByScope = await readSettings(this.path);
@@ -35,6 +37,19 @@ export class ScopeSettingsStore {
   get(scopeId: string): ScopeSettings | undefined {
     const value = this.valuesByScope.get(scopeId);
     return value ? { ...value } : undefined;
+  }
+
+  async restore(scopeId: string, value: ScopeSettings | undefined): Promise<void> {
+    await withFileMutationLock(this.path, async () => {
+      const latest = await readSettings(this.path);
+      if (value) {
+        latest.set(scopeId, { ...value });
+      } else {
+        latest.delete(scopeId);
+      }
+      await persistSettings(this.path, latest, this.hooks);
+      this.valuesByScope = latest;
+    });
   }
 
   async update(
@@ -70,7 +85,7 @@ export class ScopeSettingsStore {
         delete next.thinkingLevel;
       }
       latest.set(scopeId, next);
-      await persistSettings(this.path, latest);
+      await persistSettings(this.path, latest, this.hooks);
       this.valuesByScope = latest;
       return { ...next };
     });
@@ -103,21 +118,12 @@ async function readSettings(path: string): Promise<Map<string, ScopeSettings>> {
   }
 }
 
-async function persistSettings(path: string, settings: Map<string, ScopeSettings>): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(temp, 'wx', 0o600);
-  try {
-    await file.writeFile(`${JSON.stringify([...settings.values()], null, 2)}\n`);
-    await file.sync();
-  } catch (error) {
-    await unlink(temp).catch(() => {});
-    throw error;
-  } finally {
-    await file.close();
-  }
-  await rename(temp, path);
-  await chmod(path, 0o600);
+async function persistSettings(
+  path: string,
+  settings: Map<string, ScopeSettings>,
+  hooks?: AtomicFileHooks,
+): Promise<void> {
+  await writePrivateAtomicFile(path, `${JSON.stringify([...settings.values()], null, 2)}\n`, hooks);
 }
 
 function parseScopeSettings(value: unknown): ScopeSettings | undefined {

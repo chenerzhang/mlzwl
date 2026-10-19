@@ -493,6 +493,23 @@ describe('PiRpcPool', () => {
     await pool.dispose();
   });
 
+  it('invalidates exactly the stable pool key requested by compensation', async () => {
+    const pool = new PiRpcPool({ maxConnections: 2 });
+    const first = new StrictPiRpcConnection(new FakeChild() as never);
+    const second = new StrictPiRpcConnection(new FakeChild() as never);
+    const firstDispose = vi.spyOn(first, 'dispose');
+    const secondDispose = vi.spyOn(second, 'dispose');
+    const a = await pool.acquire('scope-a', async () => first);
+    pool.release(a.entry);
+    const b = await pool.acquire('scope-b', async () => second);
+    pool.release(b.entry);
+    await pool.invalidateKey('scope-a');
+    expect(firstDispose).toHaveBeenCalledTimes(1);
+    expect(secondDispose).not.toHaveBeenCalled();
+    expect(pool.size()).toBe(1);
+    await pool.dispose();
+  });
+
   it('disposes every idle entry while preserving busy entries for retention maintenance', async () => {
     const pool = new PiRpcPool({ maxConnections: 2, idleTtlMs: 1_000_000 });
     const make = async () => new StrictPiRpcConnection(new FakeChild() as never);

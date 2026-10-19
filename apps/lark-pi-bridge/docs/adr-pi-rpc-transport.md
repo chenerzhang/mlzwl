@@ -35,7 +35,7 @@ RPC 子进程沿用 spawn-per-turn 的安全参数和环境：
 
 - 显式 Pi binary；
 - user/profile scope 解析出的有效 `PI_CODING_AGENT_DIR`，以及始终 profile-local 的 session dir；
-- `--no-approve`，并允许 Pi 按有效 `PI_CODING_AGENT_DIR` 加载 extensions、skills、prompt templates 与 context files；
+- 普通 route 使用 `--no-approve`；handoff route 使用用户 `PI_CODING_AGENT_DIR`、source cwd、full tools 与 `--approve`；一次性原生 `--fork` 固定由 spawn-per-turn adapter 完成并提交 catalog，后续 turn 才可按 configured transport 由 RPC 恢复该 catalog session；
 - `read-only` 固定为 `--tools read,grep,find,ls`；
 - bridge system prompt 使用 profile-local `0600` 文件；
 - 用户文本只进入 RPC stdin，不进入 argv；
@@ -46,17 +46,17 @@ RPC mode 不发 JSON session header。connection 在任何 prompt 前用 `get_st
 
 ### 4. pool identity 与生命周期
 
-pool key 为 profile + scope + canonical cwd + 既有 policy/resource fingerprint + model/thinking 启动覆盖。一个 key 同时最多一个 active consumer；RunExecutor 继续拒绝同 scope 的普通并发消息和 model/thinking 控制。
+稳定 pool key 为 profile + scope + canonical cwd + 既有 policy/resource fingerprint + model/thinking 启动覆盖，明确不纳入 session ID。每次 acquire 都用 `get_state` 将 child session 与 catalog 核对；不一致即销毁并重建。一个 key 同时最多一个 active consumer；RunExecutor 继续拒绝同 scope 的普通并发消息和 model/thinking 控制。
 
 - pool 有固定最大容量、idle TTL 和 LRU 淘汰；只淘汰 idle connection；全部 busy 时 fail-closed。
-- 已知 catalog session 必须与 RPC `get_state` 返回值一致；`/new`、workspace/access identity 变化或 session 不匹配会关闭旧 connection 并新建/恢复正确 session。
+- pool identity 包含 scope、cwd、policy fingerprint、model/thinking、handoff source 与 approve/access policy，但不包含 session ID；每次 acquire 都必须以 RPC `get_state` 核对 catalog session；`/new`、workspace/access identity 变化或 session 不匹配会关闭旧 connection 并新建/恢复正确 session。
 - child death 立即使 connection 不可复用并解除 pending waiter；已被替换 child 的退出回调不得删除当前 entry。
 - profile disconnect、daemon shutdown、adapter replacement、TTL/LRU、协议错误和 stop hard-timeout 都必须回收 child。
 - `waitForExit()` 对 RPC 表示本次 turn 已 settled，不表示长驻 child 已退出。
 
 ### 5. prompt acceptance 与 fallback
 
-RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 prompt 交给 spawn-per-turn：
+RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 prompt 交给 spawn-per-turn。handoff fork 和 handoff 后续 turn 不扩大 replay：fork 绝不跨 transport fallback，source identity 不确定时也只允许用户重试：
 
 - RPC child/握手在写 prompt 前失败：确定未接受，可 fallback；
 - `prompt` response 明确 `success:false`：官方契约说明为接受前拒绝，可 fallback；
@@ -77,7 +77,7 @@ RPC fallback 只能在 bridge **确定 prompt 未被 Pi 接受**时把同一 pro
 
 ### 7. model / thinking
 
-`/model`、`/thinking` 与增强后的 `/status` 只支持 RPC。Bridge 通过 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 控制当前 scope 的 idle Pi session；不向模型发送 prompt。只向飞书投影 provider、model ID、有界名称、reasoning 能力和 thinking level，不回显 endpoint、cost 或认证状态细节。
+`/model`、`/thinking` 与增强后的 `/status` 只支持 RPC；handoff 状态中的目录字段仅投影 source cwd 的 basename，无 basename 时显示固定“已验证”，不投影 session 文件名或绝对 cwd。Bridge 通过 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 控制当前 scope 的 idle Pi session；不向模型发送 prompt。只向飞书投影 provider、model ID、有界名称、reasoning 能力和 thinking level，不回显 endpoint、cost 或认证状态细节。
 
 切换要求当前 scope 已有 session；成功选择写入 profile-local 私有 scope settings，供 Bridge 重启或 child 重建时以 `--model`/`--thinking` 恢复；恢复已有 session 且没有 scope 覆盖时不传 profile 默认 model，避免覆盖 session 自己记录的变化。`/new`、workspace 或 access 变化会清除覆盖。spawn-per-turn 明确拒绝，不用 CLI 文本解析模拟状态。
 

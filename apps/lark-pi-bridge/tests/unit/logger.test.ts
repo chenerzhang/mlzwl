@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { larkSdkLogger, log, redactText } from '../../src/core/logger.js';
+import { larkSdkLogger, log, redactKnownPaths, redactText } from '../../src/core/logger.js';
 
 describe('secret redaction', () => {
   it('redacts bearer, assignment, and JSON-shaped credential text', () => {
@@ -9,6 +9,15 @@ describe('secret redaction', () => {
     expect(redacted).not.toContain('xyz');
     expect(redacted).not.toContain('lark-secret');
     expect(redacted).not.toContain('jwt-value');
+  });
+
+  it('redacts exact known paths longest-first without treating regex characters specially', () => {
+    const parent = '/tmp/work.[x]+(private)';
+    const child = `${parent}/sessions/source.jsonl`;
+    const redacted = redactKnownPaths(`cwd=${parent} source=${child} safe=work.[x]`, [parent, child, parent]);
+    expect(redacted).toBe('cwd=[LOCAL_PATH] source=[LOCAL_PATH] safe=work.[x]');
+    expect(redacted).not.toContain(parent);
+    expect(redacted).not.toContain(child);
   });
 
   it('does not emit secret-shaped values in logger fields', () => {

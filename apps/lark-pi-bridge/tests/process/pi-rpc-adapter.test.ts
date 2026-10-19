@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiRpcAdapter } from '../../src/agent/pi/rpc-adapter.js';
 import { PiRpcFallbackAdapter } from '../../src/agent/pi/fallback-adapter.js';
 import { PiAdapter } from '../../src/agent/pi/adapter.js';
@@ -72,6 +72,126 @@ describe('PiRpcAdapter process contract', () => {
     const pids = new Set(records.filter((item) => item.pid).map((item) => item.pid));
     expect(pids.size).toBe(1);
     expect((await stat(join(root, 'pi-agent', 'lark-pi-bridge-system-prompt.md'))).mode & 0o777).toBe(0o600);
+  });
+
+  it('redacts known local paths from RPC spawn and stderr logs', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-rpc-log.[x]-'));
+    cleanup.push(root);
+    const record = join(root, 'records.jsonl');
+    const sessionDir = join(root, 'profile', 'sessions');
+    const promptFile = join(root, 'profile', 'bridge-system.md');
+    const binary = await fakeRpcPi(root, record, {
+      stderr: `diagnostic cwd=${root} sessions=${sessionDir} prompt=${promptFile} safe=kept`,
+      extensionError: `stdout-safe-marker cwd=${root} sessions=${sessionDir} prompt=${promptFile} Authorization=rpc-secret`,
+    });
+    await import('node:fs/promises').then(({ mkdir }) => mkdir(join(root, 'profile'), { recursive: true }));
+    const adapter = new PiRpcAdapter({
+      binary,
+      piConfigDir: join(root, 'profile'),
+      piSessionDir: sessionDir,
+      bridgeSystemPromptFile: promptFile,
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await collect(
+        adapter.run({
+          scopeId: 'chat-log',
+          policyFingerprint: 'policy',
+          runId: 'rpc-log',
+          prompt: 'hello',
+          cwd: root,
+          accessMode: 'read-only',
+        }).events,
+      );
+      await adapter.dispose();
+      const logs = spy.mock.calls.map((args) => args.join(' ')).join('\n');
+      expect(logs).toContain('agent.pi-rpc-spawn');
+      expect(logs).toContain('agent.pi-rpc-stderr');
+      expect(logs).toContain('pi-json.extension-error');
+      expect(logs).toContain('safe=kept');
+      expect(logs).toContain('stdout-safe-marker');
+      expect(logs).toContain('Authorization=[REDACTED]');
+      expect(logs).not.toContain('rpc-secret');
+      expect(logs).toContain('[LOCAL_PATH]');
+      for (const path of [root, sessionDir, promptFile]) {
+        expect(logs).not.toContain(path);
+      }
+    } finally {
+      spy.mockRestore();
+      await adapter.dispose();
+    }
+  });
+
+  it('orchestrates each native handoff through spawn and resumes the catalog session through the stable RPC pool', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-rpc-handoff-orchestration-'));
+    cleanup.push(root);
+    const record = join(root, 'records.jsonl');
+    const binary = await fakeHandoffOrchestrationPi(root, record);
+    const source = join(root, 'source.jsonl');
+    const sourceId = '12345678-1234-4234-8234-123456789abc';
+    await writeFile(source, `${JSON.stringify({ type: 'session', version: 3, id: sourceId, cwd: root })}\n`);
+    const options = {
+      binary,
+      piConfigDir: join(root, 'profile-config'),
+      handoffPiConfigDir: join(root, 'user-config'),
+      piSessionDir: join(root, 'profile-sessions'),
+      bridgeSystemPromptFile: join(root, 'system.md'),
+    };
+    const spawn = new PiAdapter(options);
+    const rpc = new PiRpcAdapter(options);
+    const adapter = new PiRpcFallbackAdapter(rpc, spawn);
+    const common = {
+      scopeId: 'topic',
+      policyFingerprint: 'policy',
+      cwd: root,
+      accessMode: 'full' as const,
+      handoff: { sourcePath: source, sourceSessionId: sourceId },
+    };
+    const first = await adapter.forkSession?.({ ...common, runId: 'fork-1', prompt: '/bridge-session-control' });
+    expect(first?.sessionId).toBe('bbbbbbbb-1234-4234-8234-123456789abc');
+    let catalogSessionId = first!.sessionId;
+    await collect(adapter.run({ ...common, runId: 'rpc-1', prompt: 'resume B', sessionId: catalogSessionId }).events);
+    await collect(adapter.run({ ...common, runId: 'rpc-2', prompt: 'reuse B', sessionId: catalogSessionId }).events);
+    catalogSessionId = 'cccccccc-1234-4234-8234-123456789abc';
+    await collect(
+      adapter.run({ ...common, runId: 'rpc-3', prompt: 'catalog changed', sessionId: catalogSessionId }).events,
+    );
+    const second = await adapter.forkSession?.({ ...common, runId: 'fork-2', prompt: '/bridge-session-control' });
+    expect(second?.sessionId).toBe('dddddddd-1234-4234-8234-123456789abc');
+    await rpc.dispose();
+
+    const records = (await readFile(record, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            mode: string;
+            pid: number;
+            argv: string[];
+            configDir?: string;
+            type?: string;
+            state?: string;
+          },
+      );
+    const nativeForks = records.filter((item) => item.mode === 'json');
+    expect(nativeForks).toHaveLength(2);
+    for (const fork of nativeForks) {
+      expect(fork.argv).toEqual(
+        expect.arrayContaining(['--fork', source, '--session-dir', options.piSessionDir, '--approve']),
+      );
+      expect(fork.argv).not.toContain('--no-approve');
+      expect(fork.configDir).toBe(options.handoffPiConfigDir);
+    }
+    const rpcStarts = records.filter((item) => item.mode === 'rpc');
+    expect(rpcStarts).toHaveLength(2);
+    expect(rpcStarts[0]?.argv).toEqual(expect.arrayContaining(['--session', first!.sessionId, '--approve']));
+    expect(rpcStarts[1]?.argv).toEqual(expect.arrayContaining(['--session', catalogSessionId, '--approve']));
+    expect(
+      new Set(
+        records.filter((item) => item.type === 'prompt' && item.state === first!.sessionId).map((item) => item.pid),
+      ).size,
+    ).toBe(1);
   });
 
   it('lists, selects, and reports model and thinking state on the scoped RPC child', async () => {
@@ -661,7 +781,41 @@ function handle(command) {
   return path;
 }
 
-async function fakeRpcPi(root: string, record: string, options: { extensionUi?: boolean } = {}): Promise<string> {
+async function fakeHandoffOrchestrationPi(root: string, record: string): Promise<string> {
+  const path = join(root, 'fake-handoff-orchestration-pi.mjs');
+  const code = `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from 'node:fs';
+const record = ${JSON.stringify(record)};
+const argv = process.argv.slice(2);
+const mode = argv[argv.indexOf('--mode') + 1];
+appendFileSync(record, JSON.stringify({ mode, pid: process.pid, argv, cwd: process.cwd(), configDir: process.env.PI_CODING_AGENT_DIR }) + '\\n');
+function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
+if (mode === 'json') {
+  readFileSync(0, 'utf8');
+  const previous = readFileSync(record, 'utf8').split('\\n').filter(Boolean).map(JSON.parse).filter(item => item.mode === 'json').length;
+  send({ type: 'session', id: previous === 1 ? 'bbbbbbbb-1234-4234-8234-123456789abc' : 'dddddddd-1234-4234-8234-123456789abc', cwd: process.cwd() });
+} else {
+  let state = argv[argv.indexOf('--session') + 1];
+  let buffered = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { buffered += chunk; let index; while ((index = buffered.indexOf('\\n')) >= 0) { const line = buffered.slice(0, index); buffered = buffered.slice(index + 1); if (line) handle(JSON.parse(line)); } });
+  function handle(command) {
+    appendFileSync(record, JSON.stringify({ ...command, pid: process.pid, state }) + '\\n');
+    if (command.type === 'get_state') return send({ id: command.id, type: 'response', command: 'get_state', success: true, data: { sessionId: state, isStreaming: false } });
+    if (command.type === 'prompt') { send({ id: command.id, type: 'response', command: 'prompt', success: true, data: { disposition: 'started' } }); send({ type: 'agent_start' }); send({ type: 'agent_end' }); return setTimeout(() => send({ type: 'agent_settled' }), 5); }
+  }
+}
+`;
+  await writeFile(path, code, { mode: 0o755 });
+  await chmod(path, 0o755);
+  return path;
+}
+
+async function fakeRpcPi(
+  root: string,
+  record: string,
+  options: { extensionUi?: boolean; stderr?: string; extensionError?: string } = {},
+): Promise<string> {
   const path = join(root, 'fake-rpc-pi.mjs');
   const code = `#!/usr/bin/env node
 import { appendFileSync, statSync, writeFileSync } from 'node:fs';
@@ -670,6 +824,7 @@ const record = ${JSON.stringify(record)};
 const created = join(process.env.PI_CODING_AGENT_DIR, 'rpc-created-session.jsonl');
 writeFileSync(created, 'session');
 appendFileSync(record, JSON.stringify({ kind: 'startup', pid: process.pid, argv: process.argv.slice(2), env: process.env, createdMode: statSync(created).mode & 0o777 }) + '\\n');
+if (${JSON.stringify(options.stderr ?? '')}) process.stderr.write(${JSON.stringify(options.stderr ?? '')} + '\\n');
 let count = 0;
 let buffered = '';
 process.stdin.setEncoding('utf8');
@@ -677,6 +832,7 @@ process.stdin.on('data', chunk => { buffered += chunk; let index; while ((index 
 function send(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
 function finish() {
   send({ type: 'agent_start' });
+  if (${JSON.stringify(options.extensionError ?? '')}) send({ type: 'extension_error', error: ${JSON.stringify(options.extensionError ?? '')} });
   send({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'reply-' + count } });
   send({ type: 'agent_end' });
   setTimeout(() => send({ type: 'agent_settled' }), 5);

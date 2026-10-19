@@ -1,10 +1,15 @@
-import { log } from '../../core/logger.js';
+import { log, redactKnownPaths, redactText } from '../../core/logger.js';
 import type { AgentEvent } from '../types.js';
 
 export type PiFinishReason = 'failed' | 'interrupted' | 'timeout';
 export interface ProtocolDriftState {
   unknownEvents: number;
   anomalies: number;
+}
+
+export interface PiJsonTranslatorOptions {
+  /** Exact local paths removed only from log projections of Pi stdout. */
+  knownSensitivePaths?: readonly string[];
 }
 
 const IGNORED_EVENTS = new Set([
@@ -46,11 +51,16 @@ const IGNORED_ASSISTANT_EVENTS = new Set([
  * the selected Pi binary with an isolated loopback capability probe.
  */
 export class PiJsonTranslator {
+  private readonly knownSensitivePaths: readonly string[];
   private sessionId: string | undefined;
   private terminal = false;
   private messageFailure: { message: string; terminationReason: 'failed' | 'interrupted' } | undefined;
   private toolOutputs = new Map<string, BoundedToolOutput>();
   private drift: ProtocolDriftState = { unknownEvents: 0, anomalies: 0 };
+
+  constructor(options: PiJsonTranslatorOptions = {}) {
+    this.knownSensitivePaths = options.knownSensitivePaths ?? [];
+  }
 
   /** RPC mode obtains the session id from get_state instead of a stream header. */
   primeSession(sessionId: string): void {
@@ -89,7 +99,7 @@ export class PiJsonTranslator {
       case 'agent_settled':
         return this.done();
       case 'extension_error':
-        log.warn('pi-json', 'extension-error', { message: truncate(string(event.error) ?? '', 500) });
+        log.warn('pi-json', 'extension-error', { message: this.logText(string(event.error) ?? '', 500) });
         return [];
       default:
         if (IGNORED_EVENTS.has(event.type)) {
@@ -236,13 +246,16 @@ export class PiJsonTranslator {
   }
   private unknown(eventType: string): never {
     this.drift.unknownEvents++;
-    log.warn('pi-json', 'protocol-drift-unknown-event', { eventType });
+    log.warn('pi-json', 'protocol-drift-unknown-event', { eventType: this.logText(eventType, 500) });
     throw new PiProtocolSequenceError(`Unknown Pi JSON protocol event: ${eventType}`);
   }
   private anomaly(reason: string): AgentEvent[] {
     this.drift.anomalies++;
-    log.warn('pi-json', 'protocol-drift-anomaly', { reason });
+    log.warn('pi-json', 'protocol-drift-anomaly', { reason: this.logText(reason, 500) });
     return [];
+  }
+  private logText(value: string, max: number): string {
+    return truncate(redactText(redactKnownPaths(value, this.knownSensitivePaths)), max);
   }
   private sequenceError(reason: string): PiProtocolSequenceError {
     this.anomaly(reason);

@@ -31,6 +31,20 @@ describe('Pi JSON argv', () => {
     ]);
   });
 
+  it('uses native fork with full tools and explicit approval for handoff', () => {
+    const args = buildPiArgs({
+      accessMode: 'read-only',
+      handoff: true,
+      forkPath: '/trusted/source.jsonl',
+      sessionDir: '/private/profile/sessions',
+      bridgeSystemPromptFile: '/private/system.md',
+    });
+    expect(args).toEqual(expect.arrayContaining(['--fork', '/trusted/source.jsonl', '--approve']));
+    expect(args).not.toContain('--session');
+    expect(args).not.toContain('--no-approve');
+    expect(args).not.toContain('--tools');
+  });
+
   it('uses an explicit read-only tool allowlist without claiming workspace isolation', () => {
     const args = buildPiArgs({
       accessMode: 'read-only',

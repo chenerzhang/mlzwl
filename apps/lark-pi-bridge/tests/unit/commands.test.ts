@@ -3,6 +3,15 @@ import { parseBridgeCommand } from '../../src/commands/index.js';
 
 describe('bridge commands', () => {
   it.each([
+    [
+      '/handoff 12345678-1234-4234-8234-123456789abc',
+      { type: 'handoff', sessionId: '12345678-1234-4234-8234-123456789abc' },
+    ],
+    [
+      '/handoff ABCDEF12-ABCD-EFAB-0123-ABCDEF012345',
+      { type: 'handoff', sessionId: 'ABCDEF12-ABCD-EFAB-0123-ABCDEF012345' },
+    ],
+    ['/handoff off', { type: 'handoff-off' }],
     ['/new', { type: 'new' }],
     ['/resume', { type: 'resume' }],
     ['/status', { type: 'status' }],
@@ -39,6 +48,16 @@ describe('bridge commands', () => {
 
   it('intercepts malformed and unknown slash commands instead of forwarding them as prompts', () => {
     for (const input of [
+      '/handoff',
+      '/handoff partial',
+      '/handoff a',
+      '/handoff 12345678-1234-4234-8234',
+      '/handoff source.jsonl',
+      '/handoff partial/path',
+      '/handoff ../session.jsonl',
+      `/handoff ${'a'.repeat(200)}`,
+      '/handoff .hidden',
+      '/handoff id extra',
       '/timeout 0',
       '/timeout NaN',
       '/new extra',

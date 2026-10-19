@@ -28,7 +28,7 @@
 
 **Scope。** scope 决定命令、workspace、权限和 session 的作用范围。私聊和普通群按 chat 隔离，话题按 `chat + thread` 隔离，文档评论按目标文档与 comment 隔离。
 
-**Session。** 普通消息会自动恢复当前 scope、canonical workspace 和权限策略对应的 Pi session。`/new` 会归档当前 session；下一条普通消息创建新 session。`/resume` 只检查当前上下文是否存在可恢复 session，不接受 session ID 参数，也不把已归档 session 重新激活。默认自动保留 active session 90 天、archived 和 catalog 无引用的 orphan session 各 7 天；按 catalog `updatedAt` 与文件 mtime 的较新值计算。
+**Session。** 普通消息会自动恢复当前 scope、canonical workspace 和权限策略对应的 Pi session。`/new` 会归档当前 session；下一条普通消息创建新 session。`/resume` 只检查当前上下文是否存在可恢复 session，不接受 session ID 参数，也不把已归档 session 重新激活。`/handoff <完整 session ID>` 会用 Pi 原生 fork 复制上下文到 profile-local 新 session，而不是同步或继续写 source；它强制进入现有或新建话题并按 `chatId:threadId` 绑定。默认自动保留 active session 90 天、archived 和 catalog 无引用的 orphan session 各 7 天；按 catalog `updatedAt` 与文件 mtime 的较新值计算。
 
 **Access mode。** `read-only` 只向 Pi 开放 `read,grep,find,ls`；`full` 使用 Pi 的默认工具集合。scope 只能在 profile 的 `maxAccess` 上限内选择。
 
@@ -291,9 +291,11 @@ lark-pi-bridge config refresh --profile default
 
 | 命令                             | 作用                                | 是否启动新 Pi turn | 作用范围与说明                                                    |
 | -------------------------------- | ----------------------------------- | ------------------ | ----------------------------------------------------------------- |
+| `/handoff <exact-session-id>`    | 原生 fork 一个可信 Pi session       | 否                 | 只接受完整 ID；强制话题；source 不修改，不是双向同步              |
+| `/handoff off`                   | 退出当前话题 handoff                | 否                 | 归档但不删除 fork，清理模型/thinking 覆盖并恢复普通路由           |
 | `/new`                           | 归档当前上下文对应的 session        | 否                 | 下一条普通消息创建新 session                                      |
 | `/resume`                        | 检查当前上下文是否有可恢复 session  | 否                 | 普通消息本来就会自动恢复；不接受 session ID                       |
-| `/status`                        | 显示当前 Pi session、模型和思考级别 | 否                 | 尚无 session 时明确提示                                           |
+| `/status`                        | 显示当前 Pi session、模型和思考级别 | 否                 | handoff 只显示 source cwd 目录 basename，不显示文件名或绝对路径   |
 | `/model` / `current`             | 显示当前 session 模型与思考级别     | 否                 | 仅 RPC；不会创建空 session                                        |
 | `/model list`                    | 列出当前 Pi 配置可用模型            | 否                 | 仅 RPC；标记当前模型与 thinking 能力                              |
 | `/model use <provider>/<model>`  | 切换当前 Pi session 模型            | 否                 | 仅 RPC；须先有 session；按 scope 持久化，模型必须由 Pi 列为可用   |
@@ -333,6 +335,8 @@ lark-pi-bridge config refresh --profile default
 /thinking high
 /status
 ```
+
+handoff 只搜索用户默认 Pi sessions、用户 settings 可推导的 sessionDir 和当前 profile sessions；不会全盘扫描，也不接受路径、partial ID、symlink、损坏或重复 source。自定义 root 若不能由用户 Pi settings 推导便不可 handoff。source header 的 cwd 必须是存在的绝对目录，经 realpath 后可绕过已注册 workspace。handoff 固定使用用户普通 Pi config、full tools 和 `--approve`，忽略 `defaultAccess`/`maxAccess` 与 `/access`；这允许 Pi 以运行用户 OS 权限加载和执行项目资源。话题所有参与者共享该上下文与权限。`/workspace current` 仅说明 source workspace 而不泄漏路径；handoff `/status` 的“目录”仅显示 canonical source cwd 的 basename，根目录等无 basename 时显示固定“已验证”，绝不显示 session JSONL 文件名或绝对 cwd；显式 `/workspace use <alias|default>` 退出 handoff。handoff 中 `/new` 只归档当前 fork、保留 source cwd 与 full+approve 路由；`/status` 显示 source/fork、安全 basename 与策略，`/model`、`/thinking`、`/pi` 仍作用当前 RPC session。
 
 模型和思考级别选择属于当前聊天 scope 的既有 Pi session；切换前须先发送普通消息创建 session。Bridge 重启或 RPC child 重建后会恢复；`/new`、`/workspace use ...` 或 `/access ...` 改变 session 身份时会清除选择，新 session 重新采用 Pi/profile 默认值。`/model list` 只列出 Pi 判断当前配置与认证可用的聊天模型，不是全量模型目录。spawn-per-turn 会明确拒绝这些命令，不会模拟 RPC 状态。
 
@@ -622,3 +626,7 @@ Linux systemd 和 Windows Task Scheduler 已实现并有确定性代理测试，
 - [`security.md`](security.md)：信任、凭据、网络和进程边界；
 - [`verification.md`](verification.md)：确定性门禁与真实 E2E 声明边界；
 - [`provenance.md`](provenance.md)：受控来源和本地改写。
+
+### Windows handoff 限制
+
+Windows 上普通 Bridge、CLI/Web 与当前用户 service 仍可使用；但 Node 缺少可证明等价于 `O_NOFOLLOW` 的文件打开语义，因此 `/handoff` locator 会 fail-closed 并报告不可用。
