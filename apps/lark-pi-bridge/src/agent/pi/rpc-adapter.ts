@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { Readable, Writable } from 'node:stream';
 import { log } from '../../core/logger.js';
 import { buildPiChildEnv } from '../../platform/pi-env.js';
@@ -39,6 +40,7 @@ import { checkPiRpcCompatibility } from './rpc-preflight.js';
 export interface PiRpcAdapterOptions {
   binary?: string;
   piConfigDir: string;
+  handoffPiConfigDir?: string;
   piSessionDir: string;
   bridgeSystemPromptFile: string;
   larkChannel?: LarkChannelEnvContext;
@@ -130,6 +132,13 @@ export class PiRpcAdapter implements AgentAdapter {
     if (!matched) {
       throw new Error('Pi model probe response did not contain the expected marker');
     }
+  }
+
+  async forkSession(opts: AgentRunOptions): Promise<AgentSessionState> {
+    if (!opts.handoff?.sourcePath) {
+      throw new Error('Pi fork requires an exact source path resolved by the bridge.');
+    }
+    return this.withIdleConnection(opts, async (_connection, state) => state, 'session is forked');
   }
 
   listCommands(opts: AgentRunOptions): Promise<AgentSlashCommand[]> {
@@ -231,6 +240,13 @@ export class PiRpcAdapter implements AgentAdapter {
     }
     const message = buildBridgeUserPrompt(prompt, this.identity);
     return kind === 'steer' ? entry.connection.steer(message) : entry.connection.followUp(message);
+  }
+
+  async invalidateSession(opts: AgentRunOptions): Promise<void> {
+    if (!opts.scopeId || !opts.policyFingerprint) {
+      return;
+    }
+    await this.pool.invalidateKey(rpcPoolKey(opts));
   }
 
   async closeIdleSessions(): Promise<void> {
@@ -402,6 +418,9 @@ export class PiRpcAdapter implements AgentAdapter {
   private async createConnection(opts: AgentRunOptions): Promise<StrictPiRpcConnection> {
     const args = buildPiRpcArgs({
       accessMode: opts.accessMode,
+      handoff: Boolean(opts.handoff),
+      // Native handoff fork is completed once by PiAdapter before catalog
+      // commit. RPC only resumes the committed catalog session.
       sessionDir: this.opts.piSessionDir,
       sessionId: opts.sessionId,
       model: opts.model,
@@ -412,13 +431,14 @@ export class PiRpcAdapter implements AgentAdapter {
       cwd: opts.cwd,
       env: buildPiChildEnv({
         bridgeEnv: buildLarkChannelEnv(this.opts.larkChannel),
-        piConfigDir: this.opts.piConfigDir,
+        piConfigDir: opts.handoff
+          ? (this.opts.handoffPiConfigDir ?? join(homedir(), '.pi', 'agent'))
+          : this.opts.piConfigDir,
       }),
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as PiRpcChild;
     log.info('agent', 'pi-rpc-spawn', {
       pid: child.pid ?? null,
-      cwd: opts.cwd,
       hasSession: Boolean(opts.sessionId),
       accessMode: opts.accessMode,
     });
@@ -428,6 +448,7 @@ export class PiRpcAdapter implements AgentAdapter {
     }
     const connection = new StrictPiRpcConnection(child, {
       ...this.opts.connection,
+      logSensitivePaths: [opts.cwd, this.opts.piSessionDir, this.opts.bridgeSystemPromptFile],
       extensionUIHandler: {
         onRequest: async (request) => {
           const active = this.interactionByConnection.get(connection);
@@ -484,7 +505,9 @@ export class PiRpcAdapter implements AgentAdapter {
         return;
       }
       yield { type: 'system', sessionId: result.sessionId, cwd: opts.cwd, model: opts.model };
-      const translator = new PiJsonTranslator();
+      const translator = new PiJsonTranslator({
+        knownSensitivePaths: [opts.cwd, this.opts.piSessionDir, this.opts.bridgeSystemPromptFile],
+      });
       translator.primeSession(result.sessionId);
       const inbox = result.inbox;
       try {
@@ -690,6 +713,12 @@ function rpcPoolKey(opts: AgentRunOptions): string {
         policyFingerprint: opts.policyFingerprint,
         model: opts.model ?? null,
         thinkingLevel: opts.thinkingLevel ?? null,
+        handoffSourceSessionId: opts.handoff?.sourceSessionId ?? null,
+        approval: opts.handoff ? 'approve' : 'no-approve',
+        accessMode: opts.handoff ? 'full' : opts.accessMode,
+        // Session identity is authoritatively checked with get_state on every
+        // acquire; keeping this stable permits the just-created session child
+        // to serve the next catalog-resumed turn.
         sessionId: null,
       }),
     )

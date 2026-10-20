@@ -32,6 +32,8 @@ personal profile 按用户、管理员和群 allowlist fail-closed；team profil
 --no-approve
 ```
 
+普通运行保持该策略。显式 handoff 固定改用 `--approve`、full tools、source cwd 与用户 Pi config，并绕过 workspace/defaultAccess/maxAccess；因此项目 extensions、context、skills 与其他项目资源可按 Pi 原生语义执行，能力上限是运行用户的 OS 权限而不是 sandbox。handoff 只允许完整 ID，并从有限可信 roots 对无 symlink 普通 JSONL 做有界 header 校验；绝不接收路径或全盘扫描。
+
 Pi packages、extensions、skills、prompt templates、context files 与其他资源会按有效 `PI_CODING_AGENT_DIR` 的原生语义正常加载。`user` scope 使用跨平台 `homedir()/.pi/agent`，因此共享该用户的配置与认证；Bridge CLI/Web 不写这些用户资源，也不传 profile model。用户主动通过 `/pi` 执行的受信任扩展可按其自身语义更新 session/state，这不等于 Bridge 管理面修改用户配置。`profile` scope 使用独立目录。无论 scope 如何，session 目录与 Bridge system prompt 始终 profile-local。Pi 子进程只继承路径、临时目录、locale、必要 Windows shell 变量和非机密 bridge 定位变量；不会继承完整 `process.env`。
 
 飞书 App Secret、常见 provider key、Cookie/JWT、npm token、云凭据和其他宿主 secret 不会自动传入 Pi。用户 prompt 走 stdin 或 RPC command，不进入 argv。
@@ -124,7 +126,7 @@ Web server 固定绑定 `127.0.0.1`，没有非 loopback bind 参数。浏览器
 
 ## 10. 命令边界
 
-解析器拦截所有以 `/` 开头的未知或 malformed 命令，不能把它们当作普通模型 prompt。`/pi commands` 仅返回当前 `get_commands` 的名称、extension/prompt/skill 类型和有界描述，不返回 `sourceInfo` 路径；`/pi /<command>` 只执行该 allowlist 中的原始命令，不开放 `/login`、`/config` 或未列出的 TUI/internal command，并继续受 allowlist、workspace、scope、access、并发和 timeout 约束。`/workspace use default` 只清除 scope override；不会选择名为 `default` 的 alias。远端 workspace 输出禁止包含本地绝对路径。
+解析器拦截所有以 `/` 开头的未知或 malformed 命令，不能把它们当作普通模型 prompt。handoff `/status` 的目录字段只显示 canonical source cwd 的 basename；根目录等无 basename 情况显示固定“已验证”，不回显 session 文件名或绝对 cwd。handoff 的 processing/success/error 均在话题内回复；顶层入口先创建 topic reply，再 fetch 权威 threadId，失败即不建立 binding。topic 参与者共享 handoff 上下文与 full+approve 权限，部署者必须把话题成员视为共同操作者。`/pi commands` 仅返回当前 `get_commands` 的名称、extension/prompt/skill 类型和有界描述，不返回 `sourceInfo` 路径；`/pi /<command>` 只执行该 allowlist 中的原始命令，不开放 `/login`、`/config` 或未列出的 TUI/internal command，并继续受 allowlist、workspace、scope、access、并发和 timeout 约束。`/workspace use default` 只清除 scope override；不会选择名为 `default` 的 alias。远端 workspace 输出禁止包含本地绝对路径。
 
 ## 11. 飞书权限边界
 
@@ -137,3 +139,7 @@ Web server 固定绑定 `127.0.0.1`，没有非 loopback bind 参数。浏览器
 - 文档评论读取/回复和 Wiki node 解析。
 
 `im:resource` 单独不能授权消息资源下载；不应为方便排错扩大成更宽的消息写权限。Meeting 不在当前范围，不声明相关 addon、scope 或 event。
+
+## Windows handoff 安全降级
+
+Windows 上普通 Bridge 功能保持可用。由于 Node 在该平台不提供可证明等价于 `O_NOFOLLOW` 的 locator 文件语义，`/handoff` 明确 fail-closed；不会以较弱的 symlink/TOCTOU 保证继续执行。

@@ -47,12 +47,18 @@ describe('Pi preflight', () => {
     await writeFile(
       binary,
       `#!/usr/bin/env node
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 appendFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: process.argv.slice(2), env: process.env }) + '\\n');
 if (process.argv[2] === '--version') process.stdout.write('0.99.1\\n');
 else if (process.argv[2] === '--help') process.stdout.write(${JSON.stringify(REQUIRED_PI_FLAGS.join('\n'))});
-else {
+else if (process.argv.includes('--fork')) {
+  const source = JSON.parse(readFileSync(process.argv[process.argv.indexOf('--fork') + 1], 'utf8').split('\\n')[0]);
+  const sessionDir = process.argv[process.argv.indexOf('--session-dir') + 1];
+  const fork = { ...source, id: 'abcdef12-1234-4234-8234-123456789abc', cwd: process.cwd() };
+  writeFileSync(join(sessionDir, 'fork.jsonl'), JSON.stringify(fork) + '\\n');
+  process.stdout.write(JSON.stringify(fork) + '\\n');
+} else {
   const models = JSON.parse(readFileSync(join(process.env.PI_CODING_AGENT_DIR, 'models.json'), 'utf8'));
   await fetch(models.providers['lark-pi-bridge-probe'].baseUrl + '/chat/completions', { method: 'POST', body: '{}' });
   process.stdout.write(JSON.stringify({ type: 'session', id: 'probe-session' }) + '\\n');
@@ -74,7 +80,9 @@ else {
         argv: string[];
         env: NodeJS.ProcessEnv;
       }>;
-      expect(records.map((value) => value.argv[0])).toEqual(['--version', '--help', '--mode']);
+      expect(records.map((value) => value.argv[0])).toEqual(['--version', '--help', '--mode', '--mode']);
+      expect(records[3]!.argv).toEqual(expect.arrayContaining(['--fork', '--approve']));
+      expect(records[3]!.env.PI_CODING_AGENT_DIR).toContain('lark-pi-bridge-preflight-');
       expect(records[2]!.env.PI_CODING_AGENT_DIR).toContain('lark-pi-bridge-preflight-');
       expect(records[2]!.env.APP_SECRET).toBeUndefined();
       expect(records[2]!.env.NODE_EXTRA_CA_CERTS).toBeUndefined();

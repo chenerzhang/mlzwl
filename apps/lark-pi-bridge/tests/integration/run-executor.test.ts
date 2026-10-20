@@ -221,6 +221,162 @@ describe('RunExecutor', () => {
     );
   });
 
+  it('atomically excludes runs and idle operations while a scope lease is held and reports starting stop safely', async () => {
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi',
+      async isAvailable() {
+        return true;
+      },
+      run() {
+        throw new Error('must not run');
+      },
+      async getSessionState() {
+        return { sessionId: 'session-a', isStreaming: false };
+      },
+    };
+    const executor = new RunExecutor(adapter);
+    let release!: () => void;
+    const lease = executor.withScopeLease('chat-a', () => new Promise<void>((resolve) => (release = resolve)));
+    expect(executor.activity()).toMatchObject({ starting: 1, scopes: ['chat-a'] });
+    await expect(executor.withScopeLease('chat-a', async () => {})).rejects.toThrow(/already active/);
+    expect(await executor.stop('chat-a')).toBe('starting');
+    await expect(
+      executor.submit({ scopeId: 'chat-a', prompt: 'blocked', cwd: '/tmp', accessMode: 'full' }),
+    ).rejects.toThrow(/already active/);
+    await expect(executor.getSessionState({ scopeId: 'chat-a', cwd: '/tmp', accessMode: 'full' })).rejects.toThrow(
+      /already active/,
+    );
+    release();
+    await lease;
+    expect(executor.isScopeBusy('chat-a')).toBe(false);
+  });
+
+  it('converts a leased raw Pi submit from starting to active without double-counting capacity', async () => {
+    let release!: () => void;
+    const stop = vi.fn(async () => {});
+    const control = vi.fn(async () => 'queued' as const);
+    const prepareRun = vi.fn(async () => {});
+    const run = vi.fn((opts: AgentRunOptions): AgentRun => ({
+      runId: opts.runId,
+      events: {
+        async *[Symbol.asyncIterator]() {
+          if (opts.scopeId === 'chat-a') {
+            await new Promise<void>((resolve) => (release = resolve));
+          }
+          yield { type: 'done' as const, terminationReason: 'normal' as const };
+        },
+      },
+      stop,
+      async waitForExit() {
+        return true;
+      },
+    }));
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi RPC',
+      async isAvailable() {
+        return true;
+      },
+      prepareRun,
+      control,
+      run,
+    };
+    const executor = new RunExecutor(adapter, 2);
+    const raw = await executor.withScopeLease('chat-a', (lease) =>
+      lease.submit({
+        scopeId: 'chat-a',
+        prompt: '/plan',
+        promptMode: 'pi-command',
+        cwd: '/tmp',
+        accessMode: 'full',
+      }),
+    );
+    expect(executor.activity()).toMatchObject({ active: 1, starting: 0 });
+    const second = await executor.submit({ scopeId: 'chat-b', prompt: 'two', cwd: '/tmp', accessMode: 'full' });
+    expect(executor.activity()).toMatchObject({ active: 2, starting: 0 });
+    expect(await executor.control('chat-a', 'steer', 'change')).toBe('queued');
+    expect(await executor.stop('chat-a')).toBe('stopped');
+    expect(prepareRun).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenCalledTimes(2);
+    const drain = (async () => {
+      for await (const _ of raw.events) {
+        /* drain */
+      }
+    })();
+    await Promise.resolve();
+    release();
+    await drain;
+    for await (const _ of second.events) {
+      /* drain */
+    }
+  });
+
+  it.each(['prepare', 'submit'] as const)('releases a leased reservation after %s failure', async (failure) => {
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi RPC',
+      async isAvailable() {
+        return true;
+      },
+      async prepareRun() {
+        if (failure === 'prepare') {
+          throw new Error('prepare failed');
+        }
+      },
+      run() {
+        throw new Error('submit failed');
+      },
+    };
+    const executor = new RunExecutor(adapter, 1);
+    await expect(
+      executor.withScopeLease('chat-a', (lease) =>
+        lease.submit({ scopeId: 'chat-a', prompt: '/plan', cwd: '/tmp', accessMode: 'full' }),
+      ),
+    ).rejects.toThrow(/failed/);
+    expect(executor.activity()).toMatchObject({ active: 0, starting: 0 });
+  });
+
+  it('rejects stale lease calls and a second submit from the same lease token', async () => {
+    let stale: Parameters<Parameters<RunExecutor['withScopeLease']>[1]>[0] | undefined;
+    const adapter: AgentAdapter = {
+      id: 'pi',
+      displayName: 'Pi',
+      async isAvailable() {
+        return true;
+      },
+      run(opts): AgentRun {
+        return {
+          runId: opts.runId,
+          events: {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'done' as const, terminationReason: 'normal' as const };
+            },
+          },
+          async stop() {},
+          async waitForExit() {
+            return true;
+          },
+        };
+      },
+    };
+    const executor = new RunExecutor(adapter, 2);
+    const first = await executor.withScopeLease('chat-a', async (lease) => {
+      stale = lease;
+      const execution = await lease.submit({ scopeId: 'chat-a', prompt: 'one', cwd: '/tmp', accessMode: 'full' });
+      await expect(lease.submit({ scopeId: 'chat-a', prompt: 'two', cwd: '/tmp', accessMode: 'full' })).rejects.toThrow(
+        /only be called once/,
+      );
+      return execution;
+    });
+    for await (const _ of first.events) {
+      /* drain */
+    }
+    await expect(stale!.getSessionState({ scopeId: 'chat-a', cwd: '/tmp', accessMode: 'full' })).rejects.toThrow(
+      /scope lease is required/,
+    );
+  });
+
   it('reserves a scope while asynchronous preparation is pending', async () => {
     let releasePreparation: (() => void) | undefined;
     const adapter: AgentAdapter = {

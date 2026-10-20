@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { writePrivateAtomicFile, type AtomicFileHooks } from '../runtime/atomic-json-file.js';
 import { withFileMutationLock } from '../runtime/file-mutation.js';
 
 export interface SessionCatalogIdentity {
@@ -22,7 +21,10 @@ export function sessionCatalogKey(input: SessionCatalogIdentity): string {
 
 export class SessionCatalog {
   private entriesByKey = new Map<string, SessionCatalogEntry>();
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly hooks?: AtomicFileHooks,
+  ) {}
 
   async load(): Promise<void> {
     this.entriesByKey = await readEntries(this.path);
@@ -47,7 +49,23 @@ export class SessionCatalog {
         updatedAt: nextTimestamp(latest.get(sessionCatalogKey(identity))?.updatedAt),
       };
       latest.set(entry.key, entry);
-      await persistEntries(this.path, latest);
+      await persistEntries(this.path, latest, this.hooks);
+      this.entriesByKey = latest;
+    });
+  }
+
+  async restore(entry: SessionCatalogEntry | undefined, identity: SessionCatalogIdentity): Promise<void> {
+    if (!entry) {
+      const current = this.activeFor(identity);
+      if (current) {
+        await this.removeEntries([current]);
+      }
+      return;
+    }
+    await withFileMutationLock(this.path, async () => {
+      const latest = await readEntries(this.path);
+      latest.set(entry.key, { ...entry });
+      await persistEntries(this.path, latest, this.hooks);
       this.entriesByKey = latest;
     });
   }
@@ -62,7 +80,7 @@ export class SessionCatalog {
         return;
       }
       latest.set(key, { ...entry, status: 'archived', updatedAt: nextTimestamp(entry.updatedAt) });
-      await persistEntries(this.path, latest);
+      await persistEntries(this.path, latest, this.hooks);
       this.entriesByKey = latest;
     });
   }
@@ -81,7 +99,7 @@ export class SessionCatalog {
         }
       }
       if (removed.length > 0) {
-        await persistEntries(this.path, latest);
+        await persistEntries(this.path, latest, this.hooks);
       }
       this.entriesByKey = latest;
       return {
@@ -122,21 +140,12 @@ async function readEntries(path: string): Promise<Map<string, SessionCatalogEntr
   }
 }
 
-async function persistEntries(path: string, entries: Map<string, SessionCatalogEntry>): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
-  const file = await open(tmp, 'wx', 0o600);
-  try {
-    await file.writeFile(`${JSON.stringify([...entries.values()], null, 2)}\n`);
-    await file.sync();
-  } catch (error) {
-    await unlink(tmp).catch(() => {});
-    throw error;
-  } finally {
-    await file.close();
-  }
-  await rename(tmp, path);
-  await chmod(path, 0o600);
+async function persistEntries(
+  path: string,
+  entries: Map<string, SessionCatalogEntry>,
+  hooks?: AtomicFileHooks,
+): Promise<void> {
+  await writePrivateAtomicFile(path, `${JSON.stringify([...entries.values()], null, 2)}\n`, hooks);
 }
 
 function parseEntry(value: unknown): SessionCatalogEntry | undefined {

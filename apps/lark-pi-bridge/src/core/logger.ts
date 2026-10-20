@@ -112,6 +112,12 @@ function safeJson(value: unknown): string {
     return '[unserializable]';
   }
 }
+/** Replace only caller-known local paths before applying general log redaction. */
+export function redactKnownPaths(value: string, paths: readonly (string | undefined)[]): string {
+  const known = [...new Set(paths.filter((path): path is string => Boolean(path)))].sort((a, b) => b.length - a.length);
+  return known.reduce((text, path) => text.split(path).join('[LOCAL_PATH]'), value);
+}
+
 /** Sanitize arbitrary text before it can be rendered to a user or emitted in a log. */
 export function redactText(value: string): string {
   return value

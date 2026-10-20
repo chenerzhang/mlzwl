@@ -70,7 +70,7 @@ Channel SDK 先做事件归一化和去重，bridge 再按 profile 执行 fail-c
 - 话题：scope 为 `chatId:threadId`；
 - 文档评论：scope 为 `comment:<fileToken>:<commentId>`。
 
-`/stop`、`/steer` 和 `/follow-up` 在普通提交前分流，以便控制活跃运行；其他本地命令不会启动模型 turn。`/workspace` 命令由 bridge 本地处理。RPC 的 `/model`、`/thinking` 和增强后的 `/status` 在同一 scope/global 互斥边界内获取对应 idle child，以严格投影后的 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 实现；不会向模型发送 prompt。`/pi commands` 通过当前 scope 的 RPC child 查询 `get_commands`，只投影名称、extension/prompt/skill 来源和有界描述；`/pi /<command>` 先用同一结果做 allowlist，再把 `/pi ` 后的原始命令直接交给 Pi，不经过 `buildBridgeUserPrompt()`。任何未知或 malformed slash command、TUI 内建命令都被拒绝。普通请求和 Pi command discovery 都受同一 scope/global 并发限制。
+`/stop`、`/steer` 和 `/follow-up` 在普通提交前分流，以便控制活跃运行；其他本地命令不会启动模型 turn。`/workspace` 命令由 bridge 本地处理。handoff `/status` 仅投影 canonical source cwd 的 basename，无 basename 时使用固定“已验证”，不投影 session 文件名或绝对 cwd。RPC 的 `/model`、`/thinking` 和增强后的 `/status` 在同一 scope/global 互斥边界内获取对应 idle child，以严格投影后的 `get_state`、`get_available_models`、`set_model`、`get_available_thinking_levels` 和 `set_thinking_level` 实现；不会向模型发送 prompt。`/pi commands` 通过当前 scope 的 RPC child 查询 `get_commands`，只投影名称、extension/prompt/skill 来源和有界描述；`/pi /<command>` 先用同一结果做 allowlist，再把 `/pi ` 后的原始命令直接交给 Pi，不经过 `buildBridgeUserPrompt()`。任何未知或 malformed slash command、TUI 内建命令都被拒绝。普通请求和 Pi command discovery 都受同一 scope/global 并发限制。
 
 ### 3.2 执行身份
 
@@ -84,7 +84,9 @@ profile + scopeId + canonical cwd + access policy fingerprint
 
 Session retention 默认按 `max(catalog.updatedAt, file.mtime)` 计算：active 90 天，archived/orphan 7 天。启动时和每 24 小时无 active/starting/ingress 时先关闭 idle RPC connection，再清理；忙时跳过。清理只识别 session 目录直接子级的普通 `.jsonl` 和有界首行 header，重复 ID、symlink、损坏文件只告警。catalog 在锁内按扫描快照 CAS 删除引用，再复核文件 inode/mtime/size 后删除；超过 512 MiB 只告警。手工 `sessions prune` 默认 dry-run，apply 通过 profile lock 与 runtime 互斥。
 
-RPC pool key 进一步包含 model 与 thinking level。Pi child 的实际 session ID 通过 `get_state` 与 catalog 逐次核对，不匹配时销毁旧连接，而不是把 prompt 发送给错误 session。会话内模型和思考级别选择写入私有 `scope-settings.json`，用于 Bridge 重启或 child 重建后的启动覆盖；恢复已有 session 时不再重复传 profile 默认 model，以免覆盖 session 已记录的模型。`/new`、workspace 或 access 改变会清除该覆盖，使新 identity/session 回到 Pi/profile 默认选择。
+Handoff binding 另存于 profile-local `0600` 原子文件并按 `chatId:threadId` 恢复。locator 只遍历最多四个可信 root、有限深度和文件数，打开 directory handle 后在遍历期间及结束时用 path 的 dev/ino/type/realpath 双重重验（Node 不提供 descriptor-relative open），最终文件使用 `O_NOFOLLOW` 和有界首行 type/version/id/cwd 校验；duplicate/corrupt/uncertain 均拒绝。Windows 缺少等价 no-follow 保证，因此普通 Bridge 继续可用，但 handoff locator 明确 fail-closed。fork 前后比较 source dev/inode/size/mtime，竞态时只回滚本次新增的 profile session。Pi 原生 `--fork` 创建的权威 ID 必须与 source 不同，随后才写 catalog/binding；source 不被 Bridge 改写。
+
+RPC pool 的稳定 key 包含 profile、scope、cwd、model/thinking 启动覆盖、handoff source、effective access 与 approve policy，但**不包含 session ID**。每次 acquire 都以 `get_state` 将 Pi child 的实际 session ID 与 catalog 核对；不匹配时销毁并按 catalog 重建连接，而不是把 prompt 发送给错误 session。会话内模型和思考级别选择写入私有 `scope-settings.json`，用于 Bridge 重启或 child 重建后的启动覆盖；恢复已有 session 时不再重复传 profile 默认 model，以免覆盖 session 已记录的模型。`/new`、workspace 或 access 改变会清除该覆盖，使新 identity/session 回到 Pi/profile 默认选择。
 
 ### 3.3 附件
 
@@ -145,6 +147,7 @@ RPC fallback 由独立 adapter 实施。只有连接创建/握手等 prompt 写�
     ├── app-secret                     # 0600
     ├── sessions.json.catalog.json     # scope/cwd/policy -> Pi session
     ├── scope-settings.json            # workspace/access/timeout/model/thinking
+    ├── handoff-bindings.json          # 0600 topic -> source/fork/cwd binding
     ├── pi-agent/
     │   ├── models.json
     │   ├── auth.json

@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../../src/agent/pi/adapter.js';
 import type { AgentEvent } from '../../src/agent/types.js';
 
@@ -97,6 +97,103 @@ describe('PiAdapter process contract', () => {
         process.env.APP_SECRET = previous;
       }
     }
+  });
+
+  it('redacts known local paths from spawn and stderr logs without changing retained stderr diagnostics', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-log-redaction.[x]-'));
+    cleanup.push(root);
+    const record = join(root, 'record.json');
+    const sessionDir = join(root, 'profile', 'sessions');
+    const promptFile = join(root, 'profile', 'bridge-system.md');
+    const sourcePath = join(sessionDir, 'source.jsonl');
+    const binary = await fakePi(
+      root,
+      record,
+      [
+        { type: 'session', id: 'pi-session', cwd: root },
+        {
+          type: 'extension_error',
+          error: `stdout-safe-marker cwd=${root} sessions=${sessionDir} prompt=${promptFile} source=${sourcePath} API_TOKEN=stdout-secret`,
+        },
+        { type: 'agent_settled' },
+      ],
+      0,
+      `diagnostic cwd=${root} sessions=${sessionDir} prompt=${promptFile} source=${sourcePath} safe=kept`,
+    );
+    const adapter = new PiAdapter({
+      binary,
+      piConfigDir: join(root, 'config'),
+      piSessionDir: sessionDir,
+      bridgeSystemPromptFile: promptFile,
+    });
+    await adapter.prepareRun?.({ runId: 'prepare', prompt: '', cwd: root, accessMode: 'full' });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await collect(
+        adapter.run({
+          runId: 'logged',
+          prompt: 'hello',
+          cwd: root,
+          accessMode: 'full',
+          handoff: { sourcePath, sourceSessionId: '12345678-1234-4234-8234-123456789abc' },
+        }).events,
+      );
+      const logs = spy.mock.calls.map((args) => args.join(' ')).join('\n');
+      expect(logs).toContain('agent.pi-spawn');
+      expect(logs).toContain('agent.pi-stderr');
+      expect(logs).toContain('pi-json.extension-error');
+      expect(logs).toContain('safe=kept');
+      expect(logs).toContain('stdout-safe-marker');
+      expect(logs).toContain('API_TOKEN=[REDACTED]');
+      expect(logs).not.toContain('stdout-secret');
+      expect(logs).toContain('[LOCAL_PATH]');
+      for (const path of [root, sessionDir, promptFile, sourcePath]) {
+        expect(logs).not.toContain(path);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('uses native --fork with user config and reports the authoritative fork ID without a model prompt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-native-fork-'));
+    cleanup.push(root);
+    const record = join(root, 'record.json');
+    const forkId = 'abcdef12-1234-4234-8234-123456789abc';
+    const source = join(root, 'source.jsonl');
+    await writeFile(
+      source,
+      `${JSON.stringify({ type: 'session', version: 3, id: '12345678-1234-4234-8234-123456789abc', cwd: root })}\n`,
+    );
+    await mkdir(join(root, 'user-config'));
+    const binary = await fakePi(root, record, [{ type: 'session', id: forkId, cwd: root }]);
+    const adapter = new PiAdapter({
+      binary,
+      piConfigDir: join(root, 'profile-config'),
+      handoffPiConfigDir: join(root, 'user-config'),
+      piSessionDir: join(root, 'profile-sessions'),
+      bridgeSystemPromptFile: join(root, 'system.md'),
+    });
+    await adapter.prepareRun?.({ runId: 'prepare', prompt: '', cwd: root, accessMode: 'full' });
+    await expect(
+      adapter.forkSession?.({
+        runId: 'fork',
+        prompt: '/bridge-session-control',
+        cwd: root,
+        accessMode: 'full',
+        handoff: { sourcePath: source, sourceSessionId: '12345678-1234-4234-8234-123456789abc' },
+      }),
+    ).resolves.toMatchObject({ sessionId: forkId });
+    const seen = JSON.parse(await readFile(record, 'utf8')) as {
+      argv: string[];
+      env: NodeJS.ProcessEnv;
+      stdin: string;
+    };
+    expect(seen.argv).toEqual(expect.arrayContaining(['--fork', source, '--approve']));
+    expect(seen.argv).not.toContain('--no-approve');
+    expect(seen.argv).not.toContain('--tools');
+    expect(seen.env.PI_CODING_AGENT_DIR).toBe(join(root, 'user-config'));
+    expect(seen.stdin).toBe('');
   });
 
   it('does not create or mutate a missing external Pi configuration directory during preparation', async () => {
@@ -247,7 +344,7 @@ process.exitCode = 7;
   });
 });
 
-async function fakePi(root: string, record: string, lines: unknown[], delayMs = 0): Promise<string> {
+async function fakePi(root: string, record: string, lines: unknown[], delayMs = 0, stderr = ''): Promise<string> {
   const path = join(root, 'fake-pi.mjs');
   const code = `#!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
@@ -256,6 +353,7 @@ const stdin = readFileSync(0, 'utf8');
 const created = join(process.env.PI_CODING_AGENT_DIR, 'child-created-session.jsonl');
 writeFileSync(created, 'session');
 writeFileSync(${JSON.stringify(record)}, JSON.stringify({ argv: process.argv.slice(2), stdin, env: process.env, createdMode: statSync(created).mode & 0o777 }));
+if (${JSON.stringify(stderr)}) process.stderr.write(${JSON.stringify(stderr)} + '\\n');
 for (const line of ${JSON.stringify(lines)}) process.stdout.write(JSON.stringify(line) + '\\n');
 setTimeout(() => process.exit(0), ${delayMs});
 `;

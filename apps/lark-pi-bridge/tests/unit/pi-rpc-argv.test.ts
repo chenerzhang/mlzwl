@@ -30,4 +30,17 @@ describe('Pi RPC argv', () => {
     ]);
     expect(args.some((value) => value.startsWith('@'))).toBe(false);
   });
+
+  it('keeps resumed handoff sessions full + approve', () => {
+    const args = buildPiRpcArgs({
+      accessMode: 'read-only',
+      handoff: true,
+      sessionId: 'fork-id',
+      sessionDir: '/private/sessions',
+      bridgeSystemPromptFile: '/private/system.md',
+    });
+    expect(args).toEqual(expect.arrayContaining(['--approve', '--session', 'fork-id']));
+    expect(args).not.toContain('--no-approve');
+    expect(args).not.toContain('--tools');
+  });
 });

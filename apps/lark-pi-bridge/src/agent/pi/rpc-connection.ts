@@ -10,7 +10,7 @@ import {
   type AgentThinkingLevel,
 } from '../types.js';
 import type { SpawnedProcessByStdio } from '../../platform/spawn.js';
-import { log } from '../../core/logger.js';
+import { log, redactKnownPaths, redactText } from '../../core/logger.js';
 import {
   parseRpcExtensionUIRequest,
   parseRpcUIPromptLifecycleEvent,
@@ -78,6 +78,7 @@ export interface StrictPiRpcConnectionOptions {
   terminateGraceMs?: number;
   jsonlLimits?: PiJsonlLimits;
   now?: () => number;
+  logSensitivePaths?: readonly string[];
   extensionUIHandler?: RpcExtensionUIHandler;
 }
 
@@ -95,6 +96,7 @@ export class StrictPiRpcConnection {
   private readonly maxCommandBytes: number;
   private readonly terminateGraceMs: number;
   private readonly now: () => number;
+  private readonly logSensitivePaths: readonly string[];
   private readonly pending = new Map<string, PendingCommand>();
   private readonly listeners = new Set<(event: unknown) => void>();
   private readonly failureListeners = new Set<(error: Error) => void>();
@@ -120,6 +122,7 @@ export class StrictPiRpcConnection {
     this.maxCommandBytes = positive(options.maxCommandBytes, 64 * 1024 * 1024, 'maxCommandBytes');
     this.terminateGraceMs = positive(options.terminateGraceMs, 1_000, 'terminateGraceMs');
     this.now = options.now ?? Date.now;
+    this.logSensitivePaths = options.logSensitivePaths ?? [];
     this.extensionUIHandler = options.extensionUIHandler;
     this._lastUsedAt = this.now();
     this.exitPromise = new Promise((resolve) => {
@@ -642,7 +645,10 @@ export class StrictPiRpcConnection {
     this.stderr =
       combined.length > this.stderrLimitBytes ? combined.subarray(combined.length - this.stderrLimitBytes) : combined;
     log.warn('agent', 'pi-rpc-stderr', {
-      message: truncate(chunk.toString('utf8').replace(/[\r\n]+/g, ' '), 500),
+      message: truncate(
+        redactText(redactKnownPaths(chunk.toString('utf8'), this.logSensitivePaths)).replace(/[\r\n]+/g, ' '),
+        500,
+      ),
     });
   }
 
@@ -763,6 +769,15 @@ export class PiRpcPool {
 
   invalidate(entry: RpcPoolEntry): Promise<void> {
     return this.exclusive(() => this.invalidateUnlocked(entry));
+  }
+
+  invalidateKey(key: string): Promise<void> {
+    return this.exclusive(async () => {
+      const entry = this.entries.get(key);
+      if (entry) {
+        await this.invalidateUnlocked(entry);
+      }
+    });
   }
 
   sweep(): Promise<void> {

@@ -1,6 +1,8 @@
 import { PiAdapter } from '../agent/pi/adapter.js';
 import { PiRpcAdapter } from '../agent/pi/rpc-adapter.js';
 import { PiRpcFallbackAdapter } from '../agent/pi/fallback-adapter.js';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AgentAdapter } from '../agent/types.js';
 import type { AppPaths } from '../config/app-paths.js';
 import { effectiveProfileModel, resolveEffectivePiPaths } from '../config/pi-paths.js';
@@ -11,6 +13,7 @@ export function createRuntimeAgent(profile: ProfileConfig, paths: AppPaths, bina
   const options = {
     binary,
     piConfigDir: effective.configDir,
+    handoffPiConfigDir: join(homedir(), '.pi', 'agent'),
     piSessionDir: effective.sessionDir,
     bridgeSystemPromptFile: effective.bridgeSystemPromptFile,
     larkChannel: {

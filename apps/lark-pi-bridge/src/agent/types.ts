@@ -109,6 +109,8 @@ export interface AgentRunOptions {
   model?: string;
   thinkingLevel?: AgentThinkingLevel;
   accessMode: AccessMode;
+  /** Handoff uses Pi's native fork, user config, full tools and explicit project trust. */
+  handoff?: { sourcePath?: string; sourceSessionId: string };
   stopGraceMs?: number;
   attachments?: string[];
 }
@@ -137,11 +139,15 @@ export interface AgentAdapter {
   run(opts: AgentRunOptions): AgentRun;
   probeModel?(opts: Omit<AgentRunOptions, 'runId' | 'prompt' | 'sessionId' | 'attachments'>): Promise<void>;
   listCommands?(opts: AgentRunOptions): Promise<AgentSlashCommand[]>;
+  /** Create a native Pi fork and return its authoritative initial state without prompting the model. */
+  forkSession?(opts: AgentRunOptions): Promise<AgentSessionState>;
   getSessionState?(opts: AgentRunOptions): Promise<AgentSessionState>;
   listModels?(opts: AgentRunOptions): Promise<AgentModelCatalog>;
   setModel?(opts: AgentRunOptions, provider: string, modelId: string): Promise<AgentSessionState>;
   listThinkingLevels?(opts: AgentRunOptions): Promise<AgentThinkingSupport>;
   setThinkingLevel?(opts: AgentRunOptions, level: AgentThinkingLevel): Promise<AgentSessionState>;
+  /** Evict the reusable transport resource for this exact route after uncertain compensation. */
+  invalidateSession?(opts: AgentRunOptions): Promise<void>;
   control?(runId: string, kind: 'steer' | 'follow-up', prompt: string): Promise<AgentControlDisposition>;
   /** Close reusable idle resources before profile-local session maintenance. */
   closeIdleSessions?(): Promise<void>;
