@@ -236,6 +236,17 @@ lark-pi-bridge service-manifest --profile default
 
 <!-- npm-release:start -->
 
+### [0.1.4] - 2026-10-20
+
+#### Added
+
+- 新增 `/handoff <exact-session-id>` 与 `/handoff off`：使用 Pi 原生 fork 将受信任的本机 session 接力到权威飞书话题，并支持重启恢复、`/new`、workspace、模型、思考级别和 Pi 命令的准确路由。
+
+#### Security
+
+- handoff 仅在有界可信 roots 中精确定位无 symlink 的 session，复核 source 文件身份并只回滚本次 owned fork；topic binding 使用 profile 私有原子状态，聊天与生产日志不暴露本机绝对路径。
+- handoff 明确使用用户 Pi 配置、full tools 与 `--approve`，普通路由继续使用 `--no-approve`；RPC session 核对和不确定 prompt 禁止重放边界保持不变。
+
 ### [0.1.3] - 2026-10-16
 
 #### Added
