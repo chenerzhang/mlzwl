@@ -65,5 +65,6 @@ base URL 必须是 loopback HTTP(S) 地址，不能携带自定义路径。`X_AD
 ## 能力边界
 
 - Trae Global/CN 目前是实验性能力；官方客户端凭据/设备身份导入、Global SG/CN 模型目录、两个 realm 的最小非流式聊天、Global 流式输出边界/客户端取消，以及一次 Global DeviceProof refresh 已完成本机验证。CN refresh、工具调用和 reasoning 仍需分别验证。普通 function tools 保留，hosted web search 返回 `unsupported_hosted_search`，并且不跨 realm fallback。
-- 豆包工作当前是纯文本 provider；Pi 默认附带的可选工具目录会被忽略，但强制工具选择或已有工具调用/结果会返回 `unsupported_tools`。
+- extension 从 Codex 模型发现的 `input_modalities` 读取图片能力。只有网关明确声明 `image` 的模型才会让 Pi 保留用户图片和工具返回图片；未声明的模型按纯文本处理。
+- 豆包工作当前是纯文本 provider；图片输入在 adapter 执行前返回 `unsupported_multimodal_content`。Pi 默认附带的可选工具目录会被忽略，但强制工具选择或已有工具调用/结果会返回 `unsupported_tools`。
 - 模型选择器名称会保留目录提供的 `model_load` 百分比；未提供时不会伪造。

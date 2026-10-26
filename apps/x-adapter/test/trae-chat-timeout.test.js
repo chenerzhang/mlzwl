@@ -116,7 +116,7 @@ function modelEntry(id = 'timeout-test', modelName = 'timeout-test__dev') {
     config_name: id,
     config_switch: true,
     is_default: true,
-    display_config: { display_name: 'Timeout Test' },
+    display_config: { display_name: 'Timeout Test', multimodal: true, tool_response_multimodal: true },
     model_detail_list: [{ model_name: modelName, max_tokens: 4096, prompt_max_tokens: 100000 }],
   };
 }
@@ -197,6 +197,8 @@ test('Trae batch discovery binds a realm-prefixed model to every function that l
   assert.equal(models[0].id, 'global-timeout-test');
   assert.deepEqual(models[0].metadata.functions, ['chat_v3', 'solo_agent']);
   assert.equal(models[0].metadata.realm, 'global');
+  assert.equal(models[0].metadata.multimodal, true);
+  assert.equal(models[0].metadata.tool_response_multimodal, true);
 });
 
 test('Trae discovery falls back from an empty batch response and tolerates individual function failure', async () => {

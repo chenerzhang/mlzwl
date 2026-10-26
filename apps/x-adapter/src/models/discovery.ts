@@ -1,7 +1,13 @@
 import { claudeModelId } from './model-id.js';
-import { PublicModel } from './types.js';
+import { acceptsImages } from './modality.js';
+import { InputModality, PublicModel } from './types.js';
 
 const DEFAULT_REASONING_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Absent capability declarations stay text-only. */
+function inputModalities(model: PublicModel): InputModality[] {
+  return model.inputModalities ?? ['text'];
+}
 
 function reasoningLevels(model: PublicModel): string[] {
   const levels = model.supportedReasoningLevels?.filter(Boolean) ?? [];
@@ -44,6 +50,8 @@ export function openAiModelsResponse(models: PublicModel[]) {
         hot: modelLoad(model),
         quota: model.quota ?? null,
         ...model.metadata,
+        // The enforced gateway verdict must not be shadowed by provider metadata.
+        input_modalities: inputModalities(model),
       },
     })),
   };
@@ -77,7 +85,6 @@ export function codexModelsResponse(models: PublicModel[]) {
       apply_patch_tool_type: 'freeform',
       truncation_policy: { mode: 'bytes', limit: 10000 },
       supports_parallel_tool_calls: false,
-      supports_image_detail_original: false,
       experimental_supported_tools: [],
       provider: model.provider,
       upstream_id: model.upstreamId,
@@ -86,6 +93,9 @@ export function codexModelsResponse(models: PublicModel[]) {
       model_load_percent: modelLoad(model),
       quota: model.quota ?? null,
       ...model.metadata,
+      // The enforced gateway verdict must not be shadowed by provider metadata.
+      supports_image_detail_original: acceptsImages(inputModalities(model)),
+      input_modalities: inputModalities(model),
     })),
   };
 }
@@ -108,6 +118,7 @@ export function claudeModelsResponse(models: PublicModel[]) {
             { supported: reasoningLevels(model).includes(effort) },
           ]),
         ]),
+        image_input: { supported: acceptsImages(inputModalities(model)) },
       },
       provider: model.provider,
       upstream_id: model.upstreamId,
@@ -117,6 +128,8 @@ export function claudeModelsResponse(models: PublicModel[]) {
       model_load_percent: modelLoad(model),
       quota: model.quota ?? null,
       ...model.metadata,
+      // The enforced gateway verdict must not be shadowed by provider metadata.
+      input_modalities: inputModalities(model),
     })),
   };
 }

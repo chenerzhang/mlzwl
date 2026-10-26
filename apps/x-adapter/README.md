@@ -64,7 +64,7 @@ trae-cn-<upstream-id>
 doubao-work-auto
 ```
 
-Global、CN 与豆包工作之间不会自动 fallback。默认模型为 `doubao-work-auto`，可通过 `X_ADAPTER_DEFAULT_MODEL` 修改。
+Global、CN 与豆包工作之间不会自动 fallback。默认模型为 `doubao-work-auto`，可通过 `X_ADAPTER_DEFAULT_MODEL` 修改。模型发现会同时声明每个模型的文本/图片输入能力；能力来自 Trae 目录元数据与少量实测覆盖，未声明能力的模型按纯文本处理。
 
 ## 发送请求
 
@@ -112,7 +112,7 @@ x-adapter/doubao-work-auto
 pi --model x-adapter/trae-global-<upstream-id>
 ```
 
-extension 默认连接 `http://127.0.0.1:10100/v1`。本机网关未运行时会尝试执行 `x-adapter start`，但不会自动登录 provider 或读取官方客户端账号存储。Pi 内还可使用：
+extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向 Pi 声明图片能力，避免 Pi 在图片模型上提前丢弃用户图片或工具返回的图片。本机网关未运行时会尝试执行 `x-adapter start`，但不会自动登录 provider 或读取官方客户端账号存储。Pi 内还可使用：
 
 ```text
 /x-adapter status

@@ -79,6 +79,7 @@ type DiscoveredModel = {
   contextWindow: number;
   modelLoad?: number;
   reasoningLevels: string[];
+  inputModalities: ('text' | 'image')[];
 };
 
 type XAdapterHealth = {
@@ -461,7 +462,17 @@ function parseModel(value: unknown): DiscoveredModel | undefined {
     contextWindow: numberField(value.context_window ?? value.max_context_window, DEFAULT_CONTEXT_WINDOW),
     modelLoad: optionalNumberField(value.model_load_percent ?? value.model_load ?? value.hot),
     reasoningLevels: parseReasoningLevels(value.supported_reasoning_levels),
+    inputModalities: parseInputModalities(value.input_modalities),
   };
+}
+
+/** Only advertise image support when the gateway explicitly declares it. */
+function parseInputModalities(value: unknown): ('text' | 'image')[] {
+  if (!Array.isArray(value)) {
+    return ['text'];
+  }
+  const modalities = value.filter((item): item is 'text' | 'image' => item === 'text' || item === 'image');
+  return modalities.includes('text') ? modalities : ['text', ...modalities];
 }
 
 function thinkingLevelMap(levels: string[]): Record<string, string | null> {
@@ -490,7 +501,7 @@ function toProviderModel(model: DiscoveredModel): ProviderModelConfig {
     name: providerModelName(model),
     reasoning: model.reasoningLevels.length > 0,
     thinkingLevelMap: thinkingLevelMap(model.reasoningLevels),
-    input: ['text'],
+    input: model.inputModalities,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: model.contextWindow,
     maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,

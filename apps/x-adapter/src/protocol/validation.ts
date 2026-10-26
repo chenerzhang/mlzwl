@@ -1,4 +1,6 @@
 import { intEnv } from '../config/env.js';
+import { acceptsImages } from '../models/modality.js';
+import { InputModality, PublicModel } from '../models/types.js';
 import { CanonicalMessage, CanonicalRequest, withoutToolOutputAttachment } from './canonical.js';
 
 const INTERNAL_WEB_SEARCH_TOOL_NAME = '__x_connect_web_search';
@@ -36,6 +38,31 @@ export function maxContextBytes(): number {
 
 export function canonicalMessageBytes(message: CanonicalMessage): number {
   return jsonSize(withoutToolOutputAttachment(message));
+}
+
+/** Reject images before a text-only model's adapter can silently ignore them. */
+export function validateModelInputModalities(
+  request: CanonicalRequest,
+  model: Pick<PublicModel, 'id' | 'inputModalities'> & { inputModalities?: InputModality[] },
+): ValidationError | undefined {
+  if (acceptsImages(model.inputModalities)) {
+    return undefined;
+  }
+  for (let messageIndex = 0; messageIndex < request.messages.length; messageIndex += 1) {
+    const content = request.messages[messageIndex].content;
+    for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
+      if (content[contentIndex].type !== 'image_url') {
+        continue;
+      }
+      return {
+        status: 400,
+        code: 'unsupported_multimodal_content',
+        message: `Model ${model.id} accepts text input only; remove the image or switch to an image-capable model.`,
+        param: `messages[${messageIndex}].content[${contentIndex}]`,
+      };
+    }
+  }
+  return undefined;
 }
 
 export function validateContextSize(messages: CanonicalMessage[]): ValidationError | undefined {

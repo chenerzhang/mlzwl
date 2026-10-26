@@ -63,7 +63,9 @@ LoginGuidance、Web、登录、account API 与数据 host 分开 allowlist。所
 - `solo_agent`
 - `solo_agent_lite`
 
-单 function 失败只舍弃该 function；全部失败且无有效缓存时 realm 不可用。模型元数据保存 realm、config name、model name 和实际发现的 candidate functions，不使用静态目录伪造账号权益。
+单 function 失败只舍弃该 function；全部失败且无有效缓存时 realm 不可用。模型元数据保存 realm、config name、model name、实际发现的 candidate functions，以及目录 `display_config` 给出的图片输入/工具图片能力，不使用静态目录伪造账号权益。
+
+`display_config.multimodal` 是目录提示而不是绝对契约。网关以它作为默认值，并只为已有实测证据的例外维护最小覆盖；字段缺失时 fail closed 为纯文本。统一发现接口分别输出 OpenAI `metadata.input_modalities`、Codex `input_modalities` / `supports_image_detail_original` 和 Claude `capabilities.image_input.supported`。Pi extension 读取该结论；三种请求协议都会在 adapter 执行前拒绝发给纯文本模型的图片，Responses 在合并 replay history 后再次校验，错误为 HTTP 400 `unsupported_multimodal_content`。豆包工作始终声明为纯文本。
 
 缓存身份由 realm、账号 UID、数据 host、产品版本和 function 集合派生，不含 access token；token 轮换不会制造新缓存。内存和磁盘缓存均按 realm 隔离。
 

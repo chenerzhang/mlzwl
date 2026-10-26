@@ -32,6 +32,10 @@ export type TraeModelConfig = {
     quota?: unknown;
     supported_reasoning_levels?: unknown[];
     default_reasoning_level?: string | null;
+    /** Upstream `display_config.multimodal`: whether user image input is accepted. */
+    multimodal?: boolean;
+    /** Whether images returned by tools are accepted as follow-up input. */
+    tool_response_multimodal?: boolean;
   };
 };
 
@@ -264,6 +268,8 @@ export function mergeModelGroups(
           quota: entry.quota ?? entry.quota_info ?? display.quota ?? display.quota_info ?? null,
           supported_reasoning_levels: reasoningLevels,
           default_reasoning_level: stringValue(entry.default_reasoning_level) || null,
+          multimodal: booleanValue(display.multimodal),
+          tool_response_multimodal: booleanValue(display.tool_response_multimodal),
         },
       });
     }
@@ -311,6 +317,10 @@ function stringValue(value: unknown): string {
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
 }
 
 function isTraeFunction(value: string): value is TraeFunction {

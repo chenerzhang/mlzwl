@@ -4,6 +4,8 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 
 export type ModelLoad = number | null;
 
+export type InputModality = 'text' | 'image';
+
 export type ProviderModel = {
   /** Stable provider-local identifier exposed through the unified public model ID. */
   upstreamId: string;
@@ -17,6 +19,7 @@ export type ProviderModel = {
   quota?: unknown;
   supportedReasoningLevels?: string[];
   defaultReasoningLevel?: string | null;
+  inputModalities?: InputModality[];
   metadata?: Record<string, unknown>;
 };
 
