@@ -18,6 +18,7 @@ const tool = {
 
 const DOUBAO_TEST_MODEL = 'doubao-work-pro';
 const DOUBAO_TEST_CLAUDE_MODEL = 'claude-doubao-work-pro[1m]';
+const INLINE_IMAGE = 'data:image/png;base64,AAAAAAAAAAA=';
 
 const canonicalTextRequest = {
   model: DOUBAO_TEST_MODEL,
@@ -178,6 +179,64 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
     });
     assert.equal(anthropic.status, 200);
     assert.match(await anthropic.text(), /PONG/);
+  });
+});
+
+test('Doubao rejects images in all protocols before provider execution', async () => {
+  await withDoubaoMock(async () => {
+    const app = doubaoMockApp();
+    const requests = [
+      {
+        path: '/v1/chat/completions',
+        body: {
+          model: DOUBAO_TEST_MODEL,
+          messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: INLINE_IMAGE } }] }],
+        },
+      },
+      {
+        path: '/v1/responses',
+        body: {
+          model: DOUBAO_TEST_MODEL,
+          input: [
+            {
+              role: 'user',
+              content: [{ type: 'input_image', image_url: INLINE_IMAGE }],
+            },
+          ],
+        },
+      },
+      {
+        path: '/v1/messages',
+        body: {
+          model: DOUBAO_TEST_CLAUDE_MODEL,
+          max_tokens: 16,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: { type: 'base64', media_type: 'image/png', data: 'AAAAAAAAAAA=' },
+                },
+              ],
+            },
+          ],
+        },
+        extraHeaders: { 'anthropic-version': '2023-06-01' },
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await app.request(`http://127.0.0.1:10100${request.path}`, {
+        method: 'POST',
+        headers: headers(request.extraHeaders),
+        body: JSON.stringify(request.body),
+      });
+      assert.equal(response.status, 400);
+      const payload = await response.json();
+      assert.equal(payload.error.code, 'unsupported_multimodal_content');
+      assert.match(payload.error.message, /doubao-work-pro/);
+    }
   });
 });
 

@@ -7,6 +7,7 @@ import {
   PublicModel,
 } from '../models/types.js';
 import { redactSensitiveText } from '../logging/jsonl.js';
+import { resolveTraeInputModalities } from '../models/modality.js';
 import { CanonicalRequest, CanonicalResult, CanonicalStreamEvent } from '../protocol/canonical.js';
 import { bindCanonicalToolCalls } from '../protocol/tools.js';
 import { readDoubaoCredential } from './doubao/auth/doubao-cookie.js';
@@ -162,6 +163,8 @@ function createDoubaoAdapter(): ExecutableProviderAdapter {
           maxOutputTokens: model.maxOutputTokens,
           supportedReasoningLevels: model.supportedReasoningLevels,
           defaultReasoningLevel: model.defaultReasoningLevel,
+          // Doubao Work rejects non-text content before contacting upstream.
+          inputModalities: ['text'],
           metadata: { model_item_key: model.modelItemKey, upstream_provider_id: model.providerId || null },
         })),
       };
@@ -231,6 +234,8 @@ type ProviderCatalogModel = {
     quota?: unknown;
     supported_reasoning_levels?: unknown[];
     default_reasoning_level?: string | null;
+    multimodal?: boolean;
+    tool_response_multimodal?: boolean;
   };
 };
 
@@ -249,6 +254,7 @@ function toTraeProviderModels(models: ProviderCatalogModel[]): ProviderModel[] {
       typeof level === 'string' ? [level] : [],
     ),
     defaultReasoningLevel: model.metadata.default_reasoning_level,
+    inputModalities: resolveTraeInputModalities(model.metadata.config_name, model.metadata.multimodal),
     metadata: { ...model.metadata },
   }));
 }

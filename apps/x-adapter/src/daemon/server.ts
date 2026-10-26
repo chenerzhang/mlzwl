@@ -21,7 +21,7 @@ import {
   responsesSseIterable,
   withHeartbeat,
 } from '../protocol/streaming.js';
-import { validateCanonicalRequest, validateContextSize } from '../protocol/validation.js';
+import { validateCanonicalRequest, validateContextSize, validateModelInputModalities } from '../protocol/validation.js';
 import { ExecutableProviderAdapter, createProviderAdapters } from '../providers/adapters.js';
 import { clientAuthMiddleware } from '../security/client-auth.js';
 import { assertLoopbackBindHost, localOnlyMiddleware } from '../security/local-only.js';
@@ -95,6 +95,10 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
       if (validation) {
         return validationError(c, validation);
       }
+      const modalityValidation = validateModelInputModalities(request, model);
+      if (modalityValidation) {
+        return validationError(c, modalityValidation);
+      }
       if (!request.messages.length) {
         return invalidInput(c, 'messages is required');
       }
@@ -141,6 +145,20 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
           {
             type: 'error',
             error: { type: 'invalid_request_error', message: validation.message, code: validation.code },
+          },
+          400,
+        );
+      }
+      const modalityValidation = validateModelInputModalities(request, model);
+      if (modalityValidation) {
+        return c.json(
+          {
+            type: 'error',
+            error: {
+              type: 'invalid_request_error',
+              message: modalityValidation.message,
+              code: modalityValidation.code,
+            },
           },
           400,
         );
@@ -265,6 +283,11 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
       if (contextValidation) {
         return validationError(c, contextValidation);
       }
+      // Replay history is forwarded upstream, so validate the merged transcript.
+      const modalityValidation = validateModelInputModalities(request, model);
+      if (modalityValidation) {
+        return validationError(c, modalityValidation);
+      }
       if (!request.messages.length) {
         return invalidInput(c, 'input is required');
       }
@@ -372,6 +395,7 @@ function openAiModel(model: PublicModel) {
       model_load_percent: model.modelLoad ?? null,
       hot: model.modelLoad ?? null,
       ...model.metadata,
+      input_modalities: model.inputModalities ?? ['text'],
     },
   };
 }

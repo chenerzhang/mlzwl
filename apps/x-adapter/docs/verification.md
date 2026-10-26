@@ -21,7 +21,8 @@ git diff --check
 - Trae Global/CN host allowlist、SG/US/CN 固定路由、PKCE 授权 URL、loopback callback、必需 trace/可选 state 校验、一次性消费与超时关闭。
 - Trae realm 独立凭据路径、`0700`/`0600` 权限、原子保存、P-256 `DeviceProof`、refresh token 轮换和 realm 内 single-flight。
 - 官方客户端 storage 的 AES 解密/完整性校验、realm/host 校验、唯一设备身份、P-256 公私钥匹配、拒绝隐式覆盖/旧 refresh token 回滚、损坏本地凭据显式恢复和 Global/CN 导入隔离。
-- Trae batch 模型目录、逐 function 降级、稳定缓存身份、realm 模型前缀、模型/function 绑定和一个 realm 失败的隔离边界。
+- Trae batch 模型目录、逐 function 降级、稳定缓存身份、realm 模型前缀、模型/function 绑定、图片能力元数据保留，以及一个 realm 失败的隔离边界。
+- OpenAI/Codex/Claude 三类模型发现的输入模态声明、Pi 图片能力读取、纯文本模型在三种协议上的图片 fail-closed 校验，以及图片模型的 canonical 图片保留。
 - Trae `/api/agent/v3/llm_utils_chat` headers/body、reasoning/text/tool-call/usage SSE、显式终态、请求/配置输出事件和 UTF-8 字节边界、命中边界后的上游取消与 `done(length)`、401/403 最多 refresh/replay 一次、普通错误不自动重试、function mismatch 的有限纠正和 hosted search 明确失败。
 - 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态和纯文本工具策略。
 - Responses history 的 provider 隔离、LRU、TTL、record/replay、总字节限制和图片工具结果顺序。
