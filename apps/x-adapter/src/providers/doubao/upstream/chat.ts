@@ -1,4 +1,6 @@
-import { boolEnv, intEnv } from '../config/env.js';
+import { boolEnv, createDoubaoStreamWatchdog, intEnv } from '../config/env.js';
+import { doubaoToolBoundaryError } from '../local-runtime-capability.js';
+import { log } from '../../../logging/jsonl.js';
 import {
   CanonicalMessage,
   CanonicalRequest,
@@ -69,9 +71,7 @@ async function executeDoubao(
   emit: (event: CanonicalStreamEvent) => void,
 ): Promise<void> {
   if (request.tools?.length) {
-    const error = new Error('Doubao Work currently supports text-only requests; tools are not supported.');
-    (error as NodeJS.ErrnoException).code = 'unsupported_tools';
-    throw error;
+    throw doubaoToolBoundaryError('Doubao Work currently supports text-only requests; tools are not supported.');
   }
   if (request.messages.some((message) => message.content.some((block) => block.type !== 'text'))) {
     const error = new Error('Doubao Work currently supports text-only message content.');
@@ -103,35 +103,53 @@ async function executeDoubao(
   const existing = sessionStore.get(sessionKey);
   const lockKey = existing?.conversationId || sessionKey;
   await conversationQueue.run(lockKey, async () => {
-    let session = sessionStore.get(sessionKey);
-    if (session) {
-      const latest = await pullConversationState(credential, session.conversationId, fetchImpl, signal);
-      session = { ...session, ...latest };
-      await modifyConversation(credential, session, selectedModel, effort, fetchImpl, signal);
-      session = { ...session, modelItemKey: selectedModel.modelItemKey, reasoningEffort: effort };
-      sessionStore.set(sessionKey, session);
-    }
-    const prompt = promptForDoubao(request, Boolean(session));
-    if (!prompt) {
-      const error = new Error('Doubao Work requires at least one non-empty text message.');
-      (error as NodeJS.ErrnoException).code = 'invalid_input';
-      throw error;
-    }
-    const response = await startCompletion({
-      credential,
-      prompt,
-      model: selectedModel,
-      effort,
-      session,
-      fetchImpl,
-      signal,
-    });
-    emit({ type: 'start', model: request.model });
+    // One watchdog per turn. It governs only the long-lived completion request and
+    // its stream, and re-arms on every observable progress event; the short
+    // pre-stream calls keep their own total timeout.
+    const watchdog = createDoubaoStreamWatchdog(signal);
     let acknowledged: Pick<DoubaoSession, 'conversationId' | 'sectionId' | 'lastMessageIndex'> | undefined;
+    let reusedSession = false;
     try {
-      for await (const output of doubaoEvents(response.body!, request.model)) {
+      let session = sessionStore.get(sessionKey);
+      reusedSession = Boolean(session);
+      if (session) {
+        const latest = await pullConversationState(credential, session.conversationId, fetchImpl, signal);
+        session = { ...session, ...latest };
+        await modifyConversation(credential, session, selectedModel, effort, fetchImpl, signal);
+        session = { ...session, modelItemKey: selectedModel.modelItemKey, reasoningEffort: effort };
+        sessionStore.set(sessionKey, session);
+      }
+      const prompt = promptForDoubao(request, Boolean(session));
+      if (!prompt) {
+        const error = new Error('Doubao Work requires at least one non-empty text message.');
+        (error as NodeJS.ErrnoException).code = 'invalid_input';
+        throw error;
+      }
+      const response = await startCompletion({
+        credential,
+        prompt,
+        model: selectedModel,
+        effort,
+        session,
+        fetchImpl,
+        signal,
+        streamSignal: watchdog.signal,
+      });
+      watchdog.arm();
+      emit({ type: 'start', model: request.model });
+      for await (const output of doubaoEvents(response.body!, request.model, watchdog.arm)) {
         if (output.type === 'canonical') {
           emit(output.event);
+        } else if (output.type === 'activity') {
+          // Doubao executes tools itself and reports the work as a stream block.
+          // Record only bounded, non-content fields: the block summary is derived
+          // from tool output and must not enter logs.
+          log('info', 'doubao upstream tool activity', {
+            model: request.model,
+            block: output.activity.block,
+            block_id: output.activity.blockId,
+            status: output.activity.status,
+          });
         } else {
           acknowledged = output.session;
           if (acknowledged.conversationId) {
@@ -146,10 +164,17 @@ async function executeDoubao(
         }
       }
     } catch (error) {
-      if (!session && !acknowledged?.conversationId) {
+      if (!reusedSession && !acknowledged?.conversationId) {
         sessionStore.delete(sessionKey);
       }
+      if (watchdog.tripped()) {
+        const stalled = new Error('Doubao upstream stream stalled without observable agent progress.');
+        (stalled as NodeJS.ErrnoException).code = 'upstream_stream_truncated';
+        throw stalled;
+      }
       throw error;
+    } finally {
+      watchdog.dispose();
     }
   });
 }

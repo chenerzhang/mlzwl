@@ -110,6 +110,8 @@ POST /v1/messages/count_tokens
 
 Trae 支持其模型目录绑定的普通 function tools；hosted web search 返回 `unsupported_hosted_search`。豆包工作只支持已验证的纯文本路径：普通请求附带的可选工具目录可以被剥离；强制工具选择、真实 tool call/result 或 hosted search 会明确失败。
 
+豆包完成流使用可重置的空闲看门狗，而不是固定总时限。多步豆包回合可以在同一连接上持续数分钟，固定总超时会误杀健康回合；只有真实进展（回答文本、reasoning 或服务端工具活动块）才重置计时，裸 SSE keep-alive 不重置。超过空闲预算仍无进展时以 `upstream_stream_truncated` 失败。服务端工具活动只写入结构化日志，不会伪造为 canonical tool call，避免客户端重复执行豆包已在本机完成的动作。
+
 Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始且上游明确返回 401/403 时，才会在同一 realm 强制 refresh 并最多重放一次；配额、429、timeout、取消、普通错误或已开始的 SSE 都不会触发重放或 fallback。
 
 当前真实诊断确认 `llm_utils_chat` 的 `output.response` 是短增量，不是累计快照；但 Global/CN 上游均忽略请求级 `max_tokens`，可能一直生成到模型目录声明的输出上限。x-adapter 因而把请求 `max_tokens` 作为保守的内容增量事件上限，同时默认最多向客户端暴露 1 MiB 的 text/reasoning/tool-call 序列化输出；命中任一边界时立即取消上游。Chat Completions 返回 `finish_reason=length`，Responses 返回 `status=incomplete` / `reason=max_output_tokens`，Anthropic 返回 `stop_reason=max_tokens`。事件数和字节数都不是 token 计数，不能把该兜底理解为精确 `max_tokens` 语义，也不能保证取消前的上游计费；仍应使用客户端取消与 `X_ADAPTER_TRAE_CHAT_MAX_DURATION_MS` 限制持续时间。
@@ -145,6 +147,8 @@ Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始
 | `X_ADAPTER_DOUBAO_DATA_DIR`                       | `<data>/doubao-work`。                          |
 | `X_ADAPTER_DOUBAO_CONFIG_PATH`                    | `<doubao-data>/config.json`。                   |
 | `X_ADAPTER_DOUBAO_COOKIE`                         | 显式豆包工作 Cookie。                           |
+| `X_ADAPTER_DOUBAO_TIMEOUT_MS`                     | 豆包短调用总时限，默认 `180000`。               |
+| `X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS`                | 豆包完成流空闲预算，默认 `180000`。             |
 | `X_ADAPTER_AUTO_START`                            | Pi extension 是否自动启动 daemon。              |
 | `X_ADAPTER_AUTO_INSTALL`                          | Pi extension 是否从公共 npm 自动安装 CLI。      |
 | `PI_OFFLINE=1`                                    | 禁止 Pi extension 网络与生命周期动作。          |
@@ -176,5 +180,5 @@ macOS 使用用户级 launchd，Linux 使用用户级 systemd。`update` 从 `ht
 - `unsupported_hosted_search`：Trae 当前没有经验证的原生 hosted-search 协议。
 - `missing_doubao_credentials`：执行 `x-adapter doubao login`。
 - `invalid_doubao_credentials`：Cookie 失效，重新登录；不会隐式重放请求。
-- `unsupported_tools`：豆包请求包含强制工具调用或真实工具历史。
+- `unsupported_tools`：豆包请求包含强制工具调用或真实工具历史。错误体附带 `local_runtime` 声明（`available: false`、`authorization: official_client_bridge_required`、`reason: official_client_bridge_unavailable`），说明拒绝原因是缺少受支持的官方客户端桥接，不是能力缺失。
 - `previous_response_unavailable`：本地 Responses history 已过期、被淘汰或 provider 不匹配；新建会话。

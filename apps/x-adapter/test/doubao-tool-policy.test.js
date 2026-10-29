@@ -387,3 +387,127 @@ test('registry keeps a configured empty Trae realm unavailable with a bounded re
   assert.equal(result.providerStatuses[0].available, false);
   assert.equal(result.providerStatuses[0].realms[0].lastError.code, 'trae_model_catalog_empty');
 });
+
+test('Doubao unsupported_tools carries the local runtime boundary in every error surface', async () => {
+  await withDoubaoMock(async () => {
+    const app = doubaoMockApp();
+    const expected = {
+      available: false,
+      executor: 'official_client',
+      authorization: 'official_client_bridge_required',
+      dispatch: false,
+      signedEnvelope: false,
+      resultUpload: false,
+      cancellation: false,
+      recovery: false,
+      reason: 'official_client_bridge_unavailable',
+    };
+
+    const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        model: DOUBAO_TEST_MODEL,
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: [tool],
+        tool_choice: 'required',
+      }),
+    });
+    assert.equal(chat.status, 400);
+    const chatError = await chat.json();
+    assert.equal(chatError.error.code, 'unsupported_tools');
+    assert.deepEqual(chatError.error.local_runtime, expected);
+
+    // The streaming surface must carry the same declaration, not a bare code.
+    const streamed = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({
+        model: DOUBAO_TEST_MODEL,
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: [tool],
+        tool_choice: 'required',
+        stream: true,
+      }),
+    });
+    assert.equal(streamed.status, 200);
+    const frames = (await streamed.text())
+      .split('\n')
+      .filter((line) => line.startsWith('data: ') && !line.includes('[DONE]'))
+      .map((line) => JSON.parse(line.slice('data: '.length)));
+    const streamError = frames.find((frame) => frame.error);
+    assert.equal(streamError.error.code, 'unsupported_tools');
+    assert.deepEqual(streamError.error.local_runtime, expected);
+
+    const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
+      method: 'POST',
+      headers: headers({ 'anthropic-version': '2023-06-01' }),
+      body: JSON.stringify({
+        model: DOUBAO_TEST_CLAUDE_MODEL,
+        max_tokens: 16,
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: [{ name: 'lookup', input_schema: tool.function.parameters }],
+        tool_choice: { type: 'any' },
+      }),
+    });
+    const anthropicError = await anthropic.json();
+    assert.equal(anthropicError.error.code, 'unsupported_tools');
+    assert.deepEqual(anthropicError.error.local_runtime, expected);
+
+    // The catalog must declare the same boundary so a client sees the real
+    // reason before it ever sends a tool call.
+    const models = await app.request('http://127.0.0.1:10100/v1/models', { headers: headers() });
+    const catalog = await models.json();
+    const doubaoModel = catalog.data.find((model) => model.id.startsWith('doubao-work-'));
+    assert.ok(doubaoModel);
+    assert.equal(doubaoModel.metadata.local_runtime.available, false);
+    assert.equal(doubaoModel.metadata.local_runtime.transport, 'official_client_only');
+    assert.equal(doubaoModel.metadata.local_runtime.reason, 'official_client_bridge_unavailable');
+  });
+});
+
+test('another provider reusing unsupported_tools does not inherit the Doubao boundary', async () => {
+  const trae = {
+    id: 'trae',
+    displayName: 'Trae',
+    async discoverModels() {
+      return {
+        provider: 'trae',
+        displayName: 'Trae',
+        models: [
+          {
+            upstreamId: 'model-x',
+            configName: 'model-x',
+            modelName: 'model-x',
+            displayName: 'Model X',
+            maxInputTokens: 1000,
+            maxOutputTokens: 1000,
+            metadata: { realm: 'global' },
+          },
+        ],
+      };
+    },
+    async *execute() {
+      const error = new Error('Trae cannot continue this tool history.');
+      error.code = 'unsupported_tools';
+      throw error;
+      // eslint-disable-next-line no-unreachable
+      yield* [];
+    },
+    async run() {
+      const error = new Error('Trae cannot continue this tool history.');
+      error.code = 'unsupported_tools';
+      throw error;
+    },
+  };
+  const app = createApp({ adapters: [trae], registry: new ModelRegistry([trae]) });
+  const response = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ model: 'trae-model-x', messages: [{ role: 'user', content: 'hi' }] }),
+  });
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.equal(body.error.code, 'unsupported_tools');
+  assert.equal(body.error.local_runtime, undefined);
+});

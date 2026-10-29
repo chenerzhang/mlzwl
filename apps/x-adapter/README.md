@@ -120,6 +120,8 @@ extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向
 /x-adapter version
 ```
 
+若当前 Pi 会话已有工具调用历史，需要切换到纯文本豆包模型，请用 `/x-adapter-doubao [doubao-work-model-id]`。extension 会先让当前模型生成一份禁止调用工具的迁移摘要，确认 retain-none compaction 已持久化后才切换，默认目标为 `doubao-work-auto`。摘要、落盘、认证或切换任一步失败都会保持当前模型。原始 transcript 仍保留在 Pi session 文件中，只有后续活动模型上下文从摘要重新开始。
+
 自定义地址、本机鉴权、关闭自动启动/安装及离线模式见 [`docs/pi-provider-setup.md`](docs/pi-provider-setup.md)。
 
 ## 接入 Claude Code 与 Codex

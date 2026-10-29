@@ -4,13 +4,22 @@ import { jsonFromSseData, parseSseStream, SseEvent } from './sse.js';
 
 export type DoubaoUpstreamEvent =
   | { type: 'session'; session: Pick<DoubaoSession, 'conversationId' | 'sectionId' | 'lastMessageIndex'> }
-  | { type: 'canonical'; event: CanonicalStreamEvent };
+  | { type: 'canonical'; event: CanonicalStreamEvent }
+  | {
+      type: 'activity';
+      activity: {
+        block: string;
+        blockId: string;
+        status: 'in_progress' | 'completed';
+      };
+    };
 
 export async function* doubaoEvents(
   body: ReadableStream<Uint8Array>,
   model: string,
+  onProgress?: () => void,
 ): AsyncGenerator<DoubaoUpstreamEvent> {
-  const projector = new DoubaoEventProjector(model);
+  const projector = new DoubaoEventProjector(model, onProgress);
   for await (const event of parseSseStream(body)) {
     for (const output of projector.push(event)) {
       yield output;
@@ -32,7 +41,10 @@ export class DoubaoEventProjector {
   private readonly blockParents = new Map<string, string>();
   private emittedUsage = false;
 
-  constructor(private readonly model: string) {}
+  constructor(
+    private readonly model: string,
+    private readonly onProgress?: () => void,
+  ) {}
 
   push(event: SseEvent): DoubaoUpstreamEvent[] {
     const payload = jsonFromSseData(event.data);
@@ -97,21 +109,23 @@ export class DoubaoEventProjector {
       // send a suffix-only delta and then publish its complete message through
       // a later notify event, including one after SSE_REPLY_END.
       this.deltaAnswer += text;
+      this.onProgress?.();
       return [];
     }
     if (event.event === 'STREAM_CHUNK' || event.event === 'stream_chunk') {
       const operations = Array.isArray(payload.patch_op) ? payload.patch_op : [];
+      const activities: DoubaoUpstreamEvent[] = [];
       for (const rawOperation of operations) {
         const operation = objectValue(rawOperation);
         if (numberValue(operation.patch_object) !== 1) {
           continue;
         }
-        this.holdAnswerBlocks(objectValue(operation.patch_value).content_block);
+        activities.push(...this.holdAnswerBlocks(objectValue(operation.patch_value).content_block));
       }
       // STREAM_CHUNK may carry cumulative snapshots that are duplicated by a
       // later CHUNK_DELTA. Hold it until reply-end, then use it only if no
-      // answer CHUNK_DELTA was observed.
-      return [];
+      // answer CHUNK_DELTA was observed. Activity blocks still report progress.
+      return activities;
     }
     if ((event.event === 'SSE_REPLY_END' || event.event === 'sse_reply_end') && numberValue(payload.end_type) === 1) {
       if (this.sawDone) {
@@ -146,6 +160,7 @@ export class DoubaoEventProjector {
     if (!Array.isArray(value)) {
       return [];
     }
+    const activities: DoubaoUpstreamEvent[] = [];
     for (const rawBlock of value) {
       const block = objectValue(rawBlock);
       const blockId = providerIdValue(block.block_id) || `anonymous:${this.fallbackBlocks.size}`;
@@ -157,13 +172,23 @@ export class DoubaoEventProjector {
       if (Object.hasOwn(block, 'parent_id')) {
         this.blockParents.set(blockId, parentId);
       }
+      const content = objectValue(block.content);
       if (blockType === 10_040 || (blockType && blockType !== 10_000)) {
         this.blockKinds.set(blockId, 'nonanswer');
         this.activeTextKind = 'nonanswer';
+        const activity = this.blockActivity(block, blockId, content);
+        if (activity) {
+          this.onProgress?.();
+          activities.push(activity);
+        }
         continue;
       }
-      const content = objectValue(block.content);
       if (!Object.hasOwn(content, 'text_block')) {
+        const activity = this.blockActivity(block, blockId, content);
+        if (activity) {
+          this.onProgress?.();
+          activities.push(activity);
+        }
         continue;
       }
       const kind = previousKind ?? (parentId ? 'nonanswer' : 'answer');
@@ -178,7 +203,36 @@ export class DoubaoEventProjector {
       }
       this.fallbackBlocks.set(blockId, mergeSnapshot(this.fallbackBlocks.get(blockId) ?? '', text));
     }
-    return [];
+    return activities;
+  }
+
+  /**
+   * Doubao executes tools itself and reports the activity as a `*_block` in the
+   * stream. These blocks are already-completed work, not a request for the
+   * caller to run a tool, so they must never become canonical `tool_calls`.
+   * They are surfaced as activity events for stream liveness and coarse
+   * observability only. The block summary is deliberately dropped: it is derived
+   * from tool output and must not become a new content-leak surface.
+   */
+  private blockActivity(
+    block: Record<string, any>,
+    blockId: string,
+    content: Record<string, any>,
+  ): DoubaoUpstreamEvent | null {
+    for (const [name, raw] of Object.entries(content)) {
+      if (!name.endsWith('_block') || name === 'text_block' || raw === null || typeof raw !== 'object') {
+        continue;
+      }
+      return {
+        type: 'activity',
+        activity: {
+          block: name.slice(0, -6),
+          blockId,
+          status: boolValue(block.is_finish) ? 'completed' : 'in_progress',
+        },
+      };
+    }
+    return null;
   }
 
   private finalAnswer(): string {
@@ -270,6 +324,10 @@ function stringValue(value: unknown): string {
 function numberValue(value: unknown): number {
   const result = Number(value);
   return Number.isFinite(result) ? result : 0;
+}
+
+function boolValue(value: unknown): boolean {
+  return value === true || value === 1 || value === '1' || value === 'true';
 }
 
 function isAuthenticationCode(code: number): boolean {

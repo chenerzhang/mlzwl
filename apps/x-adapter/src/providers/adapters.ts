@@ -13,6 +13,7 @@ import { bindCanonicalToolCalls } from '../protocol/tools.js';
 import { readDoubaoCredential } from './doubao/auth/doubao-cookie.js';
 import { clearModelCache as clearDoubaoModelCache, getDoubaoModelCatalog } from './doubao/models/catalog.js';
 import { prepareDoubaoRequest } from './doubao/request.js';
+import { doubaoLocalRuntimeMetadata } from './doubao/local-runtime-capability.js';
 import { runDoubaoChat, streamDoubaoChat } from './doubao/upstream/chat.js';
 import { readTraeCredential } from './trae/auth/credential.js';
 import { resolveTraeSession } from './trae/auth/oauth.js';
@@ -165,7 +166,13 @@ function createDoubaoAdapter(): ExecutableProviderAdapter {
           defaultReasoningLevel: model.defaultReasoningLevel,
           // Doubao Work rejects non-text content before contacting upstream.
           inputModalities: ['text'],
-          metadata: { model_item_key: model.modelItemKey, upstream_provider_id: model.providerId || null },
+          metadata: {
+            model_item_key: model.modelItemKey,
+            upstream_provider_id: model.providerId || null,
+            // The native local runtime is owned by the official client; declare
+            // the boundary with the catalog instead of advertising tools.
+            ...doubaoLocalRuntimeMetadata(),
+          },
         })),
       };
     },

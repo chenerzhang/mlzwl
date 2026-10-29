@@ -236,6 +236,9 @@ test('Pi extension preserves explicit image capabilities and fails closed when a
         registered.push({ name, config });
       },
       registerCommand() {},
+      on() {
+        return () => {};
+      },
       async exec() {
         throw new Error('exec must not run for a healthy gateway');
       },
@@ -316,4 +319,257 @@ test('tool validation rejects duplicate canonical names including namespace flat
     ],
   });
   assert.equal(validateCanonicalRequest(namespaceCollision)?.code, 'duplicate_tool_name');
+});
+
+function piStub(options = {}) {
+  const handlers = new Map();
+  const commands = new Map();
+  const sentMessages = [];
+  const selectedModels = [];
+  return {
+    handlers,
+    commands,
+    sentMessages,
+    selectedModels,
+    on(event, handler) {
+      handlers.set(event, handler);
+      return () => handlers.delete(event);
+    },
+    registerCommand(name, command) {
+      commands.set(name, command);
+    },
+    registerProvider() {},
+    sendMessage(message, sendOptions) {
+      sentMessages.push({ message, options: sendOptions });
+    },
+    async setModel(model) {
+      selectedModels.push(model);
+      return options.setModel ? options.setModel(model) : true;
+    },
+    async exec() {
+      throw new Error('exec must not run in offline mode');
+    },
+  };
+}
+
+async function offlinePi(options) {
+  return withEnv(
+    {
+      PI_OFFLINE: '1',
+      X_ADAPTER_BASE_URL: undefined,
+      X_ADAPTER_CLIENT_TOKEN: undefined,
+      X_ADAPTER_PROVIDER_ID: undefined,
+      X_ADAPTER_AUTO_START: undefined,
+      X_ADAPTER_AUTO_INSTALL: undefined,
+    },
+    async () => {
+      const pi = piStub(options);
+      await xAdapterPiExtension(pi);
+      return pi;
+    },
+  );
+}
+
+function switchContext(options = {}) {
+  const notifications = [];
+  const target = options.target ?? { provider: 'x-adapter', id: 'doubao-work-auto', name: 'Doubao Work Auto' };
+  const branch = options.branch ?? [];
+  const messages = options.messages ?? [];
+  return {
+    notifications,
+    context: {
+      cwd: '/tmp',
+      model: options.model ?? { provider: 'x-adapter', id: 'trae-global-pro', name: 'Trae Global Pro' },
+      modelRegistry: {
+        find(provider, modelId) {
+          return provider === target.provider && modelId === target.id ? target : undefined;
+        },
+        hasConfiguredAuth() {
+          return options.hasAuth ?? true;
+        },
+      },
+      sessionManager: {
+        getBranch() {
+          return branch;
+        },
+        buildSessionProjection() {
+          return { messages };
+        },
+      },
+      ui: {
+        notify(message, type) {
+          notifications.push({ message, type });
+        },
+      },
+      async waitForIdle() {},
+    },
+    target,
+    branch,
+    messages,
+  };
+}
+
+const piToolMessages = [
+  { role: 'user', content: [{ type: 'text', text: 'read README' }] },
+  {
+    role: 'assistant',
+    stopReason: 'toolUse',
+    content: [{ type: 'toolCall', id: 'call_1', name: 'read', arguments: { path: 'README.md' } }],
+  },
+  { role: 'toolResult', toolCallId: 'call_1', content: [{ type: 'text', text: '# readme' }] },
+];
+
+test('Pi Doubao switch command changes model directly when active context has no tool history', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'hi' }] },
+    ],
+  });
+  await pi.commands.get('x-adapter-doubao').handler('', session.context);
+
+  assert.deepEqual(pi.selectedModels, [session.target]);
+  assert.equal(pi.sentMessages.length, 0);
+  assert.match(session.notifications.at(-1).message, /已切换到 doubao-work-auto/);
+});
+
+test('Pi Doubao switch command compacts tool history before switching and keeps raw transcript auditable', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({ messages: piToolMessages });
+  await pi.commands.get('x-adapter-doubao').handler('doubao-work-auto', session.context);
+
+  // The model must not change until the handoff summary is persisted and verified.
+  assert.equal(pi.selectedModels.length, 0);
+  assert.equal(pi.sentMessages.length, 1);
+  assert.equal(pi.sentMessages[0].message.customType, 'x-adapter-doubao-handoff');
+  assert.equal(pi.sentMessages[0].options.triggerTurn, true);
+  const handoffId = pi.sentMessages[0].message.details.handoffId;
+  assert.equal(typeof handoffId, 'string');
+
+  const startEvent = {
+    messageType: 'custom',
+    message: pi.sentMessages[0].message,
+    systemPromptOptions: { selectedTools: ['read', 'bash'] },
+  };
+  pi.handlers.get('before_agent_start')(startEvent, session.context);
+  // The summary turn must run without tools, or it could mutate the workspace.
+  assert.deepEqual(startEvent.systemPromptOptions.selectedTools, []);
+
+  pi.handlers.get('agent_end')(
+    {
+      messages: [
+        ...piToolMessages,
+        {
+          role: 'assistant',
+          stopReason: 'stop',
+          content: [{ type: 'text', text: '## Goal\nContinue the README work.' }],
+        },
+      ],
+    },
+    session.context,
+  );
+  const boundary = pi.handlers.get('agent_before_settle')({ outcome: 'completed', entries: [] }, session.context);
+  assert.deepEqual(boundary.entries, [
+    {
+      type: 'compaction',
+      summary: '## Goal\nContinue the README work.',
+      firstKeptEntryId: null,
+      details: {
+        kind: 'x-adapter-doubao-handoff',
+        handoffId,
+        sourceModel: 'x-adapter/trae-global-pro',
+        targetModel: 'x-adapter/doubao-work-auto',
+      },
+    },
+  ]);
+  // Pi persists null as the compaction entry's own firstKeptEntryId. Raw entries
+  // stay in the branch; only the active model projection is replaced.
+  session.branch.push({ type: 'compaction', details: boundary.entries[0].details });
+  session.context.sessionManager.buildSessionProjection = () => ({
+    messages: [{ role: 'compactionSummary', content: boundary.entries[0].summary }],
+  });
+  await pi.handlers.get('agent_settled')({ aborted: false }, session.context);
+
+  assert.deepEqual(pi.selectedModels, [session.target]);
+  assert.deepEqual(session.messages, piToolMessages);
+  assert.match(session.notifications.at(-1).message, /已切换到 doubao-work-auto/);
+});
+
+test('Pi Doubao switch command refuses to switch when the persisted projection still has tool history', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({ messages: piToolMessages });
+  await pi.commands.get('x-adapter-doubao').handler('', session.context);
+  pi.handlers.get('before_agent_start')(
+    { messageType: 'custom', message: pi.sentMessages[0].message, systemPromptOptions: { selectedTools: ['read'] } },
+    session.context,
+  );
+  pi.handlers.get('agent_end')(
+    { messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'safe summary' }] }] },
+    session.context,
+  );
+  const boundary = pi.handlers.get('agent_before_settle')({ outcome: 'completed', entries: [] }, session.context);
+  session.branch.push({ type: 'compaction', details: boundary.entries[0].details });
+  await pi.handlers.get('agent_settled')({ aborted: false }, session.context);
+
+  assert.equal(pi.selectedModels.length, 0);
+  assert.match(session.notifications.at(-1).message, /活动上下文仍含工具历史/);
+});
+
+test('Pi Doubao switch command fails before summarizing when target Pi auth is unavailable', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({ hasAuth: false, messages: piToolMessages });
+  await pi.commands.get('x-adapter-doubao').handler('', session.context);
+
+  assert.equal(pi.sentMessages.length, 0);
+  assert.equal(pi.selectedModels.length, 0);
+  assert.match(session.notifications.at(-1).message, /没有可用的 Pi provider 认证/);
+});
+
+test('Pi Doubao switch command fails closed when the handoff turn tries to call a tool', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({ messages: piToolMessages });
+  await pi.commands.get('x-adapter-doubao').handler('', session.context);
+  pi.handlers.get('before_agent_start')(
+    { messageType: 'custom', message: pi.sentMessages[0].message, systemPromptOptions: { selectedTools: ['read'] } },
+    session.context,
+  );
+
+  assert.deepEqual(pi.handlers.get('tool_call')({ toolName: 'read' }, session.context), {
+    block: true,
+    terminate: true,
+    reason: '豆包切换摘要不得执行工具；本次切换已安全取消。',
+  });
+  pi.handlers.get('agent_end')(
+    { messages: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'partial' }] }] },
+    session.context,
+  );
+  assert.equal(
+    pi.handlers.get('agent_before_settle')({ outcome: 'completed', entries: [] }, session.context),
+    undefined,
+  );
+  await pi.handlers.get('agent_settled')({ aborted: false }, session.context);
+
+  assert.equal(pi.selectedModels.length, 0);
+  assert.match(session.notifications.at(-1).message, /已取消切换/);
+});
+
+test('Pi Doubao switch command refuses to summarize when the current model is text-only Doubao', async () => {
+  const pi = await offlinePi();
+  const session = switchContext({
+    model: { provider: 'x-adapter', id: 'doubao-work-auto', name: 'Doubao Work Auto' },
+    target: { provider: 'x-adapter', id: 'doubao-work-pro', name: 'Doubao Work Pro' },
+    messages: piToolMessages,
+  });
+  await pi.commands.get('x-adapter-doubao').handler('doubao-work-pro', session.context);
+
+  assert.equal(pi.sentMessages.length, 0);
+  assert.equal(pi.selectedModels.length, 0);
+  assert.match(session.notifications.at(-1).message, /请先切回支持工具 transcript 的模型/);
+});
+
+test('Pi extension registers the Doubao switch command in offline mode', async () => {
+  const pi = await offlinePi();
+  assert.ok(pi.commands.has('x-adapter'));
+  assert.ok(pi.commands.has('x-adapter-doubao'));
 });

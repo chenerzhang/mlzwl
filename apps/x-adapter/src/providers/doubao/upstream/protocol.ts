@@ -265,10 +265,17 @@ export type CompletionInput = {
   session?: DoubaoSession;
   fetchImpl?: FetchLike;
   signal?: AbortSignal;
+  /**
+   * Re-armable inactivity signal for the long-lived completion stream. The
+   * caller owns the timer and re-arms it on observable progress; this request
+   * only forwards its abort so a stalled turn fails fast without imposing a
+   * fixed total elapsed cap on healthy multi-step turns.
+   */
+  streamSignal?: AbortSignal;
 };
 
 export async function startCompletion(input: CompletionInput): Promise<Response> {
-  const { credential, prompt, model: selectedModel, effort, session, fetchImpl = fetch, signal } = input;
+  const { credential, prompt, model: selectedModel, effort, session, fetchImpl = fetch, signal, streamSignal } = input;
   const localMessageId = uuid();
   const isNew = !session?.conversationId;
   const generalTaskParam = {
@@ -353,17 +360,16 @@ export async function startCompletion(input: CompletionInput): Promise<Response>
   };
   const response = await fetchImpl(doubaoUrl('/chat/completion', credential), {
     method: 'POST',
-    headers: {
-      ...doubaoHeaders(credential, {
-        accept: 'text/event-stream',
-        contentType: 'application/json',
-        refererConversationId: session?.conversationId,
-        agw: 'str, str',
-      }),
-      'last-event-id': 'undefined',
-    },
+    headers: doubaoHeaders(credential, {
+      accept: 'text/event-stream',
+      contentType: 'application/json',
+      refererConversationId: session?.conversationId,
+      agw: 'str, str',
+    }),
     body: JSON.stringify(body),
-    signal: doubaoTimeoutSignal(signal),
+    // The completion stream can legitimately run for minutes, so it uses the
+    // caller's re-armable inactivity signal instead of a fixed total timeout.
+    signal: streamSignal ?? doubaoTimeoutSignal(signal),
   });
   if (!response.ok) {
     throw doubaoHttpError(response, 'Doubao completion');

@@ -589,3 +589,124 @@ test('Doubao session store is bounded and keyed queue serializes same conversati
   await Promise.all([first, second]);
   assert.deepEqual(trace, ['first:start', 'first:end', 'second']);
 });
+
+test('Doubao SSE reports server-side tool activity without inventing canonical tool calls', () => {
+  const projector = new DoubaoEventProjector('doubao-work-auto');
+  const output = projector.push({
+    event: 'STREAM_CHUNK',
+    data: JSON.stringify({
+      patch_op: [
+        {
+          patch_object: 1,
+          patch_value: {
+            content_block: [
+              {
+                block_id: 'tool-1',
+                block_type: 10_040,
+                is_finish: true,
+                content: { bash_block: { header: { summary: '列出项目目录' }, content: 'a\nb' } },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+  });
+  // Doubao already executed the tool. Emitting a canonical tool call here would
+  // make the client run it a second time.
+  assert.equal(
+    output.some((item) => item.type === 'canonical'),
+    false,
+  );
+  assert.deepEqual(output, [
+    {
+      type: 'activity',
+      activity: { block: 'bash', blockId: 'tool-1', status: 'completed' },
+    },
+  ]);
+  projector.push({ event: 'SSE_REPLY_END', data: '{"end_type":1,"msg_finish_attr":{"brief":"done"}}' });
+  assert.equal(terminalText(projector), 'done');
+});
+
+test('Doubao SSE re-arms the progress callback on real events but not on bare keep-alives', () => {
+  let progress = 0;
+  const projector = new DoubaoEventProjector('doubao-work-auto', () => (progress += 1));
+  projector.push({ event: 'SSE_HEARTBEAT', data: '{}' });
+  assert.equal(progress, 0);
+  projector.push({ event: 'CHUNK_DELTA', data: '{"text":"answer"}' });
+  assert.equal(progress, 1);
+  projector.push({
+    event: 'STREAM_CHUNK',
+    data: JSON.stringify({
+      patch_op: [
+        {
+          patch_object: 1,
+          patch_value: {
+            content_block: [
+              { block_id: 'tool-2', block_type: 10_040, content: { grep_block: { header: { summary: '搜索' } } } },
+            ],
+          },
+        },
+      ],
+    }),
+  });
+  // A server-side tool activity block is real agent progress and must re-arm the
+  // watchdog; a bare keep-alive must not.
+  assert.equal(progress, 2);
+});
+
+test('Doubao completion stream omits an unset last-event-id header', async () => {
+  let headers;
+  await startCompletion({
+    credential,
+    prompt: 'hello',
+    model: staticDoubaoModels()[0],
+    effort: 4,
+    fetchImpl: async (_input, init) => {
+      headers = init.headers;
+      return sse();
+    },
+  });
+  assert.equal(
+    Object.keys(headers).some((key) => key.toLowerCase() === 'last-event-id'),
+    false,
+  );
+});
+
+test('Doubao stream watchdog trips only after real inactivity and re-arms on progress', async () => {
+  const original = process.env.X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS;
+  process.env.X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS = '40';
+  try {
+    const { createDoubaoStreamWatchdog } = await import('../dist/providers/doubao/config/env.js');
+    const kept = createDoubaoStreamWatchdog();
+    for (let index = 0; index < 4; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      kept.arm();
+    }
+    // Continuous progress keeps the turn alive well past one idle budget.
+    assert.equal(kept.signal.aborted, false);
+    assert.equal(kept.tripped(), false);
+    kept.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal(kept.signal.aborted, false);
+
+    const stalled = createDoubaoStreamWatchdog();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    assert.equal(stalled.signal.aborted, true);
+    assert.equal(stalled.tripped(), true);
+    stalled.dispose();
+
+    const controller = new AbortController();
+    const clientBound = createDoubaoStreamWatchdog(controller.signal);
+    controller.abort();
+    assert.equal(clientBound.signal.aborted, true);
+    assert.equal(clientBound.tripped(), false);
+    clientBound.dispose();
+  } finally {
+    if (original === undefined) {
+      delete process.env.X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS;
+    } else {
+      process.env.X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS = original;
+    }
+  }
+});
