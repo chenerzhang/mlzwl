@@ -22,6 +22,7 @@ import {
   withHeartbeat,
 } from '../protocol/streaming.js';
 import { validateCanonicalRequest, validateContextSize, validateModelInputModalities } from '../protocol/validation.js';
+import { capabilityDetails } from '../protocol/capability-details.js';
 import { ExecutableProviderAdapter, createProviderAdapters } from '../providers/adapters.js';
 import { clientAuthMiddleware } from '../security/client-auth.js';
 import { assertLoopbackBindHost, localOnlyMiddleware } from '../security/local-only.js';
@@ -184,10 +185,15 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
     } catch (error) {
       logRequestFailure('messages.request_failed', requestStartedAt, logFields, request, error);
       const response = publicError(error);
+      const details = capabilityDetails(error);
       return c.json(
         {
           type: 'error',
-          error: { type: response.clientError ? 'invalid_request_error' : 'api_error', ...response.error },
+          error: {
+            type: response.clientError ? 'invalid_request_error' : 'api_error',
+            ...response.error,
+            ...(details ?? {}),
+          },
         },
         response.status,
       );
@@ -582,11 +588,15 @@ function publicError(error: unknown): {
 
 function requestError(c: Context, error: unknown) {
   const response = publicError(error);
+  // Declared capability travels with the rejection so a client can tell "this
+  // provider has no tools" from "this provider has tools, but they are gated".
+  const details = capabilityDetails(error);
   return c.json(
     {
       error: {
         ...response.error,
         type: response.clientError ? 'invalid_request_error' : 'api_error',
+        ...(details ?? {}),
       },
     },
     response.status,

@@ -5,6 +5,7 @@ import { CanonicalResult, CanonicalStreamEvent, CanonicalToolCall } from './cano
 import { shouldExposeRawReasoning, shouldExposeReasoningSummary } from './reasoning.js';
 import { customToolInput } from './tools.js';
 import { chatCompletionsDeltaChunk, chatCompletionsDoneChunk, chatCompletionsStartChunk } from './chat-completions.js';
+import { capabilityDetails } from './capability-details.js';
 
 const encoder = new TextEncoder();
 
@@ -28,6 +29,15 @@ function incompleteCanonicalStreamError(): Error {
   const error = new Error('Provider stream ended without a canonical terminal event.');
   (error as NodeJS.ErrnoException).code = 'upstream_stream_truncated';
   return error;
+}
+
+/**
+ * Provider-declared capability details for an error frame. Kept next to the code
+ * so streaming and non-streaming failures stay consistent, and only ever
+ * populated when the provider deliberately marked that exact error.
+ */
+function errorDetails(error: unknown): Record<string, unknown> {
+  return capabilityDetails(error) ?? {};
 }
 
 function upstreamErrorCode(model: string, error?: unknown): string {
@@ -196,7 +206,11 @@ export async function* chatCompletionsSseIterable(
     yield encode('data: [DONE]\n\n');
   } catch (error) {
     yield* ensureStarted();
-    yield encode(dataFrame({ error: { code: upstreamErrorCode(model, error), message: errorMessage(error) } }));
+    yield encode(
+      dataFrame({
+        error: { code: upstreamErrorCode(model, error), message: errorMessage(error), ...errorDetails(error) },
+      }),
+    );
     yield encode('data: [DONE]\n\n');
   }
 }
@@ -877,7 +891,7 @@ export async function* responsesSseIterable(
         type: 'response.failed',
         response: {
           ...responseShell(state.responseId, state.model, 'failed', options.previousResponseId ?? null),
-          error: { code, message },
+          error: { code, message, ...errorDetails(error) },
         },
       }),
     );
@@ -1046,7 +1060,12 @@ export async function* anthropicSseIterable(
     yield encode(
       eventFrame('error', {
         type: 'error',
-        error: { type: 'api_error', code: upstreamErrorCode(model, error), message: errorMessage(error) },
+        error: {
+          type: 'api_error',
+          code: upstreamErrorCode(model, error),
+          message: errorMessage(error),
+          ...errorDetails(error),
+        },
       }),
     );
   }

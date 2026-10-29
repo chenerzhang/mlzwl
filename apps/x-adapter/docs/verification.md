@@ -24,7 +24,8 @@ git diff --check
 - Trae batch 模型目录、逐 function 降级、稳定缓存身份、realm 模型前缀、模型/function 绑定、图片能力元数据保留，以及一个 realm 失败的隔离边界。
 - OpenAI/Codex/Claude 三类模型发现的输入模态声明、Pi 图片能力读取、纯文本模型在三种协议上的图片 fail-closed 校验，以及图片模型的 canonical 图片保留。
 - Trae `/api/agent/v3/llm_utils_chat` headers/body、reasoning/text/tool-call/usage SSE、显式终态、请求/配置输出事件和 UTF-8 字节边界、命中边界后的上游取消与 `done(length)`、401/403 最多 refresh/replay 一次、普通错误不自动重试、function mismatch 的有限纠正和 hosted search 明确失败。
-- 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态和纯文本工具策略。
+- 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态、可重置空闲看门狗、服务端工具活动日志，以及纯文本工具策略与 `local_runtime` 声明。
+- Pi extension 的 `/x-adapter` 参数拆分与 CLI 代理、模型图片能力读取，以及 `/x-adapter-doubao` 的直接切换、摘要后切换、投影复检、认证预检和工具调用 fail-closed 路径。
 - Responses history 的 provider 隔离、LRU、TTL、record/replay、总字节限制和图片工具结果顺序。
 - Chat、Responses 与 Anthropic 的 canonical 转换、流式 item 顺序、工具调用映射与资源限制。
 - launchd / systemd 模板和卸载流程。

@@ -1,10 +1,7 @@
 import { CanonicalRequest } from '../../protocol/canonical.js';
+import { doubaoToolBoundaryError } from './local-runtime-capability.js';
 
-function unsupportedTools(message: string): Error {
-  const error = new Error(message);
-  (error as NodeJS.ErrnoException).code = 'unsupported_tools';
-  return error;
-}
+const unsupportedTools = doubaoToolBoundaryError;
 
 function hasToolTranscript(request: CanonicalRequest): boolean {
   return request.messages.some(
