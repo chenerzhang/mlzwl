@@ -75,7 +75,7 @@ export function readSoloToken(realm: TraeRealm): SoloTokenRecord | null {
   return parseFile(raw);
 }
 
-function writeSoloToken(realm: TraeRealm, record: SoloTokenRecord): void {
+export function writeSoloToken(realm: TraeRealm, record: SoloTokenRecord): void {
   const file = soloTokenPath(realm);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const payload: SoloTokenFile & { Result: Required<NonNullable<SoloTokenFile['Result']>> } = {

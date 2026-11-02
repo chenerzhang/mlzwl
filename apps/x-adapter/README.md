@@ -21,12 +21,16 @@ Trae 对外仍是一个 provider，但 Global 与 CN 是相互隔离的账号 re
 x-adapter trae import --realm global
 x-adapter trae import --realm cn
 
-# 可选：创建独立 OAuth 登录（可能占用新的设备名额）
+# 可选：创建独立 OAuth 登录（复用已导入设备身份，不新增设备名额）
 x-adapter trae login --realm global
 x-adapter trae login --realm cn
 x-adapter doubao login
 # 可选：创建或复用实验性的个人 Connector，启用豆包客户端工具桥接
 x-adapter doubao login --create-bridge
+
+# SOLO 模型（trae-global-gpt-5.2 等）额外需要一次 SOLO 身份授权：
+# 先完成上面任一 Global 登录（SOLO 登录复用其设备身份），再执行
+x-adapter trae login --realm global --solo
 ```
 
 Trae 凭据分别保存在 `~/.x-adapter/trae/global/auth.json` 和 `~/.x-adapter/trae/cn/auth.json`；不要复制、共享或提交这些文件。`trae import` 会只读解密官方客户端 `storage.json` 并复制 access/refresh token、machine/device ID 与 P-256 私钥，不会写回官方存储；两端共享同一 token family 和设备身份，任一端刷新或退出都可能影响另一端。认证方式及风险说明见 [`docs/operations.md`](docs/operations.md)。

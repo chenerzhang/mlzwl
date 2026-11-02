@@ -11,6 +11,7 @@ import {
   sessionFromCredential,
   writeTraeCredential,
 } from './credential.js';
+import { writeSoloToken } from './solo-token.js';
 import { TraeRealm, assertTraeBaseUrl, inferTraeRegion, traeAuthTimeoutMs, traeRealmConfig } from '../config/realm.js';
 
 export type TraeAuthEvent =
@@ -67,49 +68,7 @@ export async function runTraeLogin(realm: TraeRealm, options: TraeAuthOptions = 
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const loginGuidance = await requestLoginGuidance(initial, traceId, fetchImpl, timeoutMs);
   const controller = new AbortController();
-  let callbackResolve: (value: LoginCallback) => void;
-  let consumed = false;
-  const callback = new Promise<LoginCallback>((resolve) => {
-    callbackResolve = resolve;
-  });
-  const server = http.createServer((request, response) => {
-    const originHeaders = {
-      'access-control-allow-origin': initial.webBaseUrl,
-      'access-control-allow-methods': 'GET, OPTIONS',
-      'cache-control': 'no-store',
-    };
-    if (request.method === 'OPTIONS') {
-      response.writeHead(204, originHeaders).end();
-      return;
-    }
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    const finish = (status: number, title: string): void => {
-      response
-        .writeHead(status, { ...originHeaders, 'content-type': 'text/html; charset=utf-8' })
-        .end(`<!doctype html><meta charset="utf-8"><title>${title}</title><p>${title}</p>`);
-    };
-    if (request.method !== 'GET' || url.pathname !== '/authorize') {
-      finish(404, 'Not found');
-      return;
-    }
-    if (consumed) {
-      finish(409, 'This Trae sign-in callback has already been used.');
-      return;
-    }
-    const callbackState = url.searchParams.get('state');
-    if (callbackTrace(url.searchParams) !== traceId || (callbackState !== null && callbackState !== state)) {
-      finish(400, 'Trae sign-in could not be verified.');
-      return;
-    }
-    try {
-      const parsed = validateCallbackHosts(realm, parseLoginCallback(url.searchParams));
-      consumed = true;
-      callbackResolve(parsed);
-      finish(200, 'Trae sign-in received. You can close this tab.');
-    } catch {
-      finish(400, 'Trae sign-in did not return a usable authorization.');
-    }
-  });
+  const { server, callback } = createTraeCallbackServer(realm, initial.webBaseUrl, traceId, state);
 
   try {
     await listenLoopback(server);
@@ -207,6 +166,220 @@ export async function runTraeLogin(realm: TraeRealm, options: TraeAuthOptions = 
     controller.abort();
     await closeServer(server);
   }
+}
+
+const SOLO_LOGIN_CLIENT_ID = 'en1oxy7wnw8j9n';
+const SOLO_LOGIN_APP_VERSION = '3.6.2';
+const SOLO_EXCHANGE_BASE_URL = 'https://api-sg-central.trae.ai';
+
+/**
+ * SOLO-identity OAuth login (global realm only).
+ *
+ * The `solo_work_lite` pool only accepts tokens minted by the SOLO OAuth
+ * client (`en1oxy7wnw8j9n`); IDE-identity tokens answer 4120. The flow reuses
+ * the imported IDE device identity (registering a fresh device trips the
+ * account device cap 20401), so `trae import` must have run first. The
+ * resulting credential is stored as the solo-token file and auto-renewed by
+ * `resolveSoloToken`.
+ */
+export async function runTraeSoloLogin(realm: TraeRealm, options: TraeAuthOptions = {}): Promise<void> {
+  if (realm !== 'global') {
+    throw authError('Trae SOLO login is only available for the global realm.', 'solo_login_unsupported_realm');
+  }
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? traeAuthTimeoutMs();
+  const initial = traeRealmConfig(realm);
+  const existing = readTraeCredential(realm);
+  const device = existing?.device;
+  if (!device || !device.machineId || !device.publicKey || !device.privateKey) {
+    throw authError(
+      'Trae SOLO login reuses the imported device identity. Run `x-adapter trae import --realm global` first.',
+      'missing_solo_device_identity',
+    );
+  }
+  const state = randomBytes(24).toString('hex');
+  const traceId = randomUUID();
+  const verifier = randomBytes(48).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  const controller = new AbortController();
+  const { server, callback } = createTraeCallbackServer(realm, initial.webBaseUrl, traceId, state);
+
+  try {
+    await listenLoopback(server);
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw authError('Trae callback server did not bind a loopback port.', 'trae_oauth_callback_failed');
+    }
+    const callbackUrl = new URL(`http://127.0.0.1:${address.port}/authorize`);
+    const loginUrl = authorizationUrl(
+      initial,
+      initial.webBaseUrl,
+      callbackUrl.toString(),
+      traceId,
+      state,
+      challenge,
+      device,
+      { clientId: SOLO_LOGIN_CLIENT_ID, appVersion: SOLO_LOGIN_APP_VERSION, pluginVersion: 'icube-ai' },
+    );
+    let opened = false;
+    const open = (): void => {
+      if (opened || options.openBrowser === false) {
+        return;
+      }
+      opened = true;
+      openBrowser(loginUrl);
+    };
+    await options.onEvent?.({ type: 'auth.login.url', realm, url: loginUrl, open });
+    open();
+    await options.onEvent?.({ type: 'auth.login.waiting', realm });
+    const received = await withTimeout(callback, timeoutMs, controller.signal);
+    if (!received.authCode) {
+      throw authError('Trae SOLO login callback did not return an authorization code.', 'trae_oauth_callback_invalid');
+    }
+    const exchange = await exchangeSoloAuthorizationCode(received.authCode, verifier, device, fetchImpl, timeoutMs);
+    writeSoloToken(realm, {
+      token: exchange.token,
+      refreshToken: exchange.refreshToken,
+      expiresAt: exchange.expiresAt,
+      refreshExpiresAt: exchange.refreshExpiresAt,
+      clientId: SOLO_LOGIN_CLIENT_ID,
+      deviceId: exchange.boundDeviceId || device.deviceId,
+      updatedAt: new Date().toISOString(),
+    });
+    await options.onEvent?.({ type: 'auth.login.completed', realm });
+  } finally {
+    controller.abort();
+    await closeServer(server);
+  }
+}
+
+async function exchangeSoloAuthorizationCode(
+  authCode: string,
+  verifier: string,
+  device: TraeDevice,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<{
+  token: string;
+  refreshToken: string;
+  expiresAt: number;
+  refreshExpiresAt: number;
+  boundDeviceId: string;
+}> {
+  const response = await postJson(
+    `${SOLO_EXCHANGE_BASE_URL}/cloudide/api/v3/trae/oauth/ExchangeToken`,
+    {
+      ClientID: SOLO_LOGIN_CLIENT_ID,
+      AuthCode: authCode,
+      CodeVerifier: verifier,
+      IDEVersion: SOLO_LOGIN_APP_VERSION,
+      DeviceInfo: {
+        DeviceID: device.deviceId,
+        MachineID: device.machineId,
+        PlatformCode: 'IDE_PC',
+        DeviceType: 'PC',
+        DeviceName: os.hostname(),
+        DeviceModel: 'Apple',
+        ClientVersion: SOLO_LOGIN_APP_VERSION,
+        DevicePublicKey: device.publicKey,
+        DeviceBrand: 'Apple',
+        DeviceCPU: '',
+        OSInfo: 'MAC',
+        OSVersion: '',
+      },
+    },
+    fetchImpl,
+    timeoutMs,
+    { 'x-cloudide-token': '', 'user-agent': `Trae/${SOLO_LOGIN_APP_VERSION}` },
+  );
+  const raw = await response.text();
+  let payload: {
+    Result?: {
+      Token?: string;
+      RefreshToken?: string;
+      TokenExpireAt?: number;
+      RefreshExpireAt?: number;
+      BoundDeviceID?: string;
+    };
+  };
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    payload = {};
+  }
+  const result = payload.Result ?? {};
+  const hasRefresh = typeof result.RefreshToken === 'string' && result.RefreshToken.length > 0;
+  if (!response.ok || typeof result.Token !== 'string' || !result.Token || !hasRefresh) {
+    const upstreamCode = oauthErrorCode(raw);
+    throw authError(
+      `Trae SOLO authorization exchange failed with HTTP ${response.status}${upstreamCode ? ` (code ${upstreamCode})` : ''}.`,
+      'solo_oauth_exchange_failed',
+    );
+  }
+  return {
+    token: result.Token as string,
+    refreshToken: result.RefreshToken as string,
+    expiresAt: Number(result.TokenExpireAt ?? 0),
+    refreshExpiresAt: Number(result.RefreshExpireAt ?? 0),
+    boundDeviceId: typeof result.BoundDeviceID === 'string' ? result.BoundDeviceID : '',
+  };
+}
+
+/**
+ * Shared loopback callback server for the Trae OAuth flows. Validates the
+ * login trace id (and state when present), parses `authCodeInfo`, and resolves
+ * exactly once.
+ */
+function createTraeCallbackServer(
+  realm: TraeRealm,
+  webBaseUrl: string,
+  traceId: string,
+  state: string,
+): { server: http.Server; callback: Promise<LoginCallback> } {
+  let callbackResolve!: (value: LoginCallback) => void;
+  let consumed = false;
+  const callback = new Promise<LoginCallback>((resolve) => {
+    callbackResolve = resolve;
+  });
+  const server = http.createServer((request, response) => {
+    const originHeaders = {
+      'access-control-allow-origin': webBaseUrl,
+      'access-control-allow-methods': 'GET, OPTIONS',
+      'cache-control': 'no-store',
+    };
+    if (request.method === 'OPTIONS') {
+      response.writeHead(204, originHeaders).end();
+      return;
+    }
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const finish = (status: number, title: string): void => {
+      response
+        .writeHead(status, { ...originHeaders, 'content-type': 'text/html; charset=utf-8' })
+        .end(`<!doctype html><meta charset="utf-8"><title>${title}</title><p>${title}</p>`);
+    };
+    if (request.method !== 'GET' || url.pathname !== '/authorize') {
+      finish(404, 'Not found');
+      return;
+    }
+    if (consumed) {
+      finish(409, 'This Trae sign-in callback has already been used.');
+      return;
+    }
+    const callbackState = url.searchParams.get('state');
+    if (callbackTrace(url.searchParams) !== traceId || (callbackState !== null && callbackState !== state)) {
+      finish(400, 'Trae sign-in could not be verified.');
+      return;
+    }
+    try {
+      const parsed = validateCallbackHosts(realm, parseLoginCallback(url.searchParams));
+      consumed = true;
+      callbackResolve(parsed);
+      finish(200, 'Trae sign-in received. You can close this tab.');
+    } catch {
+      finish(400, 'Trae sign-in did not return a usable authorization.');
+    }
+  });
+  return { server, callback };
 }
 
 export async function resolveTraeSession(
@@ -344,6 +517,12 @@ async function requestLoginGuidance(
   throw authError(`Trae ${config.realm} login guidance failed (${failures.join(', ')}).`, 'trae_login_guidance_failed');
 }
 
+type AuthorizationIdentityOverride = {
+  clientId: string;
+  appVersion: string;
+  pluginVersion: string;
+};
+
 function authorizationUrl(
   config: ReturnType<typeof traeRealmConfig>,
   loginBaseUrl: string,
@@ -352,15 +531,21 @@ function authorizationUrl(
   state: string,
   challenge: string,
   device: TraeDevice,
+  identityOverride?: AuthorizationIdentityOverride,
 ): string {
   const url = new URL('/authorization', loginBaseUrl);
+  const identity = {
+    clientId: identityOverride?.clientId ?? config.identity.clientId,
+    appVersion: identityOverride?.appVersion ?? config.identity.appVersion,
+    pluginVersion: identityOverride?.pluginVersion ?? config.identity.pluginVersion,
+  };
   const params: Record<string, string> = {
     login_version: '1',
     auth_from: 'trae',
     login_channel: 'native_ide',
-    plugin_version: config.identity.pluginVersion,
+    plugin_version: identity.pluginVersion,
     auth_type: 'local',
-    client_id: config.identity.clientId,
+    client_id: identity.clientId,
     redirect: '0',
     login_trace_id: traceId,
     state,
@@ -373,7 +558,7 @@ function authorizationUrl(
     x_device_type: config.identity.deviceType,
     x_os_version: config.identity.osVersion,
     x_env: '',
-    x_app_version: config.identity.appVersion,
+    x_app_version: identity.appVersion,
     x_app_type: config.identity.quality,
     code_challenge: challenge,
     code_challenge_method: 'S256',
