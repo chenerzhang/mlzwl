@@ -166,6 +166,8 @@ x-adapter update
 - 提供仅支持 Trae 与豆包工作的本地模型网关，以及 OpenAI Chat Completions、Responses 和 Anthropic Messages 兼容接口。
 - 在单一 `trae` provider 内提供相互隔离的 Global/CN realm、浏览器 OAuth、realm 独立凭据与模型目录，公开模型 ID 为 `trae-global-*` 和 `trae-cn-*`。
 - 提供模型发现、精确 provider/realm 路由、Pi extension、Claude Code/Codex 接入，以及 macOS launchd 和 Linux systemd 用户服务管理。
+- Trae Global SOLO 模型接入 `solo_work_lite` 工作池：提示词模拟的工具调用（`<toolcall>` 协议注入与流式解析、工具结果多轮回喂）、SOLO 身份 token 独立保存并自动刷新。
+- Global 模型目录支持 `/models` 权威源与本机 Trae 客户端 preset 双源合并；OAuth 登录复用已导入设备身份，规避账号设备数量上限。
 - 将配置、缓存、日志、运行时文件和 provider 凭据统一保存到 `~/.x-adapter`，并支持通过 `X_ADAPTER_*` 环境变量覆盖。
 
 #### Security
@@ -175,6 +177,6 @@ x-adapter update
 
 #### Experimental
 
-- Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
+- Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。Trae Global SOLO 链路（`trae-global-gpt-5.2` 等）经 `solo_work_lite` 池真实验证，模型精确遵从 `<toolcall>` 工具协议；每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 系统开销），高频使用会触发账号级限流。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
 
 <!-- npm-release:end -->
