@@ -3,6 +3,9 @@ import { TraeSession } from '../auth/credential.js';
 import { cacheDir, intEnv } from '../config/env.js';
 import { readModelCache, writeModelCache } from '../state/persistent.js';
 import { FetchLike, TraeModelConfig, fetchModelConfigs, modelCacheKey } from '../upstream/trae-client.js';
+import { fetchSoloRemoteModels } from '../upstream/solo-client.js';
+import { readSoloAgentPresets } from '../upstream/vscdb.js';
+import { mergeSoloRemoteCatalog } from './solo-catalog.js';
 import { publicModelAliases } from './discovery.js';
 
 const cache = new Map<string, { models: TraeModelConfig[]; expiresAt: number }>();
@@ -47,9 +50,39 @@ export async function getModelCatalogResult(
     return { models: diskCached, fromCache: true };
   }
   const models = await fetchModelConfigs(session, fetchImpl);
-  cache.set(key, { models, expiresAt: ttl > 0 ? now + ttl : 0 });
-  writeModelCache(session, models);
-  return { models, fromCache: false };
+  const catalog = session.realm === 'global' ? await mergeGlobalSoloCatalog(session, models, fetchImpl) : models;
+  cache.set(key, { models: catalog, expiresAt: ttl > 0 ? now + ttl : 0 });
+  writeModelCache(session, catalog);
+  return { models: catalog, fromCache: false };
+}
+
+/**
+ * Merge the Global realm catalog with the SOLO remote sources. Both SOLO
+ * sources are best effort: an unreachable remote catalog or a missing local
+ * Trae client must not hide the IDE-discovered models, so failures degrade
+ * to whatever the IDE discovery produced.
+ */
+async function mergeGlobalSoloCatalog(
+  session: TraeSession,
+  ideModels: TraeModelConfig[],
+  fetchImpl: FetchLike,
+): Promise<TraeModelConfig[]> {
+  let remoteModels = [] as Awaited<ReturnType<typeof fetchSoloRemoteModels>>;
+  try {
+    remoteModels = await fetchSoloRemoteModels(session, fetchImpl);
+  } catch {
+    // authoritative source unavailable; presets may still merge below
+  }
+  let presets: Awaited<ReturnType<typeof readSoloAgentPresets>> = [];
+  try {
+    presets = await readSoloAgentPresets();
+  } catch {
+    // no local Trae client or unreadable database
+  }
+  if (!remoteModels.length && !presets.length) {
+    return ideModels;
+  }
+  return mergeSoloRemoteCatalog(session.realm, ideModels, remoteModels, presets);
 }
 
 export function resolveModel(models: TraeModelConfig[], requested: string): TraeModelConfig {

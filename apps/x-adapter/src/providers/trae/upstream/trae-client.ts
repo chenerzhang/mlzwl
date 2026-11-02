@@ -36,6 +36,8 @@ export type TraeModelConfig = {
     multimodal?: boolean;
     /** Whether images returned by tools are accepted as follow-up input. */
     tool_response_multimodal?: boolean;
+    /** Present on entries discovered via the SOLO remote merge path. */
+    solo_source?: 'solo_remote' | 'solo_preset';
   };
 };
 

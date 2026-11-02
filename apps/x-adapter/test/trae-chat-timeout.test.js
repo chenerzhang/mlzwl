@@ -11,8 +11,8 @@ import {
   runTraeChat,
   streamTraeChat,
   traeChatOutputLimits,
-  traeChatTimeouts,
 } from '../dist/providers/trae/upstream/chat.js';
+import { traeChatTimeouts } from '../dist/providers/trae/upstream/watchdog.js';
 import {
   TRAE_BATCH_MODELS_PATH,
   TRAE_CHAT_PATH,
@@ -49,7 +49,11 @@ function withEnv(values, callback) {
 async function withTraeData(callback) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'x-adapter-trae-chat-'));
   const previous = process.env.X_ADAPTER_TRAE_DATA_DIR;
+  const previousVscdb = process.env.X_ADAPTER_TRAE_VSCDB_PATH;
   process.env.X_ADAPTER_TRAE_DATA_DIR = directory;
+  // Isolate tests from any real Trae client installed on this machine: the
+  // solo preset source treats a missing database as "no supplements".
+  process.env.X_ADAPTER_TRAE_VSCDB_PATH = path.join(directory, 'missing-state.vscdb');
   clearModelCache();
   try {
     return await callback(directory);
@@ -59,6 +63,11 @@ async function withTraeData(callback) {
       delete process.env.X_ADAPTER_TRAE_DATA_DIR;
     } else {
       process.env.X_ADAPTER_TRAE_DATA_DIR = previous;
+    }
+    if (previousVscdb === undefined) {
+      delete process.env.X_ADAPTER_TRAE_VSCDB_PATH;
+    } else {
+      process.env.X_ADAPTER_TRAE_VSCDB_PATH = previousVscdb;
     }
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -141,6 +150,12 @@ function fetchWithChat(handler, functions = ['chat_v3']) {
     }
     if (String(input).endsWith(TRAE_BATCH_MODELS_PATH)) {
       return batchResponse(functions);
+    }
+    if (String(input).endsWith('/models')) {
+      return new Response(JSON.stringify({ code: 0, data: { list: [] } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
     throw new Error(`unexpected mock endpoint: ${input}`);
   };
@@ -237,7 +252,13 @@ test('Trae discovery falls back from an empty batch response and tolerates indiv
 test('Trae model cache identity remains stable across token rotation and isolated across realms and accounts', async () => {
   await withTraeData(async () => {
     let calls = 0;
-    const fetchImpl = async () => {
+    const fetchImpl = async (input) => {
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({ code: 0, data: { list: [] } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       calls += 1;
       return batchResponse();
     };

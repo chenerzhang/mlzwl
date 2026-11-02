@@ -62,7 +62,7 @@ export async function runTraeLogin(realm: TraeRealm, options: TraeAuthOptions = 
   const initial = traeRealmConfig(realm);
   const state = randomBytes(24).toString('hex');
   const traceId = randomUUID();
-  const device = createDevice();
+  const device = reuseOrCreateDevice(realm);
   const verifier = randomBytes(48).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const loginGuidance = await requestLoginGuidance(initial, traceId, fetchImpl, timeoutMs);
@@ -592,6 +592,22 @@ function createDevice(): TraeDevice {
     publicKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     privateKey: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
   };
+}
+
+// Reuse the stored device identity (e.g. imported from the official client) so a
+// fresh OAuth login does not register yet another device against the account's
+// device cap (upstream rejects new-device exchanges with 20401). Best effort:
+// unreadable or incomplete credentials fall back to a fresh device.
+function reuseOrCreateDevice(realm: TraeRealm): TraeDevice {
+  try {
+    const existing = readTraeCredential(realm);
+    if (existing && existing.device.machineId && existing.device.publicKey && existing.device.privateKey) {
+      return existing.device;
+    }
+  } catch {
+    // fall through to a new device
+  }
+  return createDevice();
 }
 
 async function postJson(

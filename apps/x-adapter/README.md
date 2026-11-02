@@ -2,7 +2,7 @@
 
 `@mlzwl/x-adapter` 是面向 Trae 与豆包工作的本地模型网关，提供 OpenAI-compatible、Anthropic Messages 和 Pi 接入。
 
-> Trae Global/CN 接入目前为实验性能力：可从本机已登录的官方客户端只读导入 token 与绑定设备身份；独立 Global 浏览器 OAuth 的 callback 已验证，但新设备 token exchange 曾被账号设备数量上限拒绝。Global SG/CN 模型目录与 Chat Completions 链路已使用导入凭据真实验证；Global DeviceProof refresh 也已在官方客户端完全退出后完成一次受控 E2E，并确认 access/refresh token 均发生轮换。当前 `llm_utils_chat` 上游会忽略请求级 `max_tokens`；网关会按请求输出事件数与默认 1 MiB 输出字节上限主动取消，并分别投影为 Chat Completions `finish_reason=length`、Responses `status=incomplete`、Anthropic `stop_reason=max_tokens`，但这不是精确 token 计数。Trae 使用未公开接口，可能受服务条款、风控、额度限制或接口变更影响；请仅使用你有权访问的账号与额度。
+> Trae Global/CN 接入目前为实验性能力：可从本机已登录的官方客户端只读导入 token 与绑定设备身份；独立 Global 浏览器 OAuth 复用已导入的设备身份后已可成功登录（设备数量上限 `20401` 不再触发）。Global SG/CN 模型目录与 Chat Completions 链路已使用导入凭据真实验证；Global DeviceProof refresh 也已在官方客户端完全退出后完成一次受控 E2E。Global 的 SOLO 模型（`trae-global-gpt-5.2` 等）走 `solo_work_lite` 池：需要一次性的 SOLO 身份 OAuth 授权（client `en1oxy7wnw8j9n`，token 存于 `~/.x-adapter/trae/global/solo-token.json` 并自动刷新），工具调用为提示词模拟（实测被上游模型精确遵从，含多轮工具结果回传），与原生 function calling 相比格式遵从度略低。每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 的系统开销），且高频使用会触发账号级限流（3004）。当前 `llm_utils_chat` 上游会忽略请求级 `max_tokens`；网关会按请求输出事件数与默认 1 MiB 输出字节上限主动取消，并分别投影为 Chat Completions `finish_reason=length`、Responses `status=incomplete`、Anthropic `stop_reason=max_tokens`，但这不是精确 token 计数。Trae 使用未公开接口，可能受服务条款、风控、额度限制或接口变更影响；请仅使用你有权访问的账号与额度。
 
 ## 安装
 
