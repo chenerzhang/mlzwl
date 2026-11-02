@@ -19,7 +19,7 @@ import { clearProviderModelCaches, createProviderAdapters } from '../providers/a
 import { readDoubaoCredential } from '../providers/doubao/auth/doubao-cookie.js';
 import { runDoubaoBrowserLogin } from '../providers/doubao/auth/login.js';
 import { importTraeOfficialCredential } from '../providers/trae/auth/native-import.js';
-import { refreshTraeCredential, runTraeLogin } from '../providers/trae/auth/oauth.js';
+import { refreshTraeCredential, runTraeLogin, runTraeSoloLogin } from '../providers/trae/auth/oauth.js';
 import { TRAE_REALMS, TraeRealm } from '../providers/trae/config/realm.js';
 import {
   defaultServiceKind,
@@ -41,7 +41,7 @@ function printHelp(): void {
       '  x-adapter models hide',
       '  x-adapter provider hide',
       '  x-adapter <trae|doubao> models [--json] [--all]',
-      '  x-adapter trae login --realm <global|cn>',
+      '  x-adapter trae login --realm <global|cn> [--solo]',
       '  x-adapter trae import --realm <global|cn> [--storage <path>] [--force]',
       '  x-adapter trae refresh --realm <global|cn>',
       '  x-adapter doubao login [--chrome <path>] [--timeout-ms <ms>] [--create-bridge] [--no-save] [--verbose]',
@@ -209,6 +209,11 @@ async function runProviderLogin(provider: 'trae' | 'doubao', args: string[]): Pr
     return;
   }
   const realm = await requestedTraeRealm(args);
+  if (args.includes('--solo')) {
+    await runTraeSoloLogin(realm, { onEvent: renderTraeAuthEvent });
+    console.log(JSON.stringify({ login: 'completed', provider, realm, identity: 'solo' }, null, 2));
+    return;
+  }
   await runTraeLogin(realm, { onEvent: renderTraeAuthEvent });
   console.log(JSON.stringify({ login: 'completed', provider, realm }, null, 2));
 }

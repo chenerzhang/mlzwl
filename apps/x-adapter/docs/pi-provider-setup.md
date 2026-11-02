@@ -16,6 +16,8 @@ extension 注册 provider `x-adapter`，默认连接 `http://127.0.0.1:10100/v1`
 x-adapter trae import --realm global
 # 如需使用中国区，再执行：x-adapter trae import --realm cn
 # 没有可导入的官方客户端登录时，才使用：x-adapter trae login --realm global|cn
+# 使用 SOLO 模型（gpt-5.2 等）再执行一次 SOLO 身份授权（复用已导入设备身份）：
+x-adapter trae login --realm global --solo
 x-adapter doubao login
 x-adapter models refresh
 ```

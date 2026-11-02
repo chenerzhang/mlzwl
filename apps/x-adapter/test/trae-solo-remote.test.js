@@ -14,6 +14,7 @@ import {
 } from '../dist/providers/trae/upstream/solo-work-chat.js';
 import { ToolCallStreamParser } from '../dist/providers/trae/upstream/solo-prompt-tools.js';
 import { runTraeChat } from '../dist/providers/trae/upstream/chat.js';
+import { runTraeSoloLogin } from '../dist/providers/trae/auth/oauth.js';
 
 const SOLO_MODELS_URL = 'https://core-normal.trae.ai/api/remote/v1/models';
 
@@ -551,5 +552,92 @@ test('runTraeSoloWorkChat fails with a clear error when the SOLO token is missin
       ),
       { code: 'missing_solo_token' },
     );
+  });
+});
+
+test('runTraeSoloLogin requires the global realm and an imported device identity', async () => {
+  await withTraeData(async () => {
+    await assert.rejects(runTraeSoloLogin('cn', { openBrowser: false }), { code: 'solo_login_unsupported_realm' });
+    cleanupSoloTokenFixture();
+    await assert.rejects(runTraeSoloLogin('global', { openBrowser: false, timeoutMs: 2000 }), {
+      code: 'missing_solo_device_identity',
+    });
+  });
+});
+
+test('runTraeSoloLogin completes the PKCE flow and stores the solo token', async () => {
+  await withTraeData(async () => {
+    const directory = process.env.X_ADAPTER_TRAE_DATA_DIR;
+    // Seed the IDE credential so the SOLO flow can reuse its device identity.
+    fs.mkdirSync(`${directory}/global`, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      `${directory}/global/auth.json`,
+      JSON.stringify({
+        version: 1,
+        source: 'official-client',
+        realm: 'global',
+        region: 'sg',
+        account: { uid: '7560904619367449620' },
+        auth: {
+          accessToken: 'ide-token',
+          refreshToken: 'ide-refresh',
+          expiresAt: Date.now() + 3_600_000,
+          clientId: 'ono9krqynydwx5',
+        },
+        product: { appVersion: '3.6.2', pluginVersion: 'icube-ai', versionCode: '20260716', quality: 'stable' },
+        device: {
+          machineId: '11111111-2222-3333-4444-555555555555',
+          deviceId: '777000111222333',
+          publicKey: '-----BEGIN PUBLIC KEY-----\nMIGT\n-----END PUBLIC KEY-----\n',
+          privateKey: '-----BEGIN PRIVATE KEY-----\nMIGT\n-----END PRIVATE KEY-----\n',
+        },
+        updatedAt: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    let exchangeBody = null;
+    const fetchImpl = async (input, init = {}) => {
+      const url = String(input);
+      if (url.includes('ExchangeToken')) {
+        exchangeBody = JSON.parse(init.body);
+        return jsonResponse({
+          Result: {
+            Token: 'solo-minted-token',
+            RefreshToken: 'solo-minted-refresh',
+            TokenExpireAt: 1_800_000_000_000,
+            RefreshExpireAt: 1_900_000_000_000,
+            BoundDeviceID: 'bound-device-1',
+          },
+        });
+      }
+      throw new Error(`unexpected mock endpoint: ${input}`);
+    };
+    const result = await runTraeSoloLogin('global', {
+      openBrowser: false,
+      timeoutMs: 5000,
+      fetchImpl,
+      onEvent: (event) => {
+        if (event.type === 'auth.login.url') {
+          const loginUrl = new URL(event.url);
+          const callback = loginUrl.searchParams.get('auth_callback_url');
+          const traceId = loginUrl.searchParams.get('login_trace_id');
+          const authCodeInfo = encodeURIComponent(JSON.stringify({ AuthCode: 'solo-auth-code', ExpireAt: 1 }));
+          // Hit the real loopback callback server with the native fetch; the
+          // mock fetchImpl only serves the ExchangeToken call.
+          void fetch(`${callback}?authCodeInfo=${authCodeInfo}&loginTraceID=${traceId}`).catch(() => {});
+        }
+      },
+    });
+    void result;
+    assert.equal(exchangeBody.ClientID, 'en1oxy7wnw8j9n');
+    assert.equal(exchangeBody.AuthCode, 'solo-auth-code');
+    assert.equal(exchangeBody.DeviceInfo.DeviceID, '777000111222333');
+    const stored = JSON.parse(fs.readFileSync(`${directory}/global/solo-token.json`, 'utf8'));
+    assert.equal(stored.Result.Token, 'solo-minted-token');
+    assert.equal(stored.Result.RefreshToken, 'solo-minted-refresh');
+    assert.equal(stored.Result.BoundDeviceID, 'bound-device-1');
+    assert.equal(stored._clientID, 'en1oxy7wnw8j9n');
+    fs.rmSync(`${directory}/global/auth.json`, { force: true });
+    cleanupSoloTokenFixture();
   });
 });
