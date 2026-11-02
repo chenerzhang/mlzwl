@@ -6,9 +6,16 @@ import { env, expandHome, intEnv } from './env.js';
 export const TRAE_REALMS = ['global', 'cn'] as const;
 export type TraeRealm = (typeof TRAE_REALMS)[number];
 export type TraeRegion = 'sg' | 'us' | 'cn';
-export type TraeFunction = 'chat_v3' | 'solo_work_lite' | 'solo_agent' | 'solo_agent_lite';
+export type TraeFunction = 'chat_v3' | 'solo_work_lite' | 'solo_agent' | 'solo_agent_lite' | 'solo_agent_remote';
 
 export const TRAE_FUNCTIONS: readonly TraeFunction[] = ['chat_v3', 'solo_work_lite', 'solo_agent', 'solo_agent_lite'];
+
+/**
+ * `solo_agent_remote` is absent from TRAE_FUNCTIONS on purpose: the IDE
+ * `batch_get_detail_param` discovery protocol does not know it. It marks
+ * models served by the Web SOLO remote API
+ * (`core-normal.trae.ai/api/remote/v1`), exposed only by the Global realm.
+ */
 
 export type TraeProductIdentity = {
   clientId: string;

@@ -52,6 +52,8 @@ Trae 凭据按 realm 存储在 `trae/global/auth.json` 与 `trae/cn/auth.json`�
 
 LoginGuidance、Web、登录、account API 与数据 host 分开 allowlist。所有 realm 的 LoginGuidance 都 fail closed；来自响应或 callback 的 host 必须重新校验，不能把用户可控内容直接作为 token 或数据请求目标。callback `host` 仅作为登录服务和区域信号，不会成为 token exchange 或模型/聊天目标。Global 根据可靠 region/host 信号固定 SG/US account API 与数据面；网络错误不会触发跨区域探测。CN 固定 CN account API 与数据面；其模型/聊天 host 为公开参考实现交叉出现但非 Trae 品牌域名的 `trae-api-cn.mchost.guru`，仅因精确 allowlist 才可访问，尚未由真实账号验证。
 
+OAuth 登录复用已导入的设备身份（存在有效 `auth.json` 时），避免每次登录都在账号设备数量上限（`20401`）下注册新设备；无可用设备身份时退回新生成设备。
+
 授权码使用 realm/region 固定 account API 上的 `/trae/api/v3/oauth/ExchangeToken` 与 PKCE 交换，并提交 P-256 设备公钥。refresh 使用同一路径、原设备身份和 ECDSA P-256 `DeviceProof`；签名原文由 method、path、client ID、refresh token、Unix 秒和随机 nonce 构成。首次换证返回 `20401` 时明确报告账号设备数量上限，不把它误判为 PKCE、host 或普通过期错误。401/403 只允许在聊天响应开始前强制 refresh 并重放一次。
 
 ## 模型发现与缓存
@@ -69,6 +71,15 @@ LoginGuidance、Web、登录、account API 与数据 host 分开 allowlist。所
 
 缓存身份由 realm、账号 UID、数据 host、产品版本和 function 集合派生，不含 access token；token 轮换不会制造新缓存。内存和磁盘缓存均按 realm 隔离。
 
+### Web SOLO remote 目录（仅 Global）
+
+Global realm 在 IDE 发现之后叠加 Web SOLO remote 双源：
+
+- 权威源：`GET https://core-normal.trae.ai/api/remote/v1/models`（`X-Trae-Client-Type: web` + `work.trae.ai` Origin/Referer，`Cloud-IDE-JWT` 授权），解析 `data.list[].models[].name`。
+- 补充源：本机官方 Trae 客户端的 `state.vscdb`（`node:sqlite` 只读）中 `solo_agent` preset 目录，携带 `context_window_tokens` 元数据；`gpt-6-sol`、`kimi-k3` 等可调用但不在 `/models` 列表的模型由此补充。
+- 两个源均为 best effort：失败时退化为纯 IDE 目录，不隐藏 IDE 模型；不可用模型调用时直接透传上游业务错误。
+- 同名合并：SOLO 名与 IDE `config_name` 冲突时，在现有条目的 candidate functions 前置 `solo_agent_remote`，路由优先 SOLO remote，mismatch 时回退 IDE 链路；新名字则生成仅含 `solo_agent_remote` 的条目。`metadata.solo_source` 标注来源（`solo_remote`/`solo_preset`）。
+
 ## 聊天协议与 fallback 边界
 
 Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求以目录绑定的 config/model/function 构造；普通 function tools 继续经过 canonical schema 和稳定名称映射。SSE 映射 reasoning、text、tool-call、usage、progress 和 done；没有显式终态的 EOF 视为失败。
@@ -84,6 +95,18 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 真实诊断证明 `llm_utils_chat` 不可靠地执行请求级 `max_tokens`。网关因此使用两个独立的本地输出边界：请求 `max_tokens` 限制可见的 text/reasoning/tool-call 增量事件数，`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_EVENTS` 可进一步收紧；`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_BYTES` 默认将这些事件的文本或序列化 tool-call 总量限制在 1 MiB。达到上限后取消上游流并合成唯一 `done(length)`，流式和非流式调用都通过同一 canonical generator 获得一致结果；协议出口再分别映射为 Chat Completions `length`、Responses `incomplete/max_output_tokens` 和 Anthropic `max_tokens`。该边界只负责限制本机暴露和聚合的数据量，不把 SSE 事件或 UTF-8 字节伪装成 token，也不承诺取消前的上游计费精度。
 
 当前官方包的静态客户端投影明确包含 `/api/ide/v2/llm_raw_chat`，其请求 schema 也并非普通 OpenAI body；它包含 config/model/session/conversation、request/mode/config/access type、reasoning、provider context、biz context 与 extra info 等字段。经授权的 Global 单次受控 probe 使用当前目录模型和该字段族，仍返回 HTTP 400 空体、无 SSE；未 refresh、未探测 v1、未 fallback。结合官方内部 AhaNet/native transport 证据，x-adapter 不把 raw-chat 接入正式聊天链路。
+
+### SOLO work 聊天链路（仅 Global，solo_work_lite）
+
+`solo_agent_remote` function 的模型走 `llm_utils_chat` 的 SOLO work 池，与 IDE 池共用端点但身份、头部和 body 完全不同：
+
+1. **凭据**：必须使用 SOLO 身份 token（OAuth client `en1oxy7wnw8j9n`，存于 `<dataDir>/<realm>/solo-token.json`）。IDE 身份 token 在该池被拒（4120 `CAN_NOT_USE_SOLO_MODE`）；SOLO refresh token 必须配 SOLO client id 刷新（10101 绑定校验）。`auth/solo-token.ts` 负责加载与自动刷新（过期前 5 分钟），刷新走 `growsg-normal.trae.ai` 的 Cloud-IDE `ExchangeToken`。
+2. **伪装**：请求头完整伪装 TRAE SOLO 桌面客户端（`x-device-brand: 83DG`、`x-os-version: Windows 11 Pro`、`x-ide-version: 3.5.51`、`x-app-version: default`、W3C trace 头）。body 只携带 `messages/function/stream/config_name/model`——多余字段（如 `agent_type`/`device_id`/`ide_version`）会能 4023 “model is unknown”。
+3. **工具调用**：该池无原生工具透传，采用提示词模拟——工具目录注入为 `<toolcall_protocol>` system 指令，模型输出的 `<toolcall>{"name","params"}</toolcall>` 块由流式解析器转回 canonical tool-call 事件（相邻重复块丢弃，上游会重放；未闭合/坏块降级为文本，不中断流）。工具结果以 `<tool_result>` 文本回喉，多轮对话天然支持。`required`/指定 `tool_choice` 仍拒绝。协议格式与实测遵从性见 verification.md（参考 wangqi233/trae2api 的实现证据）。
+4. **SSE 映射**：`output.response` 映射 text、`output.reasoning_content` 映射 reasoning、`token_usage` 映射 usage、`done` 映射终态；有解析出的 tool-call 时终态强制为 `tool_calls`。解析出 tool-call 时 `finish_reason=tool_calls`，否则 `stop`。
+5. **回退**：该链路独立于 IDE function 循环，业务码不触发跨池回退；HTTP 401/403 复用共享强制 refresh 重试一次。超时与输出边界与 IDE 链路共用 watchdog 配置族。
+
+前置的 chat_sessions 会话式链路（`solo_agent_remote` 自主 agent）已从生产路由移除：它是服务端编排 agent，无工具注入通道（前端 buildSendMessageRequest 实锤无 tools 字段），且实测无视注入的工具协议（用自己的内置工具或直接回答）；代码与测试保留在 git 历史中。
 
 ## Provider 隔离
 

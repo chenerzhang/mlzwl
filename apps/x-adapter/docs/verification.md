@@ -26,6 +26,7 @@ git diff --check
 - Trae `/api/agent/v3/llm_utils_chat` headers/body、reasoning/text/tool-call/usage SSE、显式终态、请求/配置输出事件和 UTF-8 字节边界、命中边界后的上游取消与 `done(length)`、401/403 最多 refresh/replay 一次、普通错误不自动重试、function mismatch 的有限纠正和 hosted search 明确失败。
 - 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态、可重置空闲看门狗、服务端工具活动日志，以及纯文本工具策略与 `local_runtime` 声明。
 - Pi extension 的 `/x-adapter` 参数拆分与 CLI 代理、模型图片能力读取，以及 `/x-adapter-doubao` 的直接切换、摘要后切换、投影复检、认证预检和工具调用 fail-closed 路径。
+- SOLO work 链路：`/models` 目录解析与同名去重、vscdb preset 解析与双源合并（碰撞前置 `solo_agent_remote`、源标注、不原地修改 IDE 条目）、SOLO 客户端伪装 headers、最小 body 构造、`<toolcall>` 协议注入与流式解析（跨增量切割、围栏容忍、相邻重放去重、坏块降级）、工具结果 transcript、usage/done/error 事件映射、双源全部不可用时退化为 IDE 目录，以及 SOLO token 的加载与自动刷新。
 - Responses history 的 provider 隔离、LRU、TTL、record/replay、总字节限制和图片工具结果顺序。
 - Chat、Responses 与 Anthropic 的 canonical 转换、流式 item 顺序、工具调用映射与资源限制。
 - launchd / systemd 模板和卸载流程。
@@ -49,6 +50,10 @@ git diff --check
 - 因 raw-chat 未通过，代码继续使用 `llm_utils_chat`，并在 canonical Trae 流中加入本地输出上限：请求 `max_tokens` 限制内容增量事件数，配置可进一步收紧；默认 1 MiB 输出字节上限独立生效。命中边界会取消上游并返回 canonical `finish_reason=length`，再由协议层映射为 Chat Completions `length`、Responses `incomplete/max_output_tokens` 和 Anthropic `max_tokens`。离线测试覆盖流式/非流式共用路径、reader 取消传播、UTF-8 边界、协议终态和超限 tool-call 不泄露；这不是 token 计数，也不是真实额度/计费保证。
 - 经单独授权后，以刷新禁用的 guarded fetch 和至多三次生成完成真实输出边界验收：Global 流式与 CN 非流式聚合均在两个内容增量事件后返回 `length`，Global 客户端取消在首个内容事件后返回 `client_abort`。全程共三次 chat、零次 token exchange、零次 raw-chat；只保存事件类型、字节数和终态。
 - 随后在确认 Trae Global 官方客户端进程完全退出后执行唯一一次 Global DeviceProof refresh；关闭网络重试，并硬限制为一次 ExchangeToken、一次模型目录请求和一次短聊天。access token 与 refresh token 均发生轮换，新凭据原子写入隔离 `auth.json`；刷新后模型目录返回一个当前可见模型，短聊天返回 usage 并被两个事件的网关上限终止为 `length`。这证明当前 Global SG 导入身份的 refresh、轮换、持久化、模型发现和基础聊天链路可用，但不证明 CN、长期重复轮换或官方客户端持有旧 token 时的恢复行为。
+- 2026-10-15（续，接力会话）：验证矩阵确认 `llm_utils_chat` + `solo_agent` 对 native_ide 会话身份不可用（4120 `CAN_NOT_USE_SOLO_MODE`，换 OAuth token 无效），而 Web SOLO remote（`core-normal.trae.ai/api/remote/v1`）用同一 OAuth 凭据 + web 客户端头完全跑通；OAuth 登录复用导入设备身份后不再触发设备上限 20401。SOLO remote 真实调用实测：`gpt-5.2`、`gpt-6-sol`、`kimi-k3` 成功，`gpt-6.1-sol` 会话创建成功但静默无输出，`Dola-Seed-2.0-Code` 返回 4001（仅存在于客户端 preset 目录）；`GET /models` 返回 6 个模型且与可调用集合不重合，因此目录采用 `/models` 权威 + vscdb preset 双源合并。
+- 2026-10-16：SOLO remote 接入 x-adapter 后的端到端验收（隔离 daemon、真实凭据、真实上游）：`models refresh` 后 Global 目录共 21 个模型（`/models` 权威 6 + vscdb preset 14 + IDE 1，`metadata.solo_source` 标注来源）；`trae-global-gpt-5.2` 非流式返回 `PI_OK` 与真实 usage（prompt 17149，为 SOLO 系统开销），`trae-global-gpt-6-sol` 流式返回 `PRE`+`SET_OK` 两个增量（thought 差量 + finish summary 补差路径均命中）并以 `completed` 终态结束。
+- 2026-10-17（工具调用攻坚）：系统性穷尽 intl 原生工具透传路线——`llm_raw_chat` v1/v2 在 IDE token（chat_v3/solo_agent × fast_apply/gpt-5.2/`gpt-5.2__dollar__dev`）与 SOLO token 下全部 4023 “model is unknown”（intl 网关未给该 appId 配置模型池，与 CN 侧 2001 同源）；SOLO token + `solo_work_lite` 此前测得 4120/2001 的根因是伪装不完整。chat_sessions（solo_agent）链路的前端证据（work.trae.ai `buildSendMessageRequest` 无 tools 字段）与三次真实调用（模型用内置工具自己干活、无视注入协议）确认该链路无外部工具通道。本机残留的 TRAE SOLO 桌面客户端凭据可解密（wangqi233/trae2api 的静态盐 AES 方案）但 refresh token 已被服务端吊销（20101）。
+- 2026-10-17（成功配方）：参考 wangqi233/trae2api（双区 trae2api，9 月活跃）复刻完整伪装后实测通过：SOLO token（`en1oxy7wnw8j9n`）+ `coresg-normal` + `llm_utils_chat` + **`solo_work_lite`** + SOLO 客户端头部（83DG/Windows/3.5.51/default）+ 最小 body。真实 `gpt-5.2-2025-12-11` 精确遵从 `<toolcall>{"name":"read_file","params":{...}}</toolcall>` 协议（含参数）。该池为 work 档裸 LLM，无服务端 agent 编排——提示词工具模拟成立的必要条件。上游会重放相同 toolcall 块（实测单块重复 6 次），解析层做相邻去重。网关层端到端（OpenAI tools 进→tool_calls 出）因当日触达账号级限流（3004）待窗口解除后补录；离线测试 149/149 覆盖请求构造、协议注入、流式解析、去重、降级与多轮 transcript。
 
 以下内容仍未被真实账号确认：
 
@@ -56,6 +61,7 @@ git diff --check
 - Global US/USTTP 独立链路和企业账号 host 变体。
 - 非品牌 CN 数据 host `trae-api-cn.mchost.guru` 的当前归属与长期稳定性；本轮仅确认当前真实账号链路可用。
 - 工具调用、reasoning、字节上限单独命中、套餐/额度行为与其他业务错误码；当前纯文本边界、客户端取消和最小聊天成功，不代表每个返回模型或高级能力都可用。
+- SOLO remote 链路的多轮长对话、除 `gpt-5.2`/`gpt-6-sol`/`kimi-k3` 外的 preset 模型、`gpt-6.1-sol` 静默无输出的原因、CN 侧是否存在等价 remote 协议，以及 SOLO 会话的服务端保留时长与额度计费细则。
 - 官方客户端升级后的 storage codec、版本、设备身份和请求字段要求。
 
 私有接口可能随时失效，也可能触发条款、风控、额度或封号风险。真实 smoke 必须作为单独阶段，由用户明确授权后进行，不能因离线测试通过而默认执行。

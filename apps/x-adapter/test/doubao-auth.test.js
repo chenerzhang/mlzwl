@@ -118,6 +118,9 @@ test('Doubao credential rejects a broadly readable config file', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doubao-insecure-'));
   const file = path.join(directory, 'config.json');
   fs.writeFileSync(file, JSON.stringify({ cookies: 'sessionid=secret' }), { mode: 0o644 });
+  // The process umask can tighten writeFileSync modes (e.g. 077 in CI shells);
+  // the test needs the file to be genuinely world-readable.
+  fs.chmodSync(file, 0o644);
   try {
     withEnv({ X_ADAPTER_DOUBAO_COOKIE: undefined, X_ADAPTER_DOUBAO_CONFIG_PATH: file }, () =>
       assert.throws(() => readDoubaoCredential(), { code: 'insecure_doubao_config_permissions' }),
