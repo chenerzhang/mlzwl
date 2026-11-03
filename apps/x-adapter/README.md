@@ -179,7 +179,6 @@ x-adapter update
 - 在单一 `trae` provider 内提供相互隔离的 Global/CN realm、浏览器 OAuth、realm 独立凭据与模型目录，公开模型 ID 为 `trae-global-*` 和 `trae-cn-*`。
 - 提供模型发现、精确 provider/realm 路由、Pi extension、Claude Code/Codex 接入，以及 macOS launchd 和 Linux systemd 用户服务管理。
 - Trae Global SOLO 模型接入 `solo_work_lite` 工作池：提示词模拟的工具调用（`<toolcall>` 协议注入与流式解析、工具结果多轮回喂）、SOLO 身份 token 独立保存并自动刷新。
-- 豆包工作接入实验性的客户端工具桥接：`x-adapter doubao login --create-bridge` 在用户确认后创建或复用个人 Connector，请求使用私有 `runtime_type: 2` 与 `/alice/office/tool_local/*` 通道完成工具调用、结果上传和同一轮续接。
 - Global 模型目录支持 `/models` 权威源与本机 Trae 客户端 preset 双源合并；OAuth 登录复用已导入设备身份，规避账号设备数量上限。
 - 将配置、缓存、日志、运行时文件和 provider 凭据统一保存到 `~/.x-adapter`，并支持通过 `X_ADAPTER_*` 环境变量覆盖。
 
@@ -191,5 +190,23 @@ x-adapter update
 #### Experimental
 
 - Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。Trae Global SOLO 链路（`trae-global-gpt-5.2` 等）经 `solo_work_lite` 池真实验证，模型精确遵从 `<toolcall>` 工具协议；每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 系统开销），高频使用会触发账号级限流。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
+
+### [0.1.1] - 2026-11-03
+
+#### Added
+
+- 豆包工作支持实验性的客户端工具桥接：`x-adapter doubao login --create-bridge` 在交互式确认后创建或复用 `X Adapter Bridge` 个人 Connector，请求使用私有 `runtime_type: 2`、`localConnectors` 与 `/alice/office/tool_local/*` 通道完成工具调用下发、结果上传、同轮续接和迟到结果恢复。普通请求不会静默创建 Connector。
+- Trae 上游若同时声明 `display_config.max_mode`、`context_window_tokens.max` 与 `__max` 后端 detail，网关会把一条目录项展开为 Standard 和 `-max` 两个可精确路由的模型。每个变体保留自己的 `model_name`、输入上限、输出上限与总上下文。
+- 模型发现三方言统一投影总上下文：OpenAI `metadata.context_window_tokens`、Codex `context_window` / `max_context_window` / `max_output_tokens`、Claude `max_input_tokens` / `max_tokens`。Pi extension 使用总上下文做 context meter，并把输出上限传给 `maxTokens`。
+
+#### Fixed
+
+- 修复 Max 变体同时声明 Standard 公开模型 ID 的路由歧义：两个变体共享同一上游 `config_name`，导致该 ID 的解析结果依赖数组顺序。
+- 修复变体行丢失 `display_config` 与 `quota_info` 的 quota 回退链、忽略 entry 级 `default_reasoning_level`，以及按后端变体而非最终 ID 后缀追加 ` / Max` 显示名。
+
+#### Security
+
+- 客户端工具参数改用 Ajv 2020 严格模式校验，覆盖 `$ref`、`const`、`pattern`、数值与数组边界、`format`。未知关键字与 `$async` schema 在编译期以 `invalid_input` 拒绝，不触发异步校验。
+- 豆包桥接将 `missing_doubao_bridge`、`doubao_bridge_disabled`、`doubao_tool_turn_expired`、`tool_output_mismatch`、`upstream_tool_choice_not_satisfied` 映射为稳定的 HTTP 与 SSE 错误；活动工具轮次只存在于当前 daemon 内存，并受绝对存活上限约束。
 
 <!-- npm-release:end -->
