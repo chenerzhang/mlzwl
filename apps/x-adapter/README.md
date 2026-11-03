@@ -195,6 +195,12 @@ x-adapter update
 
 - Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。Trae Global SOLO 链路（`trae-global-gpt-5.2` 等）经 `solo_work_lite` 池真实验证，模型精确遵从 `<toolcall>` 工具协议；每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 系统开销），高频使用会触发账号级限流。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
 
+### [0.1.2] - 2026-11-03
+
+#### Added
+
+- 新增 `x-adapter trae login --realm global --solo`：面向 SOLO OAuth 客户端的身份授权，为 `solo_work_lite` 池模型提供官方登录入口；复用已导入的 IDE 设备身份（需先执行 `trae import`），凭据存入 solo-token 文件并自动刷新。
+
 ### [0.1.1] - 2026-11-03
 
 #### Added

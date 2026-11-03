@@ -1,6 +1,6 @@
 {
   "name": "@mlzwl/x-adapter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local model gateway for Trae and Doubao Work.",
   "type": "module",
   "keywords": [
