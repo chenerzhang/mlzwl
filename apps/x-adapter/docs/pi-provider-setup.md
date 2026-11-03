@@ -64,7 +64,7 @@ base URL 必须是 loopback HTTP(S) 地址，不能携带自定义路径。`X_AD
 
 ### 从工具会话安全切换到豆包
 
-豆包模型不能接续真实 `tool_call` / `tool_result` transcript。若当前会话只有纯文本，可直接选择豆包；若已经调用过 Pi 工具，请不要用普通 `/model` 强行切换，而应执行：
+豆包模型的工具轮次由网关的私有 Connector 桥接接管，Pi 侧 `tool_call` / `tool_result` transcript 不能直接沿用旧会话语义。若当前会话只有纯文本，可直接选择豆包；若已经调用过 Pi 工具，请不要用普通 `/model` 强行切换，而应执行：
 
 ```text
 /x-adapter-doubao
@@ -73,11 +73,12 @@ base URL 必须是 loopback HTTP(S) 地址，不能携带自定义路径。`X_AD
 
 省略模型 ID 时默认使用 `doubao-work-auto`。该命令会等待当前轮结束，用**当前工具型模型**生成一份禁止调用工具的迁移摘要，再追加 retain-none compaction；只有在确认该 compaction 已写入 Pi session 后，才切换到目标豆包模型。摘要失败、尝试调用工具、用户按 Esc 中止、目标模型/认证不可用、compaction 未落盘或 `setModel` 失败时都不会切换。流程进行中也会拦截新的输入，避免摘要与用户消息交错。
 
-这不是无损转换：摘要可能遗漏细节，并额外消耗当前模型的一次请求。retain-none 仅表示后续活动模型上下文从摘要开始，不代表删除审计记录；原始消息、工具调用和工具结果仍保留在 Pi 的 append-only session transcript 中。命令也不会把豆包升级成 coding agent；切换后豆包仍只能使用已验证的纯文本能力，不能执行 Pi 的 `read`、`bash`、`edit` 等工具。已经处于异常的“豆包模型 + 工具历史”状态时，应先切回支持工具的模型生成迁移摘要。
+这不是无损转换：摘要可能遗漏细节，并额外消耗当前模型的一次请求。retain-none 仅表示后续活动模型上下文从摘要开始，不代表删除审计记录；原始消息、工具调用和工具结果仍保留在 Pi 的 append-only session transcript 中。豆包的工具能力依赖实验性的私有 Connector 桥接，只覆盖本包已确认的工具名与串行调用；它不是通用 coding agent 保证。已经处于异常的“豆包模型 + 工具历史”状态时，应先切回支持工具的模型生成迁移摘要。
 
 ## 能力边界
 
 - Trae Global/CN 目前是实验性能力；官方客户端凭据/设备身份导入、Global SG/CN 模型目录、两个 realm 的最小非流式聊天、Global 流式输出边界/客户端取消，以及一次 Global DeviceProof refresh 已完成本机验证。CN refresh、工具调用和 reasoning 仍需分别验证。普通 function tools 保留，hosted web search 返回 `unsupported_hosted_search`，并且不跨 realm fallback。
 - extension 从 Codex 模型发现的 `input_modalities` 读取图片能力。只有网关明确声明 `image` 的模型才会让 Pi 保留用户图片和工具返回图片；未声明的模型按纯文本处理。
-- 豆包工作当前是纯文本 provider；图片输入在 adapter 执行前返回 `unsupported_multimodal_content`。Pi 默认附带的可选工具目录会被忽略，但强制工具选择或已有工具调用/结果会返回 `unsupported_tools`。该错误体同时携带 `local_runtime` 声明，说明拒绝原因不是能力缺失而是缺少受支持的官方客户端桥接（`authorization: official_client_bridge_required`、`reason: official_client_bridge_unavailable`）。
+- extension 从 Codex 模型发现的 `context_window` 与 `max_output_tokens` 读取上下文和输出上限。Trae 若由上游明确提供 Max 后端，Pi 会把它显示为独立的 `-max` 模型，例如 `trae-global-deepseek-v4.1-flash` 是 200K Standard，`trae-global-deepseek-v4.1-flash-max` 是 1M Max。此处 Max 是后端变体，不是 `/thinking` 中的推理强度。
+- 豆包工作可通过实验性的私有 Connector 协议调用 Pi 客户端工具。首次使用前，用户必须显式执行 `x-adapter doubao login --create-bridge`，并确认创建 `X Adapter Bridge`；普通请求不会自动创建连接器。工具轮次必须保留 `x-session-id` 或 Responses `previous_response_id`，且活动轮次仅在当前 daemon 进程内保存。当前桥接只支持串行客户端工具调用。图片输入仍在 adapter 执行前返回 `unsupported_multimodal_content`。
 - 模型选择器名称会保留目录提供的 `model_load` 百分比；未提供时不会伪造。

@@ -88,6 +88,7 @@ function anthropicMessagesToCanonical(messages: unknown): CanonicalMessage[] {
           role: 'tool',
           content: textBlocks(block.content),
           tool_call_id: toolUseId,
+          tool_result_error: block.is_error === true,
           name: toolNames.get(toolUseId) ?? '',
         });
       }

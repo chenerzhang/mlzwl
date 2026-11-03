@@ -18,6 +18,11 @@ function modelLoad(model: PublicModel): number | null {
   return typeof model.modelLoad === 'number' && Number.isFinite(model.modelLoad) ? model.modelLoad : null;
 }
 
+/** Total context for clients; falls back to the provider input limit. */
+function contextWindow(model: PublicModel): number | undefined {
+  return model.contextWindowTokens ?? model.maxInputTokens;
+}
+
 function displayName(model: PublicModel): string {
   return `${providerDisplayName(model.provider)} ${model.displayName || model.upstreamId}`;
 }
@@ -45,6 +50,7 @@ export function openAiModelsResponse(models: PublicModel[]) {
         is_default: Boolean(model.isDefault),
         max_tokens: model.maxOutputTokens,
         prompt_max_tokens: model.maxInputTokens,
+        context_window_tokens: contextWindow(model),
         model_load: modelLoad(model),
         model_load_percent: modelLoad(model),
         hot: modelLoad(model),
@@ -67,10 +73,11 @@ export function codexModelsResponse(models: PublicModel[]) {
         effort,
         description: `${effort} reasoning effort`,
       })),
-      ...(typeof model.maxInputTokens === 'number'
+      max_output_tokens: model.maxOutputTokens,
+      ...(typeof contextWindow(model) === 'number'
         ? {
-            context_window: model.maxInputTokens,
-            max_context_window: model.maxInputTokens,
+            context_window: contextWindow(model),
+            max_context_window: contextWindow(model),
             effective_context_window_percent: 95,
           }
         : {}),

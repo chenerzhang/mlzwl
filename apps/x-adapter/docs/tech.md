@@ -26,6 +26,21 @@ client
 
 `ModelRegistry` 并行发现 provider，Trae adapter 再并行发现两个 realm。失败被限制在对应边界，不阻塞另一个 realm 或豆包工作。公开模型 ID 为 `trae-global-*`、`trae-cn-*` 或 `doubao-work-*`，registry 只接受精确公开 ID。
 
+### Trae Standard 与 Max 后端
+
+Trae 目录若同时声明 `display_config.max_mode=true`、`context_window_tokens.max` 和 `model_detail_list` 中的 `__max` 后端，adapter 把一条上游配置展开为两个可精确路由的模型：
+
+1. Standard 保留原 provider-local ID（`<realm>-<config_name>`），使用 `__dev` detail。
+2. Max 增加 `-max` 后缀（`<realm>-<config_name>-max`），使用 `__max` detail。
+
+每个变体保存自己的 `model_name`、`prompt_max_tokens`（输入上限）、`max_tokens`（输出上限）和 `context_window_tokens`（总上下文）。代表值：DeepSeek-V4.1-Flash Standard 为 168K 输入 + 32K 输出 = 200K 总上下文；Max 为 936K 输入 + 64K 输出 = 1M 总上下文。
+
+Max 是后端变体，不等于 reasoning effort。两个变体分别沿用上游声明的推理强度列表；detail 级 `model_extra_config.reasoning_effort_options` 只在 entry 级 `supported_reasoning_levels` 缺失时补齐。
+
+缺少任一 Max 合同信号时只暴露 Standard，避免猜测不可用路由。若某条配置只有 `__max` detail，该条自身就投影为 Max 变体。
+
+Pi 用总上下文做 context meter 和 compaction，用 `max_output_tokens` 作为请求输出上限；缺失时回退包内默认值。
+
 ## 配置、凭据与产品身份
 
 统一数据根目录是 `~/.x-adapter`，可由 `X_ADAPTER_DATA_DIR` 覆盖。runtime、logs、cache、统一配置以及 provider 子目录都从该根目录派生。
@@ -67,7 +82,7 @@ OAuth 登录复用已导入的设备身份（存在有效 `auth.json` 时），�
 
 单 function 失败只舍弃该 function；全部失败且无有效缓存时 realm 不可用。模型元数据保存 realm、config name、model name、实际发现的 candidate functions，以及目录 `display_config` 给出的图片输入/工具图片能力，不使用静态目录伪造账号权益。
 
-`display_config.multimodal` 是目录提示而不是绝对契约。网关以它作为默认值，并只为已有实测证据的例外维护最小覆盖；字段缺失时 fail closed 为纯文本。统一发现接口分别输出 OpenAI `metadata.input_modalities`、Codex `input_modalities` / `supports_image_detail_original` 和 Claude `capabilities.image_input.supported`。Pi extension 读取该结论；三种请求协议都会在 adapter 执行前拒绝发给纯文本模型的图片，Responses 在合并 replay history 后再次校验，错误为 HTTP 400 `unsupported_multimodal_content`。豆包工作始终声明为纯文本。
+`display_config.multimodal` 是目录提示而不是绝对契约。网关以它作为默认值，并只为已有实测证据的例外维护最小覆盖；字段缺失时 fail closed 为纯文本。统一发现接口分别输出 OpenAI `metadata.input_modalities`、Codex `input_modalities` / `supports_image_detail_original` 和 Claude `capabilities.image_input.supported`。Pi extension 读取该结论；三种请求协议都会在 adapter 执行前拒绝发给纯文本模型的图片，Responses 在合并 replay history 后再次校验，错误为 HTTP 400 `unsupported_multimodal_content`。豆包工作始终声明为纯文本消息内容；工具调用与工具结果走独立的 Connector 通道，不改变内容模态。
 
 缓存身份由 realm、账号 UID、数据 host、产品版本和 function 集合派生，不含 access token；token 轮换不会制造新缓存。内存和磁盘缓存均按 realm 隔离。
 
@@ -94,6 +109,8 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 
 真实诊断证明 `llm_utils_chat` 不可靠地执行请求级 `max_tokens`。网关因此使用两个独立的本地输出边界：请求 `max_tokens` 限制可见的 text/reasoning/tool-call 增量事件数，`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_EVENTS` 可进一步收紧；`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_BYTES` 默认将这些事件的文本或序列化 tool-call 总量限制在 1 MiB。达到上限后取消上游流并合成唯一 `done(length)`，流式和非流式调用都通过同一 canonical generator 获得一致结果；协议出口再分别映射为 Chat Completions `length`、Responses `incomplete/max_output_tokens` 和 Anthropic `max_tokens`。该边界只负责限制本机暴露和聚合的数据量，不把 SSE 事件或 UTF-8 字节伪装成 token，也不承诺取消前的上游计费精度。
 
+模型发现三方言都投影总上下文：OpenAI `metadata.context_window_tokens`，Codex `context_window` / `max_context_window` 与 `max_output_tokens`，Claude `max_input_tokens` / `max_tokens`。Provider 的 `prompt_max_tokens` 仍表示输入上限，不与总上下文混用。
+
 当前官方包的静态客户端投影明确包含 `/api/ide/v2/llm_raw_chat`，其请求 schema 也并非普通 OpenAI body；它包含 config/model/session/conversation、request/mode/config/access type、reasoning、provider context、biz context 与 extra info 等字段。经授权的 Global 单次受控 probe 使用当前目录模型和该字段族，仍返回 HTTP 400 空体、无 SSE；未 refresh、未探测 v1、未 fallback。结合官方内部 AhaNet/native transport 证据，x-adapter 不把 raw-chat 接入正式聊天链路。
 
 ### SOLO work 聊天链路（仅 Global，solo_work_lite）
@@ -115,6 +132,28 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 - 本机客户端 Authorization 仅由 gateway 鉴权 middleware 消费，不得转发到 provider。
 - 不允许跨 realm、跨模型或跨 provider fallback。
 
+### 豆包工作工具桥接
+
+豆包工作的客户端工具桥接是实验能力，依赖私有接口，不是公开或受支持的 API。实现分四层：
+
+1. `prepareDoubaoRequest` 保留真实客户端工具与工具历史。只有 `tool_choice: none` 才移除工具目录；强制选择与显式选择在 adapter 执行前校验声明一致性。
+2. `createDoubaoToolRuntime` 为每个轮次生成 sandbox、sandbox env 与 client env ID，并通过 `ensureDoubaoBridge` 查找或创建名为 `X Adapter Bridge` 的个人 Connector。`ensureDoubaoBridge` 只在显式 `--create-bridge` 确认时创建；普通请求缺少 Connector 时以 `missing_doubao_bridge` 失败。
+3. `startCompletion` 在存在运行时把 `runtime_type` 设为 2，并发送 `client_option`、`agent_task_param` 与 `task_input_json`（含 AGENTS 内容与 `localConnectors[].mcpToolsList`）。
+4. `doubaoToolStream` 通过 HTTP/2 长连接订阅 `/alice/office/tool_local/chunk_stream`。`runToolListener` 按 sandbox ID 与 conversation ID 过滤调用，`routeDoubaoToolCall` 只接受 `connector.call` 与少量已映射的内置工具名，并按客户端 JSON Schema 校验参数。
+
+参数校验使用 Ajv 2020 严格模式编译，支持 `$ref`、`const`、`pattern`、数值与数组边界、`format` 等完整约束。未知关键字、无效 schema 或 `$async` schema 在编译阶段以 `invalid_input` 失败，不会触发异步校验。校验函数按 schema 对象缓存。
+
+工具轮次的状态机只保存在当前 daemon 内存中：
+
+- 远端调用转为 canonical `tool_call_delta` 后，当前 HTTP 响应以 `finish_reason=tool_calls` 结束。
+- 客户端下一次请求必须携带匹配 `call_id` 的 tool result。`currentTurnToolResults` 只取末尾连续的 tool 消息，已完成的历史结果被忽略。
+- 结果上传到 `/alice/office/tool_local/upload_tool_call_result` 后继续消费原 completion 流。
+- 只支持串行调用。若豆包在上一调用完成前再发一个调用，网关直接向豆包上传“不支持并行”的错误结果，不把它暴露给客户端。
+- 工具长时间运行时先返回“仍在运行”，再通过桥接等待工具恢复。`X_ADAPTER_DOUBAO_TOOL_WAIT_MS` 控制等待时限，`X_ADAPTER_DOUBAO_TOOL_LIMIT_MS` 是从首个 pending 调用开始计算的绝对上限。
+- 绝对上限到期时，网关中止上游流与工具监听，删除活动轮次，并让迟到结果以 `doubao_tool_turn_expired` 或 `previous_response_unavailable` 失败。
+
+`local_runtime` 元数据声明 `available: true`、`executor: client`、`authorization: private_connector_bridge`、`reason: experimental_private_api`。`dispatch`、`resultUpload` 与 `recovery` 为 true；`cancellation` 与 `signedEnvelope` 为 false。该声明表示代码路径存在，不表示豆包官方支持。
+
 ## Canonical 与 HTTP 安全
 
 Chat Completions、Responses 与 Anthropic Messages 转换为 canonical request，由选定 adapter 执行，再投影回调用方协议。
@@ -132,6 +171,6 @@ CLI 使用 owner-only runtime lock 和 control socket 管理 daemon。停止与�
 
 Pi extension 仅接受 loopback URL，可自动安装公共 npm 包并启动 daemon；不自动执行 provider 登录。
 
-extension 另注册 `/x-adapter-doubao [model-id]`，解决 Pi 工具 transcript 不能直接交给纯文本豆包模型的问题。命令先从 `buildSessionProjection()` 判断活动上下文是否包含 `toolCall` / `toolResult`：没有时可直接切换；存在时则以带随机 handoff ID 的 custom turn 请求当前模型生成自包含摘要。`before_agent_start` 只对匹配该 ID 的 custom turn 清空 selected tools，`tool_call` 再作为第二道门禁阻止并终止任何违规调用。只有 assistant 以正常 `stop` 返回非空文本，`agent_before_settle` 才追加 `firstKeptEntryId: null` 的 retain-none compaction；Pi 持久化时会把该 null 改写为 compaction 自身 ID，使活动投影从摘要开始而不携带旧工具 transcript，但 append-only session 文件里的原始条目不会删除。`agent_settled` 必须按随机 handoff ID 找到已持久化边界后才调用 `setModel`，避免旧 compaction 或同目标模型记录被误认。目标认证在摘要前预检，并在最终切换时复检；摘要错误/中止/工具调用、边界非 completed、落盘缺失或模型切换异常均 fail closed。切换流程期间 input hook 拦截新输入，普通 `/model` 不被劫持。该迁移是有损摘要，只改变 Pi 的活动上下文，不增加豆包的工具能力。
+extension 另注册 `/x-adapter-doubao [model-id]`，解决 Pi 工具 transcript 不能直接沿用旧会话语义的问题。命令先从 `buildSessionProjection()` 判断活动上下文是否包含 `toolCall` / `toolResult`：没有时可直接切换；存在时则以带随机 handoff ID 的 custom turn 请求当前模型生成自包含摘要。`before_agent_start` 只对匹配该 ID 的 custom turn 清空 selected tools，`tool_call` 再作为第二道门禁阻止并终止任何违规调用。只有 assistant 以正常 `stop` 返回非空文本，`agent_before_settle` 才追加 `firstKeptEntryId: null` 的 retain-none compaction；Pi 持久化时会把该 null 改写为 compaction 自身 ID，使活动投影从摘要开始而不携带旧工具 transcript，但 append-only session 文件里的原始条目不会删除。`agent_settled` 必须按随机 handoff ID 找到已持久化边界后才调用 `setModel`，避免旧 compaction 或同目标模型记录被误认。目标认证在摘要前预检，并在最终切换时复检；摘要错误/中止/工具调用、边界非 completed、落盘缺失或模型切换异常均 fail closed。切换流程期间 input hook 拦截新输入，普通 `/model` 不被劫持。该迁移是有损摘要，只改变 Pi 的活动上下文；豆包的工具能力仍由实验性 Connector 桥接提供，不是通用 coding agent 保证。
 
 截至 2026-10-15，Trae 双 realm 行为来自公开源码、多来源协议交叉分析、官方安装包的静态 REA 证据、本仓库离线 mock 和经授权的受控真实请求。Global 个人账号验证确认了授权页、精确 `/authorize` loopback callback、`loginTraceID` correlation 和 callback 字段形状；独立新设备的首次 token exchange 返回 HTTP 403 / 业务码 `20401`。随后在本机 Global/CN 官方 `storage.json` 上确认了真实加密凭据、唯一设备条目和匹配 P-256 密钥，完成隔离目录导入，并从固定 Global SG/CN 数据面成功取得账号可见模型目录；重复验证时目录数量会随账号状态变化，因此不固化为静态列表。两个 realm 的最小非流式纯文本请求均成功；输出边界另以 Global 流式、CN 非流式聚合和 Global 客户端取消完成真实验收。Global DeviceProof refresh 在官方客户端完全退出后执行一次，access/refresh token 均发生轮换，隔离凭据原子更新，随后模型发现和一条有界短聊天成功。全程未输出真实凭据或模型 ID，也未保存正文。单次受控 Global `/api/ide/v2/llm_raw_chat` 仍为 HTTP 400 空体、无 SSE，因此没有接入。CN refresh、工具调用、reasoning、Global US/企业 host、长期轮换和全部目录模型仍无完整真实 E2E 证据，该能力继续标记为实验性。

@@ -44,7 +44,7 @@ function printHelp(): void {
       '  x-adapter trae login --realm <global|cn>',
       '  x-adapter trae import --realm <global|cn> [--storage <path>] [--force]',
       '  x-adapter trae refresh --realm <global|cn>',
-      '  x-adapter doubao login [--chrome <path>] [--timeout-ms <ms>] [--no-save] [--verbose]',
+      '  x-adapter doubao login [--chrome <path>] [--timeout-ms <ms>] [--create-bridge] [--no-save] [--verbose]',
       '  x-adapter doubao refresh',
       '  x-adapter update',
       '  x-adapter install-service [--output <path>]',
@@ -183,11 +183,27 @@ async function runProviderLogin(provider: 'trae' | 'doubao', args: string[]): Pr
   if (provider === 'doubao') {
     const chromeIndex = args.indexOf('--chrome');
     const timeoutIndex = args.indexOf('--timeout-ms');
+    const createBridge = args.includes('--create-bridge');
+    if (createBridge) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw new Error('Creating X Adapter Bridge requires an interactive terminal confirmation.');
+      }
+      const { confirm } = await import('@inquirer/prompts');
+      const approved = await confirm({
+        message:
+          'Create or reuse the personal Connector "X Adapter Bridge" using Doubao Work private local-agent APIs?',
+        default: false,
+      });
+      if (!approved) {
+        throw new Error('X Adapter Bridge creation was not approved.');
+      }
+    }
     const result = await runDoubaoBrowserLogin({
       chrome: chromeIndex >= 0 ? args[chromeIndex + 1] : undefined,
       timeoutMs: timeoutIndex >= 0 && args[timeoutIndex + 1] ? Number(args[timeoutIndex + 1]) : undefined,
       noSave: args.includes('--no-save'),
       verbose: args.includes('--verbose'),
+      createBridge,
     });
     console.log(JSON.stringify({ provider, login: 'completed', ...result }, null, 2));
     return;

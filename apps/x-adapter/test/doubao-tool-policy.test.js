@@ -49,48 +49,49 @@ function headers(extra = {}) {
   return { host: '127.0.0.1:10100', 'content-type': 'application/json', ...extra };
 }
 
-test('Doubao strips optional tool catalogs without mutating the canonical request', () => {
+test('Doubao preserves client tools and transcripts without mutating the canonical request', () => {
   const request = { ...canonicalTextRequest, tools: [tool], tool_choice: 'auto' };
   const prepared = prepareDoubaoRequest(request);
-  assert.equal(prepared.tools, undefined);
-  assert.equal(prepared.tool_choice, undefined);
-  assert.equal(request.tools.length, 1);
-  assert.equal(request.tool_choice, 'auto');
+  assert.equal(prepared, request);
+  assert.equal(prepared.tools.length, 1);
+  assert.equal(prepared.tool_choice, 'auto');
 
   const disabled = prepareDoubaoRequest({ ...canonicalTextRequest, tools: [tool], tool_choice: 'none' });
   assert.equal(disabled.tools, undefined);
   assert.equal(disabled.tool_choice, undefined);
+
+  const transcript = prepareDoubaoRequest({
+    ...canonicalTextRequest,
+    tools: [tool],
+    messages: [
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: '' }],
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"query":"hello"}' } }],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'result' }] },
+    ],
+  });
+  assert.equal(transcript.messages[1].tool_call_id, 'call_1');
 });
 
-test('Doubao rejects forced tool choices and actual tool transcripts', () => {
-  assert.throws(() => prepareDoubaoRequest({ ...canonicalTextRequest, tools: [tool], tool_choice: 'required' }), {
-    code: 'unsupported_tools',
-  });
-  assert.throws(
-    () =>
-      prepareDoubaoRequest({
-        ...canonicalTextRequest,
-        tools: [tool],
-        tool_choice: { type: 'function', function: { name: 'lookup' } },
-      }),
-    { code: 'unsupported_tools' },
+test('Doubao validates forced tool choices', () => {
+  assert.doesNotThrow(() => prepareDoubaoRequest({ ...canonicalTextRequest, tools: [tool], tool_choice: 'required' }));
+  assert.doesNotThrow(() =>
+    prepareDoubaoRequest({
+      ...canonicalTextRequest,
+      tools: [tool],
+      tool_choice: { type: 'function', function: { name: 'lookup' } },
+    }),
   );
   assert.throws(
     () =>
       prepareDoubaoRequest({
         ...canonicalTextRequest,
-        messages: [
-          {
-            role: 'assistant',
-            content: [{ type: 'text', text: '' }],
-            tool_calls: [
-              { id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{"query":"hello"}' } },
-            ],
-          },
-          { role: 'tool', tool_call_id: 'call_1', content: [{ type: 'text', text: 'result' }] },
-        ],
+        tools: [tool],
+        tool_choice: { type: 'function', function: { name: 'missing' } },
       }),
-    { code: 'unsupported_tools' },
+    { code: 'invalid_input' },
   );
 });
 
@@ -116,7 +117,9 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
       body: JSON.stringify({ model: DOUBAO_TEST_MODEL, input: 'hello', tools: [tool], tool_choice: 'auto' }),
     });
     assert.equal(responses.status, 200);
-    assert.equal((await responses.json()).output_text, 'PONG');
+    const responsesBody = await responses.json();
+    assert.equal(responsesBody.output_text, 'PONG');
+    assert.equal(responsesBody.parallel_tool_calls, false);
 
     const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
@@ -163,7 +166,10 @@ test('Doubao optional tool catalogs work through Chat, Responses, and Anthropic 
       }),
     });
     assert.equal(responses.status, 200);
-    assert.match(await responses.text(), /PONG/);
+    const responsesText = await responses.text();
+    assert.match(responsesText, /PONG/);
+    const completed = JSON.parse(responsesText.match(/event: response.completed\ndata: (.+)\n\n/)?.[1] ?? '{}');
+    assert.equal(completed.response.parallel_tool_calls, false);
 
     const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
@@ -240,7 +246,7 @@ test('Doubao rejects images in all protocols before provider execution', async (
   });
 });
 
-test('Doubao forced tools and tool transcripts remain explicit client errors', async () => {
+test('Doubao mock path does not claim forced tool execution', async () => {
   await withDoubaoMock(async () => {
     const app = doubaoMockApp();
     const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
@@ -253,22 +259,8 @@ test('Doubao forced tools and tool transcripts remain explicit client errors', a
         tool_choice: 'required',
       }),
     });
-    assert.equal(chat.status, 400);
-    assert.equal((await chat.json()).error.code, 'unsupported_tools');
-
-    const responses = await app.request('http://127.0.0.1:10100/v1/responses', {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({
-        model: DOUBAO_TEST_MODEL,
-        input: [
-          { type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"query":"hello"}' },
-          { type: 'function_call_output', call_id: 'call_1', output: 'result' },
-        ],
-      }),
-    });
-    assert.equal(responses.status, 400);
-    assert.equal((await responses.json()).error.code, 'unsupported_tools');
+    assert.equal(chat.status, 502);
+    assert.equal((await chat.json()).error.code, 'upstream_tool_choice_not_satisfied');
 
     const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
       method: 'POST',
@@ -281,10 +273,8 @@ test('Doubao forced tools and tool transcripts remain explicit client errors', a
         tool_choice: { type: 'any' },
       }),
     });
-    assert.equal(anthropic.status, 400);
-    const anthropicError = await anthropic.json();
-    assert.equal(anthropicError.error.type, 'invalid_request_error');
-    assert.equal(anthropicError.error.code, 'unsupported_tools');
+    assert.equal(anthropic.status, 502);
+    assert.equal((await anthropic.json()).error.code, 'upstream_tool_choice_not_satisfied');
   });
 });
 
@@ -388,81 +378,25 @@ test('registry keeps a configured empty Trae realm unavailable with a bounded re
   assert.equal(result.providerStatuses[0].realms[0].lastError.code, 'trae_model_catalog_empty');
 });
 
-test('Doubao unsupported_tools carries the local runtime boundary in every error surface', async () => {
+test('Doubao models declare the local runtime boundary in catalog metadata', async () => {
   await withDoubaoMock(async () => {
-    const app = doubaoMockApp();
-    const expected = {
-      available: false,
-      executor: 'official_client',
-      authorization: 'official_client_bridge_required',
-      dispatch: false,
-      signedEnvelope: false,
-      resultUpload: false,
-      cancellation: false,
-      recovery: false,
-      reason: 'official_client_bridge_unavailable',
-    };
-
-    const chat = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({
-        model: DOUBAO_TEST_MODEL,
-        messages: [{ role: 'user', content: 'hello' }],
-        tools: [tool],
-        tool_choice: 'required',
-      }),
-    });
-    assert.equal(chat.status, 400);
-    const chatError = await chat.json();
-    assert.equal(chatError.error.code, 'unsupported_tools');
-    assert.deepEqual(chatError.error.local_runtime, expected);
-
-    // The streaming surface must carry the same declaration, not a bare code.
-    const streamed = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
-      method: 'POST',
-      headers: headers(),
-      body: JSON.stringify({
-        model: DOUBAO_TEST_MODEL,
-        messages: [{ role: 'user', content: 'hello' }],
-        tools: [tool],
-        tool_choice: 'required',
-        stream: true,
-      }),
-    });
-    assert.equal(streamed.status, 200);
-    const frames = (await streamed.text())
-      .split('\n')
-      .filter((line) => line.startsWith('data: ') && !line.includes('[DONE]'))
-      .map((line) => JSON.parse(line.slice('data: '.length)));
-    const streamError = frames.find((frame) => frame.error);
-    assert.equal(streamError.error.code, 'unsupported_tools');
-    assert.deepEqual(streamError.error.local_runtime, expected);
-
-    const anthropic = await app.request('http://127.0.0.1:10100/v1/messages', {
-      method: 'POST',
-      headers: headers({ 'anthropic-version': '2023-06-01' }),
-      body: JSON.stringify({
-        model: DOUBAO_TEST_CLAUDE_MODEL,
-        max_tokens: 16,
-        messages: [{ role: 'user', content: 'hello' }],
-        tools: [{ name: 'lookup', input_schema: tool.function.parameters }],
-        tool_choice: { type: 'any' },
-      }),
-    });
-    const anthropicError = await anthropic.json();
-    assert.equal(anthropicError.error.code, 'unsupported_tools');
-    assert.deepEqual(anthropicError.error.local_runtime, expected);
-
-    // The catalog must declare the same boundary so a client sees the real
-    // reason before it ever sends a tool call.
-    const models = await app.request('http://127.0.0.1:10100/v1/models', { headers: headers() });
-    const catalog = await models.json();
-    const doubaoModel = catalog.data.find((model) => model.id.startsWith('doubao-work-'));
-    assert.ok(doubaoModel);
-    assert.equal(doubaoModel.metadata.local_runtime.available, false);
-    assert.equal(doubaoModel.metadata.local_runtime.transport, 'official_client_only');
-    assert.equal(doubaoModel.metadata.local_runtime.reason, 'official_client_bridge_unavailable');
+    const doubao = createProviderAdapters().find((adapter) => adapter.id === 'doubao');
+    assert.ok(doubao);
+    // Read the provider catalog directly: local model visibility config must not
+    // be able to hide the declared capability from this contract check.
+    const catalog = await new ModelRegistry([doubao]).discover();
+    assert.ok(catalog.models.length > 0);
+    for (const model of catalog.models) {
+      assert.equal(model.metadata.local_runtime.available, true);
+      assert.equal(model.metadata.local_runtime.experimental, true);
+      assert.equal(model.metadata.local_runtime.executor, 'client');
+      assert.equal(model.metadata.local_runtime.authorization, 'private_connector_bridge');
+      assert.equal(model.metadata.local_runtime.reason, 'experimental_private_api');
+      assert.equal(model.metadata.local_runtime.transport, 'doubao_private_tool_local');
+      assert.equal(model.metadata.local_runtime.dispatch, true);
+      assert.equal(model.metadata.local_runtime.resultUpload, true);
+      assert.equal(model.metadata.local_runtime.signedEnvelope, false);
+    }
   });
 });
 
@@ -510,4 +444,43 @@ test('another provider reusing unsupported_tools does not inherit the Doubao bou
   const body = await response.json();
   assert.equal(body.error.code, 'unsupported_tools');
   assert.equal(body.error.local_runtime, undefined);
+});
+
+test('missing Doubao bridge maps to HTTP 409 instead of an authentication error', async () => {
+  const doubao = createProviderAdapters().find((adapter) => adapter.id === 'doubao');
+  assert.ok(doubao);
+  const failing = {
+    ...doubao,
+    async discoverModels() {
+      return {
+        provider: 'doubao',
+        displayName: 'Doubao Work',
+        models: [
+          {
+            upstreamId: 'work-pro',
+            configName: '5',
+            modelName: 'Pro',
+            displayName: 'Doubao Work',
+            inputModalities: ['text'],
+            metadata: {},
+          },
+        ],
+      };
+    },
+    async run() {
+      const error = new Error('Doubao Work is missing the X Adapter Bridge connector.');
+      error.code = 'missing_doubao_bridge';
+      throw error;
+    },
+  };
+  const app = createApp({ adapters: [failing], registry: new ModelRegistry([failing]) });
+  const response = await app.request('http://127.0.0.1:10100/v1/chat/completions', {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ model: DOUBAO_TEST_MODEL, messages: [{ role: 'user', content: 'hello' }] }),
+  });
+  assert.equal(response.status, 409);
+  const payload = await response.json();
+  assert.equal(payload.error.type, 'invalid_request_error');
+  assert.equal(payload.error.code, 'missing_doubao_bridge');
 });

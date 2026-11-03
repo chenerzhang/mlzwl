@@ -25,6 +25,8 @@ x-adapter trae import --realm cn
 x-adapter trae login --realm global
 x-adapter trae login --realm cn
 x-adapter doubao login
+# 可选：创建或复用实验性的个人 Connector，启用豆包客户端工具桥接
+x-adapter doubao login --create-bridge
 ```
 
 Trae 凭据分别保存在 `~/.x-adapter/trae/global/auth.json` 和 `~/.x-adapter/trae/cn/auth.json`；不要复制、共享或提交这些文件。`trae import` 会只读解密官方客户端 `storage.json` 并复制 access/refresh token、machine/device ID 与 P-256 私钥，不会写回官方存储；两端共享同一 token family 和设备身份，任一端刷新或退出都可能影响另一端。认证方式及风险说明见 [`docs/operations.md`](docs/operations.md)。
@@ -64,7 +66,11 @@ trae-cn-<upstream-id>
 doubao-work-auto
 ```
 
+Trae 上游若明确提供 Standard 与 Max 两个后端，网关会保留现有 Standard ID，并新增带 `-max` 后缀的 Max ID。例如 `trae-global-deepseek-v4.1-flash` 使用 200K Standard 后端，`trae-global-deepseek-v4.1-flash-max` 使用 1M Max 后端。Max 是独立后端和上下文规格，不是推理强度 `max`。
+
 Global、CN 与豆包工作之间不会自动 fallback。默认模型为 `doubao-work-auto`，可通过 `X_ADAPTER_DEFAULT_MODEL` 修改。模型发现会同时声明每个模型的文本/图片输入能力；能力来自 Trae 目录元数据与少量实测覆盖，未声明能力的模型按纯文本处理。
+
+豆包工作支持实验性的客户端工具桥接。该桥接依赖豆包工作的私有个人 Connector、`runtime_type: 2` 和 `/alice/office/tool_local/*` 接口，不是公开或受支持的 API。首次使用前，用户必须显式执行 `x-adapter doubao login --create-bridge` 并确认创建 `X Adapter Bridge`；普通请求不会静默创建连接器。工具轮次必须使用稳定的 `x-session-id`、Responses `previous_response_id` 或等价显式会话标识，且活动轮次只在当前 daemon 进程内存中保存。当前桥接只支持串行客户端工具调用。
 
 ## 发送请求
 
@@ -120,7 +126,7 @@ extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向
 /x-adapter version
 ```
 
-若当前 Pi 会话已有工具调用历史，需要切换到纯文本豆包模型，请用 `/x-adapter-doubao [doubao-work-model-id]`。extension 会先让当前模型生成一份禁止调用工具的迁移摘要，确认 retain-none compaction 已持久化后才切换，默认目标为 `doubao-work-auto`。摘要、落盘、认证或切换任一步失败都会保持当前模型。原始 transcript 仍保留在 Pi session 文件中，只有后续活动模型上下文从摘要重新开始。
+若当前 Pi 会话已有工具调用历史，需要切换到豆包模型，请用 `/x-adapter-doubao [doubao-work-model-id]`。extension 会先让当前模型生成一份禁止调用工具的迁移摘要，确认 retain-none compaction 已持久化后才切换，默认目标为 `doubao-work-auto`。摘要、落盘、认证或切换任一步失败都会保持当前模型。原始 transcript 仍保留在 Pi session 文件中，只有后续活动模型上下文从摘要重新开始。
 
 自定义地址、本机鉴权、关闭自动启动/安装及离线模式见 [`docs/pi-provider-setup.md`](docs/pi-provider-setup.md)。
 
@@ -140,6 +146,12 @@ extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向
 | `X_ADAPTER_CLIENT_TOKEN`  | 为本机客户端请求启用可选的 Bearer 鉴权。 |
 
 完整环境变量说明见 [`docs/operations.md`](docs/operations.md)。
+
+## 安全提示
+
+- 不要提交或输出 Trae token、Trae 官方客户端 `storage.json`、豆包 Cookie 或认证文件内容。
+- `X_ADAPTER_CLIENT_TOKEN` 只保护本机 data-plane，不能替代 provider 登录。
+- 豆包工作的客户端工具桥接是实验能力。它依赖豆包工作的私有个人 Connector、`runtime_type: 2` 和 `/tool_local/*` 接口，不是公开或受支持的 API。首次使用前，用户必须显式执行 `x-adapter doubao login --create-bridge` 并确认创建 `X Adapter Bridge`；普通请求不会静默创建连接器。工具声明、调用和结果上传仅在当前 daemon 进程内续接，且必须使用稳定的 `x-session-id`、Responses `previous_response_id` 或等价显式会话标识。当前桥接只支持串行客户端工具调用，不支持并行调用。升级豆包工作后，该私有协议可能失效。
 
 ## 更新
 
@@ -167,6 +179,7 @@ x-adapter update
 - 在单一 `trae` provider 内提供相互隔离的 Global/CN realm、浏览器 OAuth、realm 独立凭据与模型目录，公开模型 ID 为 `trae-global-*` 和 `trae-cn-*`。
 - 提供模型发现、精确 provider/realm 路由、Pi extension、Claude Code/Codex 接入，以及 macOS launchd 和 Linux systemd 用户服务管理。
 - Trae Global SOLO 模型接入 `solo_work_lite` 工作池：提示词模拟的工具调用（`<toolcall>` 协议注入与流式解析、工具结果多轮回喂）、SOLO 身份 token 独立保存并自动刷新。
+- 豆包工作接入实验性的客户端工具桥接：`x-adapter doubao login --create-bridge` 在用户确认后创建或复用个人 Connector，请求使用私有 `runtime_type: 2` 与 `/alice/office/tool_local/*` 通道完成工具调用、结果上传和同一轮续接。
 - Global 模型目录支持 `/models` 权威源与本机 Trae 客户端 preset 双源合并；OAuth 登录复用已导入设备身份，规避账号设备数量上限。
 - 将配置、缓存、日志、运行时文件和 provider 凭据统一保存到 `~/.x-adapter`，并支持通过 `X_ADAPTER_*` 环境变量覆盖。
 

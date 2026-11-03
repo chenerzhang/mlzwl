@@ -2,8 +2,8 @@
  * Provider-declared capability details carried on an error object.
  *
  * A provider adapter may know exactly why a request was rejected (for example
- * "this provider has a local runtime, but it is gated behind the official
- * client"). That information must reach both the non-streaming JSON error body
+ * "this provider has a runtime, but the client has not provisioned the required
+ * connector yet"). That information must reach both the non-streaming JSON error body
  * and the streaming SSE error frame, and it must never leak to another provider
  * that happens to reuse the same error code.
  *

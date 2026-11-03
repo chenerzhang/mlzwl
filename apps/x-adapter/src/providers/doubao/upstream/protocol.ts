@@ -1,6 +1,7 @@
 import { DoubaoCredential } from '../auth/doubao-cookie.js';
 import { doubaoTimeoutSignal } from '../config/env.js';
 import { DoubaoSession } from '../state/session-store.js';
+import { DoubaoToolRuntime } from './tools.js';
 import {
   DOUBAO_BOT_ID,
   DOUBAO_CONVERSATION_TYPE,
@@ -272,26 +273,79 @@ export type CompletionInput = {
    * fixed total elapsed cap on healthy multi-step turns.
    */
   streamSignal?: AbortSignal;
+  toolRuntime?: DoubaoToolRuntime;
+  systemPrompt?: string;
+  workspace?: string;
 };
 
 export async function startCompletion(input: CompletionInput): Promise<Response> {
-  const { credential, prompt, model: selectedModel, effort, session, fetchImpl = fetch, signal, streamSignal } = input;
+  const {
+    credential,
+    prompt,
+    model: selectedModel,
+    effort,
+    session,
+    fetchImpl = fetch,
+    signal,
+    streamSignal,
+    toolRuntime,
+    systemPrompt = '',
+    workspace = '',
+  } = input;
   const localMessageId = uuid();
   const isNew = !session?.conversationId;
+  const runtimeType = toolRuntime ? 2 : 1;
   const generalTaskParam = {
     action: 0,
     thread_local_message_id: [localMessageId],
     agent_task_param_change: { runtime_changed: false, device_changed: false, sandbox_auth_type_changed: false },
     need_modify_conversation: false,
-    runtime_type: 1,
+    runtime_type: runtimeType,
+    ...(toolRuntime
+      ? {
+          client_option: {
+            enable_sandbox: true,
+            os: process.platform === 'darwin' ? 'Mac' : process.platform,
+            shared_folder_path: [],
+            agent_workspace: { agent_workspace: '', local_skill_paths: [] },
+            client_env_id: toolRuntime.clientEnvId,
+            sandbox_id: toolRuntime.sandboxId,
+            sandbox_env_id: toolRuntime.sandboxEnvId,
+            workspace,
+            sandbox_auth_type: 1,
+          },
+        }
+      : {}),
     agent_task_param: {
-      runtime_type: 1,
-      folder_name: '',
-      device_name: '',
-      workspace: '',
-      local_app_id: '',
-      local_device_id: '',
+      runtime_type: runtimeType,
+      ...(toolRuntime ? { sandbox_auth_type: 1 } : {}),
+      folder_name: workspace ? (workspace.split(/[\\/]/).filter(Boolean).at(-1) ?? '') : '',
+      device_name: toolRuntime?.deviceName ?? '',
+      workspace,
+      local_app_id: toolRuntime ? credential.commonQuery.aid || '497858' : '',
+      local_device_id: toolRuntime?.deviceId ?? '',
     },
+    ...(toolRuntime
+      ? {
+          task_input_json: JSON.stringify({
+            agents_md: {
+              files: [
+                {
+                  content: systemPrompt,
+                  file_path: workspace ? `${workspace.replace(/[\\/]$/, '')}/AGENTS.md` : 'AGENTS.md',
+                  total_length: String(systemPrompt.length),
+                  truncated: false,
+                  update_time_ms: String(Date.now()),
+                },
+              ],
+              state: 1,
+            },
+            schema_version: 1,
+            project_context: {},
+            localConnectors: toolRuntime.localConnectors,
+          }),
+        }
+      : {}),
   };
   const conversationInitOption = { project_id: '', need_ack_conversation: true };
   const modelExtraParams = selectedModel.providerId

@@ -1,42 +1,21 @@
 import { CanonicalRequest } from '../../protocol/canonical.js';
-import { doubaoToolBoundaryError } from './local-runtime-capability.js';
-
-const unsupportedTools = doubaoToolBoundaryError;
-
-function hasToolTranscript(request: CanonicalRequest): boolean {
-  return request.messages.some(
-    (message) => message.role === 'tool' || Boolean(message.tool_call_id) || Boolean(message.tool_calls?.length),
-  );
-}
-
-function requiresToolCall(request: CanonicalRequest): boolean {
-  return (
-    request.tool_choice === 'required' || (request.tool_choice !== undefined && typeof request.tool_choice === 'object')
-  );
-}
+import { assertDoubaoToolRequest } from './upstream/tools.js';
 
 /**
- * Doubao Work has no verified native tool transport. Clients such as Pi still
- * attach their optional tool catalog to ordinary text turns, so discard only
- * that capability advertisement. Never discard an actual tool transcript or a
- * choice that requires a tool call, because doing so would change turn
- * semantics and could feed tool output to the model as ordinary user text.
+ * Preserve real client tools and their transcript for the Doubao local runtime.
+ * Only an explicitly disabled optional catalog is removed. Hosted tools are
+ * rejected by common validation before this adapter runs.
  */
 export function prepareDoubaoRequest(request: CanonicalRequest): CanonicalRequest {
-  if (hasToolTranscript(request)) {
-    throw unsupportedTools(
-      'Doubao Work cannot continue tool-call or tool-result history; start a new text-only conversation.',
-    );
-  }
-  if (requiresToolCall(request)) {
-    throw unsupportedTools('Doubao Work does not support required or explicitly selected tool calls.');
-  }
-  if (request.tools === undefined && request.tool_choice === undefined) {
+  assertDoubaoToolRequest(request);
+  // `tool_choice: none` disables the catalog, so the bridge must not advertise
+  // tools the model is forbidden to call. The schema is also never compiled in
+  // this branch, because `toolsEnabled` is false.
+  if (request.tool_choice !== 'none') {
     return request;
   }
-
-  const textOnly = { ...request };
-  delete textOnly.tools;
-  delete textOnly.tool_choice;
-  return textOnly;
+  const withoutTools = { ...request };
+  delete withoutTools.tools;
+  delete withoutTools.tool_choice;
+  return withoutTools;
 }

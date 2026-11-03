@@ -152,6 +152,29 @@ test('model discovery exposes the enforced image capability in all dialects', ()
   assert.equal(claudeModelsResponse([textOnly]).data[0].capabilities.image_input.supported, false);
 });
 
+test('Codex discovery uses total context separately from provider input and output limits', () => {
+  const max = {
+    id: 'trae-global-deepseek-v4.1-flash-max',
+    provider: 'trae',
+    upstreamId: 'global-deepseek-v4.1-flash-max',
+    configName: 'deepseek-v4.1-flash',
+    modelName: 'deepseek-v4.1-flash__max',
+    displayName: 'Global DeepSeek-V4.1-Flash / Max',
+    maxInputTokens: 936000,
+    maxOutputTokens: 64000,
+    contextWindowTokens: 1000000,
+  };
+  const codex = codexModelsResponse([max]).models[0];
+  const openai = openAiModelsResponse([max]).data[0];
+  assert.equal(codex.context_window, 1000000);
+  assert.equal(codex.max_context_window, 1000000);
+  assert.equal(codex.max_output_tokens, 64000);
+  assert.equal(openai.metadata.model_name, 'deepseek-v4.1-flash__max');
+  assert.equal(openai.metadata.prompt_max_tokens, 936000);
+  assert.equal(openai.metadata.max_tokens, 64000);
+  assert.equal(openai.metadata.context_window_tokens, 1000000);
+});
+
 test('Trae image capability follows upstream metadata with measured exceptions', () => {
   assert.deepEqual(resolveTraeInputModalities('gpt-5.6-sol', true), ['text', 'image']);
   assert.deepEqual(resolveTraeInputModalities('unknown', undefined), ['text']);
@@ -213,6 +236,7 @@ test('Pi extension preserves explicit image capabilities and fails closed when a
               slug: 'trae-global-vision',
               display_name: 'Trae Global Vision',
               context_window: 128000,
+              max_output_tokens: 32000,
               input_modalities: ['text', 'image'],
               supported_reasoning_levels: [{ effort: 'high' }],
             },
@@ -247,6 +271,8 @@ test('Pi extension preserves explicit image capabilities and fails closed when a
     assert.equal(registered[0].name, 'x-adapter');
     assert.deepEqual(registered[0].config.models[0].input, ['text', 'image']);
     assert.deepEqual(registered[0].config.models[1].input, ['text']);
+    // The declared output limit must reach Pi instead of the package default.
+    assert.equal(registered[0].config.models[0].maxTokens, 32000);
   } finally {
     globalThis.fetch = previousFetch;
     if (previousBaseUrl === undefined) {

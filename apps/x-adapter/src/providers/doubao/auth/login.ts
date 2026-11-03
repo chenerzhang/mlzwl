@@ -6,6 +6,7 @@ import { doubaoBaseUrl, doubaoDataDir, doubaoTimeoutSignal, env } from '../confi
 import { doubaoConfigPath } from '../config/file.js';
 import { DOUBAO_COMMON_QUERY_KEYS, DoubaoCredential, saveDoubaoCredential } from './doubao-cookie.js';
 import { FetchLike, doubaoHeaders, doubaoUrl, jsonResponse, uuid } from '../upstream/client.js';
+import { ensureDoubaoBridge } from '../upstream/tools.js';
 
 const CHROME_CANDIDATES_MAC = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -20,7 +21,13 @@ const CHROME_CANDIDATES_LINUX = [
   'microsoft-edge',
 ];
 
-export type DoubaoLoginOptions = { chrome?: string; timeoutMs?: number; noSave?: boolean; verbose?: boolean };
+export type DoubaoLoginOptions = {
+  chrome?: string;
+  timeoutMs?: number;
+  noSave?: boolean;
+  verbose?: boolean;
+  createBridge?: boolean;
+};
 
 export async function runDoubaoBrowserLogin(
   options: DoubaoLoginOptions = {},
@@ -71,6 +78,9 @@ export async function runDoubaoBrowserLogin(
       options.verbose,
       () => browserFailure,
     );
+    if (options.createBridge) {
+      await ensureDoubaoBridge(credential, fetch, true);
+    }
     if (!options.noSave) {
       saveDoubaoCredential(credential.cookie, credential.commonQuery, credential.userAgent);
     }

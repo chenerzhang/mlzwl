@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { anthropicSseFromEvents, responsesSseFromEvents } from '../dist/protocol/streaming.js';
+import {
+  anthropicSseFromEvents,
+  chatCompletionsSseFromEvents,
+  responsesSseFromEvents,
+  responsesSseIterable,
+} from '../dist/protocol/streaming.js';
 
 async function* streamTextToolText() {
   yield { type: 'start', model: 'trae-test' };
@@ -326,4 +331,34 @@ test('Responses streaming fails exactly once when canonical events arrive after 
   assert.equal((text.match(/event: response.failed/g) ?? []).length, 1);
   assert.equal((text.match(/event: response.completed/g) ?? []).length, 0);
   assert.equal((text.match(/data: \[DONE\]/g) ?? []).length, 1);
+});
+
+test('streaming preserves unsatisfied Doubao tool choice errors in every dialect', async () => {
+  async function* unsatisfiedToolChoice() {
+    yield { type: 'start', model: 'doubao-work-auto' };
+    const error = new Error('Doubao Work did not call a required client tool.');
+    error.code = 'upstream_tool_choice_not_satisfied';
+    throw error;
+  }
+  const responses = await responsesSseFromEvents(unsatisfiedToolChoice(), 'doubao-work-auto');
+  assert.match(responses, /"code":"upstream_tool_choice_not_satisfied"/);
+  const chat = await chatCompletionsSseFromEvents(unsatisfiedToolChoice(), 'doubao-work-auto');
+  assert.match(chat, /"code":"upstream_tool_choice_not_satisfied"/);
+  const anthropic = await anthropicSseFromEvents(unsatisfiedToolChoice(), 'doubao-work-auto');
+  assert.match(anthropic, /"code":"upstream_tool_choice_not_satisfied"/);
+});
+
+test('Responses streaming reports Doubao parallel tool support as disabled', async () => {
+  async function* streamText() {
+    yield { type: 'start', model: 'doubao-work-auto' };
+    yield { type: 'text', delta: 'answer' };
+    yield { type: 'done', finish_reason: 'stop' };
+  }
+  const chunks = [];
+  for await (const chunk of responsesSseIterable(streamText(), 'doubao-work-auto', { parallelToolCalls: false })) {
+    chunks.push(chunk);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  assert.equal(events(text, 'response.created')[0].response.parallel_tool_calls, false);
+  assert.equal(events(text, 'response.completed')[0].response.parallel_tool_calls, false);
 });

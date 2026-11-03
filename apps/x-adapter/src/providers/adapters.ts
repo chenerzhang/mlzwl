@@ -164,13 +164,12 @@ function createDoubaoAdapter(): ExecutableProviderAdapter {
           maxOutputTokens: model.maxOutputTokens,
           supportedReasoningLevels: model.supportedReasoningLevels,
           defaultReasoningLevel: model.defaultReasoningLevel,
-          // Doubao Work rejects non-text content before contacting upstream.
+          // The connector bridge still accepts only textual message content.
+          // Tool calls and tool results travel through the local runtime.
           inputModalities: ['text'],
           metadata: {
             model_item_key: model.modelItemKey,
             upstream_provider_id: model.providerId || null,
-            // The native local runtime is owned by the official client; declare
-            // the boundary with the catalog instead of advertising tools.
             ...doubaoLocalRuntimeMetadata(),
           },
         })),
@@ -236,6 +235,7 @@ type ProviderCatalogModel = {
     is_default: boolean;
     prompt_max_tokens?: number;
     max_tokens?: number;
+    context_window_tokens?: number;
     model_load?: number | null;
     hot?: number | null;
     quota?: unknown;
@@ -255,6 +255,7 @@ function toTraeProviderModels(models: ProviderCatalogModel[]): ProviderModel[] {
     isDefault: model.metadata.is_default,
     maxInputTokens: model.metadata.prompt_max_tokens,
     maxOutputTokens: model.metadata.max_tokens,
+    contextWindowTokens: model.metadata.context_window_tokens,
     modelLoad: model.metadata.model_load ?? model.metadata.hot ?? null,
     quota: model.metadata.quota,
     supportedReasoningLevels: (model.metadata.supported_reasoning_levels ?? []).flatMap((level) =>

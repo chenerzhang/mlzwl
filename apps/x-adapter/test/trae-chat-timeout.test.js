@@ -5,7 +5,8 @@ import { generateKeyPairSync } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { writeTraeCredential } from '../dist/providers/trae/auth/credential.js';
-import { clearModelCache, getModelCatalog } from '../dist/providers/trae/models/catalog.js';
+import { clearModelCache, getModelCatalog, resolveModel } from '../dist/providers/trae/models/catalog.js';
+import { publicModelAliases } from '../dist/providers/trae/models/discovery.js';
 import {
   buildTraeBody,
   runTraeChat,
@@ -809,6 +810,184 @@ test('timeout diagnostics expose bounded timing fields without the raw upstream 
     upstream_idle_ms: 90000,
     upstream_sse_event_count: 18,
   });
+});
+
+test('Trae parsing exposes standard and max backends as exact routable variants', () => {
+  const payload = {
+    config_info_list: [
+      {
+        config_name: 'deepseek-v4.1-flash',
+        config_switch: true,
+        is_default: true,
+        context_window_tokens: { dev: 200000, max: 1000000 },
+        display_config: {
+          display_name: 'DeepSeek-V4.1-Flash',
+          hot_info: { hot: 42 },
+          max_mode: true,
+          multimodal: false,
+        },
+        model_detail_list: [
+          {},
+          {
+            model_name: 'deepseek-v4.1-flash__max',
+            max_tokens: 64000,
+            prompt_max_tokens: 936000,
+            model_extra_config: {
+              ReasoningEffort: 'high',
+              reasoning_effort_options: ['low', 'medium', 'high'],
+            },
+          },
+          {
+            model_name: 'deepseek-v4.1-flash__dev',
+            max_tokens: 32000,
+            prompt_max_tokens: 168000,
+            model_extra_config: JSON.stringify({
+              ReasoningEffort: 'high',
+              reasoning_effort_options: ['low', 'medium', 'high'],
+            }),
+          },
+        ],
+      },
+      { config_name: 'disabled', config_switch: false, model_detail_list: [{ model_name: 'disabled__dev' }] },
+      { config_name: 'missing-model-name', config_switch: true, model_detail_list: [{}] },
+    ],
+  };
+  const models = mergeModelGroups('global', { chat_v3: payload.config_info_list });
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ['global-deepseek-v4.1-flash', 'global-deepseek-v4.1-flash-max'],
+  );
+  assert.equal(models[0].metadata.model_name, 'deepseek-v4.1-flash__dev');
+  assert.equal(models[0].metadata.display_name, 'DeepSeek-V4.1-Flash');
+  assert.equal(models[0].metadata.prompt_max_tokens, 168000);
+  assert.equal(models[0].metadata.max_tokens, 32000);
+  assert.equal(models[0].metadata.context_window_tokens, 200000);
+  assert.equal(models[0].metadata.backend_variant, 'standard');
+  assert.equal(models[0].metadata.is_default, true);
+  assert.deepEqual(models[0].metadata.supported_reasoning_levels, ['low', 'medium', 'high']);
+  assert.equal(models[0].metadata.default_reasoning_level, 'high');
+
+  assert.equal(models[1].metadata.model_name, 'deepseek-v4.1-flash__max');
+  assert.equal(models[1].metadata.display_name, 'DeepSeek-V4.1-Flash / Max');
+  // Each variant carries its own root so discovery never reuses a stale parent ID.
+  assert.equal(models[0].root, 'global-deepseek-v4.1-flash');
+  assert.equal(models[1].root, 'global-deepseek-v4.1-flash-max');
+  assert.equal(models[1].metadata.prompt_max_tokens, 936000);
+  assert.equal(models[1].metadata.max_tokens, 64000);
+  assert.equal(models[1].metadata.context_window_tokens, 1000000);
+  assert.equal(models[1].metadata.backend_variant, 'max');
+  assert.equal(models[1].metadata.is_default, false);
+  assert.equal(models[1].metadata.hot, 42);
+  assert.equal(models[1].metadata.model_load, 42);
+  assert.equal(models[1].metadata.model_load_percent, 42);
+});
+
+test('Trae variant rows keep entry-level quota and reasoning precedence over detail values', () => {
+  const models = mergeModelGroups('global', {
+    chat_v3: [
+      {
+        config_name: 'precedence',
+        config_switch: true,
+        is_default: true,
+        quota: { tier: 'entry' },
+        context_window_tokens: { dev: 200000, max: 1000000 },
+        display_config: { display_name: 'Precedence', max_mode: true, quota: { tier: 'display' } },
+        supported_reasoning_levels: ['none', 'low', 'max'],
+        default_reasoning_level: 'max',
+        model_detail_list: [
+          {
+            model_name: 'precedence__dev',
+            max_tokens: 32000,
+            prompt_max_tokens: 168000,
+            quota: { tier: 'detail' },
+          },
+          {
+            model_name: 'precedence__max',
+            max_tokens: 64000,
+            prompt_max_tokens: 936000,
+            model_extra_config: { ReasoningEffort: 'low', reasoning_effort_options: ['a', 'b'] },
+          },
+        ],
+      },
+    ],
+  });
+  // entry-level declaration wins for both variants; detail values only fill gaps.
+  for (const model of models) {
+    assert.deepEqual(model.metadata.quota, { tier: 'entry' });
+    assert.deepEqual(model.metadata.supported_reasoning_levels, ['none', 'low', 'max']);
+    assert.equal(model.metadata.default_reasoning_level, 'max');
+  }
+});
+
+test('Max backend routing does not also claim the Standard ID', () => {
+  const entries = [
+    {
+      config_name: 'deepseek-v4.1-flash',
+      config_switch: true,
+      is_default: true,
+      context_window_tokens: { dev: 200000, max: 1000000 },
+      display_config: { display_name: 'DeepSeek-V4.1-Flash', max_mode: true },
+      model_detail_list: [
+        { model_name: 'deepseek-v4.1-flash__dev', max_tokens: 32000, prompt_max_tokens: 168000 },
+        { model_name: 'deepseek-v4.1-flash__max', max_tokens: 64000, prompt_max_tokens: 936000 },
+      ],
+    },
+  ];
+  const models = mergeModelGroups('global', { chat_v3: entries });
+  const [standard, max] = models;
+  // A shared config_name must not let the Max row resolve the Standard public ID.
+  assert.deepEqual(publicModelAliases(standard), ['global-deepseek-v4.1-flash', 'global-deepseek-v4.1-flash__dev']);
+  assert.deepEqual(publicModelAliases(max), ['global-deepseek-v4.1-flash-max', 'global-deepseek-v4.1-flash__max']);
+  assert.equal(resolveModel(models, 'global-deepseek-v4.1-flash').metadata.model_name, 'deepseek-v4.1-flash__dev');
+  assert.equal(resolveModel(models, 'global-deepseek-v4.1-flash-max').metadata.model_name, 'deepseek-v4.1-flash__max');
+});
+
+test('Trae parsing does not invent a max variant without all enabled max-mode contract fields', () => {
+  const entries = [
+    {
+      config_name: 'max-disabled',
+      config_switch: true,
+      context_window_tokens: { dev: 200000, max: 1000000 },
+      display_config: { display_name: 'Max Disabled', max_mode: false },
+      model_detail_list: [
+        { model_name: 'max-disabled__dev', max_tokens: 32000, prompt_max_tokens: 168000 },
+        { model_name: 'max-disabled__max', max_tokens: 64000, prompt_max_tokens: 936000 },
+      ],
+    },
+    {
+      config_name: 'max-context-missing',
+      config_switch: true,
+      context_window_tokens: { dev: 200000 },
+      display_config: { display_name: 'Max Context Missing', max_mode: true },
+      model_detail_list: [
+        { model_name: 'max-context-missing__dev', max_tokens: 32000, prompt_max_tokens: 168000 },
+        { model_name: 'max-context-missing__max', max_tokens: 64000, prompt_max_tokens: 936000 },
+      ],
+    },
+    {
+      config_name: 'max-detail-missing',
+      config_switch: true,
+      context_window_tokens: { dev: 200000, max: 1000000 },
+      display_config: { display_name: 'Max Detail Missing', max_mode: true },
+      model_detail_list: [{ model_name: 'max-detail-missing__dev', max_tokens: 32000, prompt_max_tokens: 168000 }],
+    },
+    {
+      config_name: 'max-only',
+      config_switch: true,
+      context_window_tokens: { max: 1000000 },
+      display_config: { display_name: 'Max Only', max_mode: true },
+      model_detail_list: [{ model_name: 'max-only__max', max_tokens: 64000, prompt_max_tokens: 936000 }],
+    },
+  ];
+  const models = mergeModelGroups('global', { chat_v3: entries });
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ['global-max-disabled', 'global-max-context-missing', 'global-max-detail-missing', 'global-max-only'],
+  );
+  const maxOnly = models.at(-1);
+  assert.equal(maxOnly.metadata.backend_variant, 'max');
+  assert.equal(maxOnly.metadata.context_window_tokens, 1000000);
+  assert.equal(maxOnly.metadata.model_name, 'max-only__max');
 });
 
 test('mergeModelGroups never merges identical config names across realms', () => {
