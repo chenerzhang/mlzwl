@@ -66,6 +66,8 @@ export type DoubaoStreamWatchdog = {
   arm: () => void;
   /** Release the timer without aborting (stream settled normally). */
   dispose: () => void;
+  /** Abort the stream and release the timer. */
+  abort: () => void;
   /** True when the abort came from this watchdog rather than the caller. */
   tripped: () => boolean;
 };
@@ -114,6 +116,11 @@ export function createDoubaoStreamWatchdog(clientSignal?: AbortSignal): DoubaoSt
     arm,
     dispose: () => {
       dispose();
+      clientSignal?.removeEventListener('abort', forwardAbort);
+    },
+    abort: () => {
+      dispose();
+      controller.abort();
       clientSignal?.removeEventListener('abort', forwardAbort);
     },
     tripped: () => tripped,

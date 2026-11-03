@@ -135,7 +135,7 @@ function annotationsFromWebSearch(result: CanonicalResult, text: string): Record
 
 export function responseJson(
   result: CanonicalResult,
-  options: { id?: string; previousResponseId?: string | null } = {},
+  options: { id?: string; previousResponseId?: string | null; parallelToolCalls?: boolean } = {},
 ) {
   const id = options.id ?? `resp_${crypto.randomUUID().replaceAll('-', '')}`;
   const output: Record<string, unknown>[] = [];
@@ -194,7 +194,7 @@ export function responseJson(
     model: result.model,
     output,
     output_text: result.text,
-    parallel_tool_calls: true,
+    parallel_tool_calls: options.parallelToolCalls ?? true,
     previous_response_id: options.previousResponseId ?? null,
     reasoning: exposeReasoningSummary ? { summary: [{ type: 'summary_text', text: result.reasoning }] } : null,
     store: false,
@@ -414,7 +414,7 @@ export function responsesSseFromResponse(response: Record<string, unknown>): str
 
 export function responsesSseFromResult(
   result: CanonicalResult,
-  options: { id?: string; previousResponseId?: string | null } = {},
+  options: { id?: string; previousResponseId?: string | null; parallelToolCalls?: boolean } = {},
 ): string {
   return responsesSseFromResponse(responseJson(result, options));
 }

@@ -318,6 +318,7 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
               responsesSseIterable(events, model.id, {
                 responseId,
                 previousResponseId: activeRequest.previous_response_id ?? null,
+                parallelToolCalls: model.provider !== 'doubao',
                 onComplete: (response) => {
                   recordResponse({
                     id: responseId,
@@ -342,6 +343,7 @@ export function createApp(dependencies: ServerDependencies = {}): Hono {
       const response = responseJson(result, {
         id: responseId,
         previousResponseId: request.previous_response_id ?? null,
+        parallelToolCalls: model.provider !== 'doubao',
       });
       recordResponse({
         id: responseId,
@@ -451,7 +453,7 @@ function requestLogContext(
     provider: model.provider,
     stream: request.stream === true,
     tool_count: request.tools?.length ?? 0,
-    tool_transport: model.provider === 'doubao' ? 'off' : 'native',
+    tool_transport: model.provider === 'doubao' ? 'private_connector_bridge' : 'native',
   };
 }
 
@@ -485,8 +487,8 @@ function logRequestFailure(
             ? toolSchemaDiagnostics(request.tools, {
                 choice: request.tool_choice,
                 focusUpstreamName: diagnostics.upstream_tool_name,
-                applyChoice: fields.provider !== 'doubao',
-                mapToolNames: fields.provider !== 'doubao',
+                applyChoice: true,
+                mapToolNames: true,
               })
             : undefined,
         }
@@ -557,22 +559,40 @@ function modelError(c: Context, error: unknown) {
   );
 }
 
+/** Codes that describe a request the client can fix, not an upstream failure. */
+const CLIENT_ERROR_CODES = new Set([
+  'invalid_input',
+  'unsupported_tools',
+  'unsupported_hosted_search',
+  'unsupported_multimodal_content',
+  'previous_response_unavailable',
+  'tool_output_mismatch',
+  'missing_doubao_bridge',
+  'doubao_bridge_disabled',
+  'doubao_tool_turn_expired',
+]);
+
+/** Codes that mean the session or bridge state no longer matches the request. */
+const CONFLICT_CODES = new Set([
+  'previous_response_unavailable',
+  'tool_output_mismatch',
+  'missing_doubao_bridge',
+  'doubao_bridge_disabled',
+  'doubao_tool_turn_expired',
+]);
+
 function publicError(error: unknown): {
   error: { message: string; code: string };
   status: 400 | 401 | 404 | 409 | 502;
   clientError: boolean;
 } {
   const code = (error as NodeJS.ErrnoException).code ?? 'provider_request_failed';
-  const clientError = [
-    'invalid_input',
-    'unsupported_tools',
-    'unsupported_hosted_search',
-    'unsupported_multimodal_content',
-  ].includes(code);
+  const clientError = CLIENT_ERROR_CODES.has(code);
+  const conflict = CONFLICT_CODES.has(code);
   const status =
     code === 'model_not_found'
       ? 404
-      : code === 'previous_response_unavailable'
+      : conflict
         ? 409
         : code.startsWith('missing_') ||
             code === 'invalid_doubao_credentials' ||

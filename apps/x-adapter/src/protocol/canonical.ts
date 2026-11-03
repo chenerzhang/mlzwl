@@ -22,6 +22,8 @@ export type CanonicalMessage = {
   content: ContentBlock[];
   name?: string;
   tool_call_id?: string;
+  /** True when the client explicitly marks this tool result as failed. */
+  tool_result_error?: boolean;
   tool_calls?: CanonicalToolCall[];
   /** Gateway-owned provenance; never populate from client fields or serialize upstream. */
   tool_output_attachment?: { call_id: string };

@@ -52,4 +52,4 @@ curl -sS -H 'user-agent: claude-cli' http://127.0.0.1:10100/v1/models
 -H "authorization: Bearer $X_ADAPTER_CLIENT_TOKEN"
 ```
 
-豆包工作仍只支持纯文本能力；客户端强制工具调用会返回明确错误，不会静默改路由到 Trae。Trae Global/CN 当前为实验性能力；官方客户端凭据/设备身份导入、Global SG/CN 模型目录、两个 realm 的最小非流式聊天、Global 流式输出边界/客户端取消，以及一次 Global DeviceProof refresh 已完成本机验证。CN refresh、工具调用和 reasoning 仍需分别验证。真实使用前请阅读运行手册中关于共享 token family 与设备身份的风险说明。
+豆包工作支持实验性的客户端工具桥接：先执行 `x-adapter doubao login --create-bridge` 并确认创建 `X Adapter Bridge`，否则工具请求以 `missing_doubao_bridge` 失败。桥接使用豆包工作的私有接口，不是公开或受支持的 API，且只支持串行客户端工具调用；缺少 Connector 时不会静默改路由到 Trae。Trae Global/CN 当前为实验性能力；官方客户端凭据/设备身份导入、Global SG/CN 模型目录、两个 realm 的最小非流式聊天、Global 流式输出边界/客户端取消，以及一次 Global DeviceProof refresh 已完成本机验证。CN refresh、工具调用和 reasoning 仍需分别验证。真实使用前请阅读运行手册中关于共享 token family 与设备身份的风险说明。

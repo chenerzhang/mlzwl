@@ -75,10 +75,13 @@ Global 根据登录/账号返回的可靠区域信号固定到 SG 或 US account
 
 ```bash
 x-adapter doubao login
+x-adapter doubao login --create-bridge
 x-adapter doubao refresh
 ```
 
 登录会启动隔离的 Chrome/Chromium profile，确认页面已登录后，只保存目标域和 API 路径适用的 Cookie。也可显式设置 `X_ADAPTER_DOUBAO_COOKIE` 与 `X_ADAPTER_DOUBAO_COMMON_QUERY`。
+
+客户端工具桥接属于实验能力。首次使用前，执行 `x-adapter doubao login --create-bridge`，并在交互式终端中明确确认创建 `X Adapter Bridge` 个人 Connector。普通登录和普通数据面请求不会静默创建连接器。该能力使用豆包工作的私有 `runtime_type: 2`、`localConnectors` 和 `/alice/office/tool_local/*` 接口；它不是公开或受支持的 API。网关接收远端工具调用后，将其投影为 OpenAI/Responses/Anthropic 的客户端工具调用；客户端返回匹配 `call_id` 的结果后，网关上传结果并继续同一轮生成。活动工具轮次只保存在当前 daemon 内存中。daemon 重启、会话状态淘汰或错配会安全失败。工具轮次必须使用 `x-session-id`、Responses `previous_response_id` 或等价显式标识。私有接口可能随豆包工作升级而失效。
 
 ## 模型与路由
 
@@ -108,9 +111,9 @@ POST /v1/messages/count_tokens
 
 仅允许 loopback 客户端。请求必须使用 JSON Content-Type；可用 `X_ADAPTER_CLIENT_TOKEN` 启用本机 Bearer 鉴权。
 
-Trae 支持其模型目录绑定的普通 function tools；hosted web search 返回 `unsupported_hosted_search`。豆包工作只支持已验证的纯文本路径：普通请求附带的可选工具目录可以被剥离；强制工具选择、真实 tool call/result 或 hosted search 会明确失败。
+Trae 支持其模型目录绑定的普通 function tools；hosted web search 返回 `unsupported_hosted_search`。豆包工作支持实验性的客户端工具桥接：普通 function tools 会被投影为豆包远端工具调用，工具结果通过桥接回传；hosted tools 仍在 adapter 执行前返回 `unsupported_hosted_tool`。图片等非文本内容仍以 `unsupported_multimodal_content` 失败。
 
-豆包完成流使用可重置的空闲看门狗，而不是固定总时限。多步豆包回合可以在同一连接上持续数分钟，固定总超时会误杀健康回合；只有真实进展（回答文本、reasoning 或服务端工具活动块）才重置计时，裸 SSE keep-alive 不重置。超过空闲预算仍无进展时以 `upstream_stream_truncated` 失败。服务端工具活动只写入结构化日志，不会伪造为 canonical tool call，避免客户端重复执行豆包已在本机完成的动作。
+豆包完成流使用可重置的空闲看门狗，而不是固定总时限。多步豆包回合可以在同一连接上持续数分钟，固定总超时会误杀健康回合；只有真实进展（回答文本、reasoning 或服务端工具活动块）才重置计时，裸 SSE keep-alive 不重置。超过空闲预算仍无进展时以 `upstream_stream_truncated` 失败。服务端工具活动只写入结构化日志，不会伪造为 canonical tool call，避免客户端重复执行豆包已在本机完成的动作。客户端工具调用只来自独立的 `/tool_local/chunk_stream` 通道，且按 sandbox ID 与 conversation ID 过滤。
 
 Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始且上游明确返回 401/403 时，才会在同一 realm 强制 refresh 并最多重放一次；配额、429、timeout、取消、普通错误或已开始的 SSE 都不会触发重放或 fallback。
 
@@ -118,40 +121,57 @@ Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始
 
 ## 主要环境变量
 
-| 变量                                              | 默认值 / 说明                                   |
-| ------------------------------------------------- | ----------------------------------------------- |
-| `X_ADAPTER_HOST`                                  | `127.0.0.1`。                                   |
-| `X_ADAPTER_PORT`                                  | `10100`。                                       |
-| `X_ADAPTER_DATA_DIR`                              | `~/.x-adapter`。                                |
-| `X_ADAPTER_RUNTIME_DIR`                           | `<data>/runtime`。                              |
-| `X_ADAPTER_LOG_FILE`                              | `<data>/logs/x-adapter.jsonl`。                 |
-| `X_ADAPTER_CONFIG_PATH`                           | `<data>/config.json`。                          |
-| `X_ADAPTER_DEFAULT_MODEL`                         | `doubao-work-auto`。                            |
-| `X_ADAPTER_CLIENT_TOKEN`                          | 可选本机 data-plane token。                     |
-| `X_ADAPTER_TRAE_DATA_DIR`                         | `<data>/trae`。                                 |
-| `X_ADAPTER_TRAE_AUTH_TIMEOUT_MS`                  | 浏览器登录和 OAuth 请求时限，默认 `120000`。    |
-| `X_ADAPTER_TRAE_REFRESH_SKEW_MS`                  | 提前刷新窗口，默认 `300000`。                   |
-| `X_ADAPTER_TRAE_MODEL_TIMEOUT_MS`                 | 模型目录请求时限，默认 `30000`。                |
-| `X_ADAPTER_TRAE_MODEL_CACHE_TTL_MS`               | 模型缓存有效期，默认 `60000`。                  |
-| `X_ADAPTER_TRAE_CHAT_MAX_DURATION_MS`             | 单次聊天总时限，默认 `600000`。                 |
-| `X_ADAPTER_TRAE_CHAT_FIRST_EVENT_TIMEOUT_MS`      | 首个上游 SSE 事件时限，默认 `120000`。          |
-| `X_ADAPTER_TRAE_CHAT_IDLE_TIMEOUT_MS`             | 上游 SSE 空闲时限，默认 `90000`。               |
-| `X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_EVENTS`           | 可选更严格的内容增量事件上限。                  |
-| `X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_BYTES`            | 序列化输出字节上限，默认 `1048576`。            |
-| `X_ADAPTER_TRAE_GLOBAL_PRODUCT_PATH`              | 可选 Global 官方公开 `product.json` 路径。      |
-| `X_ADAPTER_TRAE_CN_PRODUCT_PATH`                  | 可选 CN 官方公开 `product.json` 路径。          |
-| `X_ADAPTER_TRAE_<REALM>_APP_VERSION`              | realm 产品版本显式覆盖。                        |
-| `X_ADAPTER_TRAE_<REALM>_PLUGIN_VERSION`           | realm 插件/build 版本显式覆盖。                 |
-| `X_ADAPTER_TRAE_<REALM>_VERSION_CODE`             | realm 版本代码显式覆盖。                        |
-| `X_ADAPTER_TRAE_<REALM>_{WEB,AUTH,DATA}_BASE_URL` | 仅接受内置 allowlist 中 HTTPS host 的高级覆盖。 |
-| `X_ADAPTER_DOUBAO_DATA_DIR`                       | `<data>/doubao-work`。                          |
-| `X_ADAPTER_DOUBAO_CONFIG_PATH`                    | `<doubao-data>/config.json`。                   |
-| `X_ADAPTER_DOUBAO_COOKIE`                         | 显式豆包工作 Cookie。                           |
-| `X_ADAPTER_DOUBAO_TIMEOUT_MS`                     | 豆包短调用总时限，默认 `180000`。               |
-| `X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS`                | 豆包完成流空闲预算，默认 `180000`。             |
-| `X_ADAPTER_AUTO_START`                            | Pi extension 是否自动启动 daemon。              |
-| `X_ADAPTER_AUTO_INSTALL`                          | Pi extension 是否从公共 npm 自动安装 CLI。      |
-| `PI_OFFLINE=1`                                    | 禁止 Pi extension 网络与生命周期动作。          |
+| 变量                                              | 默认值 / 说明                                      |
+| ------------------------------------------------- | -------------------------------------------------- |
+| `X_ADAPTER_HOST`                                  | `127.0.0.1`。                                      |
+| `X_ADAPTER_PORT`                                  | `10100`。                                          |
+| `X_ADAPTER_DATA_DIR`                              | `~/.x-adapter`。                                   |
+| `X_ADAPTER_RUNTIME_DIR`                           | `<data>/runtime`。                                 |
+| `X_ADAPTER_LOG_FILE`                              | `<data>/logs/x-adapter.jsonl`。                    |
+| `X_ADAPTER_CONFIG_PATH`                           | `<data>/config.json`。                             |
+| `X_ADAPTER_DEFAULT_MODEL`                         | `doubao-work-auto`。                               |
+| `X_ADAPTER_CLIENT_TOKEN`                          | 可选本机 data-plane token。                        |
+| `X_ADAPTER_TRAE_DATA_DIR`                         | `<data>/trae`。                                    |
+| `X_ADAPTER_TRAE_AUTH_TIMEOUT_MS`                  | 浏览器登录和 OAuth 请求时限，默认 `120000`。       |
+| `X_ADAPTER_TRAE_REFRESH_SKEW_MS`                  | 提前刷新窗口，默认 `300000`。                      |
+| `X_ADAPTER_TRAE_MODEL_TIMEOUT_MS`                 | 模型目录请求时限，默认 `30000`。                   |
+| `X_ADAPTER_TRAE_MODEL_CACHE_TTL_MS`               | 模型缓存有效期，默认 `60000`。                     |
+| `X_ADAPTER_TRAE_CHAT_MAX_DURATION_MS`             | 单次聊天总时限，默认 `600000`。                    |
+| `X_ADAPTER_TRAE_CHAT_FIRST_EVENT_TIMEOUT_MS`      | 首个上游 SSE 事件时限，默认 `120000`。             |
+| `X_ADAPTER_TRAE_CHAT_IDLE_TIMEOUT_MS`             | 上游 SSE 空闲时限，默认 `90000`。                  |
+| `X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_EVENTS`           | 可选更严格的内容增量事件上限。                     |
+| `X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_BYTES`            | 序列化输出字节上限，默认 `1048576`。               |
+| `X_ADAPTER_TRAE_GLOBAL_PRODUCT_PATH`              | 可选 Global 官方公开 `product.json` 路径。         |
+| `X_ADAPTER_TRAE_CN_PRODUCT_PATH`                  | 可选 CN 官方公开 `product.json` 路径。             |
+| `X_ADAPTER_TRAE_<REALM>_APP_VERSION`              | realm 产品版本显式覆盖。                           |
+| `X_ADAPTER_TRAE_<REALM>_PLUGIN_VERSION`           | realm 插件/build 版本显式覆盖。                    |
+| `X_ADAPTER_TRAE_<REALM>_VERSION_CODE`             | realm 版本代码显式覆盖。                           |
+| `X_ADAPTER_TRAE_<REALM>_{WEB,AUTH,DATA}_BASE_URL` | 仅接受内置 allowlist 中 HTTPS host 的高级覆盖。    |
+| `X_ADAPTER_DOUBAO_DATA_DIR`                       | `<data>/doubao-work`。                             |
+| `X_ADAPTER_DOUBAO_CONFIG_PATH`                    | `<doubao-data>/config.json`。                      |
+| `X_ADAPTER_DOUBAO_COOKIE`                         | 显式豆包工作 Cookie。                              |
+| `X_ADAPTER_DOUBAO_TIMEOUT_MS`                     | 豆包短调用总时限，默认 `180000`。                  |
+| `X_ADAPTER_DOUBAO_IDLE_TIMEOUT_MS`                | 豆包完成流空闲预算，默认 `180000`。                |
+| `X_ADAPTER_DOUBAO_COMMON_QUERY`                   | 显式公共 query JSON（仅受控调试）。                |
+| `X_ADAPTER_DOUBAO_USER_AGENT`                     | 显式 User-Agent 覆盖。                             |
+| `X_ADAPTER_DOUBAO_CACHE_DIR`                      | `<data>/cache/doubao`。                            |
+| `X_ADAPTER_DOUBAO_MODEL`                          | 默认豆包模型，默认 `work-auto`。                   |
+| `X_ADAPTER_DOUBAO_MODEL_CACHE_TTL_MS`             | 模型目录缓存有效期，默认 `60000`。                 |
+| `X_ADAPTER_DOUBAO_MAX_SSE_EVENT_BYTES`            | 单个上游 SSE 事件字节上限，默认 `1048576`。        |
+| `DOUBAO_LOGIN_TIMEOUT_MS`                         | 豆包浏览器登录等待时限，默认 `180000`。            |
+| `DOUBAO_SESSION_TTL_MS`                           | 豆包会话映射 TTL，默认 `21600000`。                |
+| `DOUBAO_SESSION_MAX_ENTRIES`                      | 豆包会话映射上限，默认 `200`。                     |
+| `DOUBAO_BASE_URL`                                 | 豆包工作 base URL，默认 `https://www.doubao.com`。 |
+| `X_ADAPTER_DOUBAO_BUILTIN_TOOL_BRIDGE`            | 是否允许豆包内置本地工具直接经桥接执行。           |
+| `X_ADAPTER_DOUBAO_TOOL_WAIT_MS`                   | 工具仍运行提示与一次恢复等待的时限，`40000`。      |
+| `X_ADAPTER_DOUBAO_TOOL_LIMIT_MS`                  | 活动工具轮次绝对存活上限，默认 `600000`。          |
+| `X_ADAPTER_AUTO_START`                            | Pi extension 是否自动启动 daemon。                 |
+| `X_ADAPTER_AUTO_INSTALL`                          | Pi extension 是否从公共 npm 自动安装 CLI。         |
+| `PI_OFFLINE=1`                                    | 禁止 Pi extension 网络与生命周期动作。             |
+
+豆包工具桥接的时间预算分两层：`X_ADAPTER_DOUBAO_TOOL_WAIT_MS` 控制何时向豆包返回“仍在运行”并允许一次恢复等待；`X_ADAPTER_DOUBAO_TOOL_LIMIT_MS` 从首个客户端工具调用进入 pending 时开始计时，是活动工具轮次的绝对上限。上限到期时，网关中止上游流和工具监听，删除进程内活动轮次，并让迟到结果返回 `doubao_tool_turn_expired` 或 `previous_response_unavailable`。`X_ADAPTER_DOUBAO_BUILTIN_TOOL_BRIDGE` 默认开启，只映射少量已确认的豆包内置本地工具名。
+
+当前私有桥接只支持串行客户端工具调用。若豆包在上一调用完成前发出另一个调用，网关会向豆包上传“不支持并行”的错误结果；该调用不会进入客户端 pending 列表。`DOUBAO_MOCK` 仅供自动化测试使用，不属于生产配置。
 
 `<REALM>` 为 `GLOBAL` 或 `CN`。realm 产品身份优先级为显式环境变量、已安装官方客户端的公开 `product.json`、包内保守 fallback。常规启动只读取公开 manifest 的 app/plugin/version-code、quality 和 Trae client ID；仅显式 `trae import` 会读取账号 storage。
 
@@ -180,5 +200,10 @@ macOS 使用用户级 launchd，Linux 使用用户级 systemd。`update` 从 `ht
 - `unsupported_hosted_search`：Trae 当前没有经验证的原生 hosted-search 协议。
 - `missing_doubao_credentials`：执行 `x-adapter doubao login`。
 - `invalid_doubao_credentials`：Cookie 失效，重新登录；不会隐式重放请求。
-- `unsupported_tools`：豆包请求包含强制工具调用或真实工具历史。错误体附带 `local_runtime` 声明（`available: false`、`authorization: official_client_bridge_required`、`reason: official_client_bridge_unavailable`），说明拒绝原因是缺少受支持的官方客户端桥接，不是能力缺失。
+- `missing_doubao_bridge`：当前账号没有 `X Adapter Bridge` 个人 Connector；显式执行 `x-adapter doubao login --create-bridge` 并确认创建。普通请求不会自动创建。
+- `doubao_bridge_disabled`：该 Connector 已在豆包工作中被禁用；先在豆包工作界面启用，再重试。
+- `doubao_tool_turn_expired`：豆包活动工具轮次超过 `X_ADAPTER_DOUBAO_TOOL_LIMIT_MS` 绝对上限并已清理；不要提交迟到结果，开始新的模型轮次。
+- `tool_output_mismatch`：提交的工具结果与当前活动轮次的 `call_id` 数量或集合不匹配；只返回本轮全部未完成调用的结果。
+- `upstream_tool_choice_not_satisfied`：请求要求强制工具调用，但豆包未发出客户端工具调用；不要把它当作成功文本轮次。
+- `unsupported_tools`：豆包请求中的工具名不受支持，或工具调用被 `tool_choice` 禁止。
 - `previous_response_unavailable`：本地 Responses history 已过期、被淘汰或 provider 不匹配；新建会话。

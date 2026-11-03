@@ -13,8 +13,11 @@ export type ProviderModel = {
   modelName: string;
   displayName: string;
   isDefault?: boolean;
+  /** Provider input-token limit, excluding reserved output capacity when the upstream distinguishes them. */
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  /** Total conversation context used by clients for compaction and context meters. */
+  contextWindowTokens?: number;
   modelLoad?: ModelLoad;
   quota?: unknown;
   supportedReasoningLevels?: string[];

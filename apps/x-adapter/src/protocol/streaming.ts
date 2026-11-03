@@ -48,6 +48,11 @@ function upstreamErrorCode(model: string, error?: unknown): string {
       'invalid_doubao_credentials',
       'invalid_input',
       'previous_response_unavailable',
+      'tool_output_mismatch',
+      'missing_doubao_bridge',
+      'doubao_bridge_disabled',
+      'doubao_tool_turn_expired',
+      'upstream_tool_choice_not_satisfied',
       'unsupported_tools',
       'unsupported_hosted_tool',
       'unsupported_multimodal_content',
@@ -270,6 +275,7 @@ type WebSearchState = {
 type ResponsesStreamOptions = {
   responseId?: string;
   previousResponseId?: string | null;
+  parallelToolCalls?: boolean;
   onComplete?: (response: Record<string, unknown>) => void;
   onFailed?: (error: { code: string; name: string; message: string }) => void;
 };
@@ -280,6 +286,7 @@ function responseShell(
   status: string,
   previousResponseId: string | null = null,
   output: Record<string, unknown>[] = [],
+  parallelToolCalls = true,
 ) {
   return {
     id: responseId,
@@ -289,6 +296,7 @@ function responseShell(
     status,
     output,
     previous_response_id: previousResponseId,
+    parallel_tool_calls: parallelToolCalls,
   };
 }
 
@@ -553,13 +561,27 @@ export async function* responsesSseIterable(
     yield encode(
       eventFrame('response.created', {
         type: 'response.created',
-        response: responseShell(state.responseId, state.model, 'in_progress', options.previousResponseId ?? null),
+        response: responseShell(
+          state.responseId,
+          state.model,
+          'in_progress',
+          options.previousResponseId ?? null,
+          [],
+          options.parallelToolCalls,
+        ),
       }),
     );
     yield encode(
       eventFrame('response.in_progress', {
         type: 'response.in_progress',
-        response: responseShell(state.responseId, state.model, 'in_progress', options.previousResponseId ?? null),
+        response: responseShell(
+          state.responseId,
+          state.model,
+          'in_progress',
+          options.previousResponseId ?? null,
+          [],
+          options.parallelToolCalls,
+        ),
       }),
     );
     for await (const current of events) {
@@ -823,7 +845,14 @@ export async function* responsesSseIterable(
         yield encode(
           eventFrame('response.in_progress', {
             type: 'response.in_progress',
-            response: responseShell(state.responseId, state.model, 'in_progress', options.previousResponseId ?? null),
+            response: responseShell(
+              state.responseId,
+              state.model,
+              'in_progress',
+              options.previousResponseId ?? null,
+              [],
+              options.parallelToolCalls,
+            ),
             meta: { upstream_event: current.event },
           }),
         );
@@ -873,7 +902,14 @@ export async function* responsesSseIterable(
       .map((entry) => entry.item);
     const status = finishReason === 'length' ? 'incomplete' : 'completed';
     const completed = {
-      ...responseShell(state.responseId, state.model, status, options.previousResponseId ?? null, orderedOutputItems),
+      ...responseShell(
+        state.responseId,
+        state.model,
+        status,
+        options.previousResponseId ?? null,
+        orderedOutputItems,
+        options.parallelToolCalls,
+      ),
       ...(status === 'incomplete' ? { incomplete_details: { reason: 'max_output_tokens' } } : {}),
       output_text: state.responseText,
       usage,
@@ -890,7 +926,14 @@ export async function* responsesSseIterable(
       eventFrame('response.failed', {
         type: 'response.failed',
         response: {
-          ...responseShell(state.responseId, state.model, 'failed', options.previousResponseId ?? null),
+          ...responseShell(
+            state.responseId,
+            state.model,
+            'failed',
+            options.previousResponseId ?? null,
+            [],
+            options.parallelToolCalls,
+          ),
           error: { code, message, ...errorDetails(error) },
         },
       }),

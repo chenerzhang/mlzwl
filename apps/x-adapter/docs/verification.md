@@ -22,9 +22,13 @@ git diff --check
 - Trae realm 独立凭据路径、`0700`/`0600` 权限、原子保存、P-256 `DeviceProof`、refresh token 轮换和 realm 内 single-flight。
 - 官方客户端 storage 的 AES 解密/完整性校验、realm/host 校验、唯一设备身份、P-256 公私钥匹配、拒绝隐式覆盖/旧 refresh token 回滚、损坏本地凭据显式恢复和 Global/CN 导入隔离。
 - Trae batch 模型目录、逐 function 降级、稳定缓存身份、realm 模型前缀、模型/function 绑定、图片能力元数据保留，以及一个 realm 失败的隔离边界。
+- Trae Standard/Max 后端展开：`__dev`/`__max` detail 识别、`max_mode` + `context_window_tokens.max` + `__max` 三信号齐备才新增 `-max` 变体、缺失任一信号时只暴露 Standard、只有 `__max` detail 时自身投影为 Max、每个变体独立保存输入/输出/总上下文与推理强度，以及两个变体的精确路由（`-max` ID 解析到 `__max` `model_name`）。
+- 模型发现三方言的总上下文投影（OpenAI `metadata.context_window_tokens`、Codex `context_window`/`max_output_tokens`、Claude `max_input_tokens`/`max_tokens`），以及 Pi extension 把 `max_output_tokens` 传为 `maxTokens`。
 - OpenAI/Codex/Claude 三类模型发现的输入模态声明、Pi 图片能力读取、纯文本模型在三种协议上的图片 fail-closed 校验，以及图片模型的 canonical 图片保留。
 - Trae `/api/agent/v3/llm_utils_chat` headers/body、reasoning/text/tool-call/usage SSE、显式终态、请求/配置输出事件和 UTF-8 字节边界、命中边界后的上游取消与 `done(length)`、401/403 最多 refresh/replay 一次、普通错误不自动重试、function mismatch 的有限纠正和 hosted search 明确失败。
-- 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态、可重置空闲看门狗、服务端工具活动日志，以及纯文本工具策略与 `local_runtime` 声明。
+- 豆包工作登录判定、Cookie 域/路径与权限、模型目录、请求构造、会话串行、SSE 终态、可重置空闲看门狗与服务端工具活动日志。
+- 豆包工具桥接：Connector 查找/创建边界、`runtime_type: 2` 请求体、`connector.call` 路由、Ajv 严格 schema 校验（含 `$ref`/`const`/`pattern`/`format`/数值与数组边界）、未知关键字与 `$async` schema 的 `invalid_input` 拒绝、`tool_choice: none` 不编译被禁用 schema、末尾连续 tool 结果的提取与外部 `call_id` 拒绝、串行约束下第二个并发调用的上游错误结果、工具结果上传的一次瞬时重试与 401 不重试、显式中止看门狗，以及 `missing_doubao_bridge`/`doubao_bridge_disabled`/`doubao_tool_turn_expired`/`upstream_tool_choice_not_satisfied` 的 HTTP 与流式映射。
+- 豆包模型目录的 `local_runtime` 声明，以及非豆包 provider 复用 `unsupported_tools` 时不继承该声明。
 - Pi extension 的 `/x-adapter` 参数拆分与 CLI 代理、模型图片能力读取，以及 `/x-adapter-doubao` 的直接切换、摘要后切换、投影复检、认证预检和工具调用 fail-closed 路径。
 - SOLO work 链路：`/models` 目录解析与同名去重、vscdb preset 解析与双源合并（碰撞前置 `solo_agent_remote`、源标注、不原地修改 IDE 条目）、SOLO 客户端伪装 headers、最小 body 构造、`<toolcall>` 协议注入与流式解析（跨增量切割、围栏容忍、相邻重放去重、坏块降级）、工具结果 transcript、usage/done/error 事件映射、双源全部不可用时退化为 IDE 目录，以及 SOLO token 的加载与自动刷新。
 - Responses history 的 provider 隔离、LRU、TTL、record/replay、总字节限制和图片工具结果顺序。
@@ -60,7 +64,9 @@ git diff --check
 - CN DeviceProof refresh、Global 长期重复轮换，以及官方客户端持有轮换前旧 refresh token 时的恢复行为。
 - Global US/USTTP 独立链路和企业账号 host 变体。
 - 非品牌 CN 数据 host `trae-api-cn.mchost.guru` 的当前归属与长期稳定性；本轮仅确认当前真实账号链路可用。
-- 工具调用、reasoning、字节上限单独命中、套餐/额度行为与其他业务错误码；当前纯文本边界、客户端取消和最小聊天成功，不代表每个返回模型或高级能力都可用。
+- Trae 工具调用、reasoning、字节上限单独命中、套餐/额度行为与其他业务错误码；当前纯文本边界、客户端取消和最小聊天成功，不代表每个返回模型或高级能力都可用。
+- Standard/Max 展开的离线覆盖只使用构造 payload；真实账号目录是否同时提供 `max_mode` 与 `__max` detail、Max 后端的实际额度与限流行为仍未验证。
+- 豆包工具桥接的私有接口、Connector 生命周期、内置工具映射、并行拒绝、等待恢复与轮次上限均只有离线覆盖；尚未用真实账号完成桥接 E2E。
 - SOLO remote 链路的多轮长对话、除 `gpt-5.2`/`gpt-6-sol`/`kimi-k3` 外的 preset 模型、`gpt-6.1-sol` 静默无输出的原因、CN 侧是否存在等价 remote 协议，以及 SOLO 会话的服务端保留时长与额度计费细则。
 - 官方客户端升级后的 storage codec、版本、设备身份和请求字段要求。
 
@@ -77,5 +83,7 @@ git diff --check
 7. refresh 另行确认，因为可能轮换官方客户端共享的 token family；官方客户端和 x-adapter 不得并发 refresh。
 8. 不保存 prompt、正文、Cookie、JWT、token、设备私钥、callback query 或上游原始响应到日志/报告；隔离 `auth.json` 仅按用户授权暂存。
 9. 验证结束后停止 daemon，并按用户选择保留或清理隔离凭据。
+
+豆包工作另需先显式执行 `x-adapter doubao login`（若本机尚无私有配置），然后选用 `doubao-work-*` 模型验证新会话与同一 `session_id` 的连续请求。验证实验工具桥接时，使用专用测试账号执行 `x-adapter doubao login --create-bridge` 并人工确认创建个人 Connector。只声明无副作用的 `noop` 工具。验证调用下发、匹配结果上传、同轮继续生成、强制 tool choice、未知工具、schema 错误、超过 40 秒的等待、取消、断流重连、重复调用、重复结果和迟到结果。测试完成后不得删除或改动用户既有 Connector；如需清理测试 Connector，必须再次获得明确授权。新账号没有 recent conversation 时应仍能登录并用内置目录创建首个会话；已有会话后确认 daemon 使用 Node `fetch`，且动态模型目录保留 CIS `provider_id` / reasoning level。记录 headers 首包与 read chunk 数时只能记录时延和 chunk 数，不得记录响应原文；当前已观察到 Node fetch 可能直到生成完成才返回单个 chunk，而浏览器 fetch 可分块，不能将前者宣传为实时流。
 
 凭据、网络、协议证据或授权不足时必须停止并报告阻塞，不得把 mock 结果描述为真实上游通过。
