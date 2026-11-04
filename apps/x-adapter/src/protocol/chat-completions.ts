@@ -3,6 +3,7 @@ import {
   canonicalMessageRole,
   CanonicalMessage,
   CanonicalResult,
+  chatCompletionsUsage,
   contentBlocks,
   textFromContent,
 } from './canonical.js';
@@ -92,11 +93,7 @@ export function chatCompletionJson(result: CanonicalResult, options: { id?: stri
     created: Math.floor(Date.now() / 1000),
     model: result.model,
     choices: [{ index: 0, message, finish_reason: toolCalls.length ? 'tool_calls' : result.finish_reason || 'stop' }],
-    usage: {
-      prompt_tokens: result.usage.input_tokens,
-      completion_tokens: result.usage.output_tokens,
-      total_tokens: result.usage.total_tokens,
-    },
+    usage: chatCompletionsUsage(result.usage),
   };
 }
 
@@ -123,11 +120,7 @@ export function chatCompletionsDoneChunk(id: string, created: number, model: str
     choices: [
       { index: 0, delta: {}, finish_reason: result.tool_calls.length ? 'tool_calls' : result.finish_reason || 'stop' },
     ],
-    usage: {
-      prompt_tokens: result.usage.input_tokens,
-      completion_tokens: result.usage.output_tokens,
-      total_tokens: result.usage.total_tokens,
-    },
+    usage: chatCompletionsUsage(result.usage),
   };
 }
 

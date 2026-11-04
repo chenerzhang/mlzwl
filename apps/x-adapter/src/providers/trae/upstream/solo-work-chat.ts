@@ -273,6 +273,13 @@ function normalizedEvent(event: string, payload: unknown): string {
     .replace(/^_|_$/g, '');
 }
 
+/**
+ * SOLO work usage deliberately does not project `cache_read_input_tokens` or
+ * `cache_creation_input_tokens`: this pool has no verified cache counters, so
+ * reporting them would fabricate cache usage for clients. Keep the omission in
+ * sync with the usage-projection contract in `docs/tech.md`; the IDE chat
+ * adapter in `./chat.ts` is the one that spreads `upstreamCacheUsage`.
+ */
 function usageFrom(payload: Record<string, unknown>) {
   const input = Number(payload.prompt_tokens ?? payload.input_tokens ?? 0);
   const output = Number(payload.completion_tokens ?? payload.output_tokens ?? 0);

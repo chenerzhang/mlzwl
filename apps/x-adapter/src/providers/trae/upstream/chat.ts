@@ -8,6 +8,7 @@ import {
   CanonicalRequest,
   CanonicalResult,
   CanonicalStreamEvent,
+  upstreamCacheUsage,
   withoutToolOutputAttachment,
 } from '../../../protocol/canonical.js';
 import {
@@ -419,6 +420,7 @@ function usageFrom(payload: Record<string, unknown>) {
     input_tokens: input,
     output_tokens: output,
     total_tokens: Number(payload.total_tokens ?? input + output),
+    ...upstreamCacheUsage(payload),
   };
 }
 

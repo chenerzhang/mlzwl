@@ -1,7 +1,13 @@
 import { intEnv } from '../config/env.js';
 import { redactSensitiveText } from '../logging/jsonl.js';
 import { parsePublicModelId } from '../models/model-id.js';
-import { CanonicalResult, CanonicalStreamEvent, CanonicalToolCall } from './canonical.js';
+import {
+  CanonicalResult,
+  CanonicalStreamEvent,
+  CanonicalToolCall,
+  anthropicUsage,
+  responsesUsage,
+} from './canonical.js';
 import { shouldExposeRawReasoning, shouldExposeReasoningSummary } from './reasoning.js';
 import { customToolInput } from './tools.js';
 import { chatCompletionsDeltaChunk, chatCompletionsDoneChunk, chatCompletionsStartChunk } from './chat-completions.js';
@@ -912,7 +918,7 @@ export async function* responsesSseIterable(
       ),
       ...(status === 'incomplete' ? { incomplete_details: { reason: 'max_output_tokens' } } : {}),
       output_text: state.responseText,
-      usage,
+      usage: responsesUsage(usage),
       reasoning: exposeReasoningSummary ? { summary: [{ type: 'summary_text', text: reasoningText }] } : null,
     };
     options.onComplete?.(completed);
@@ -1094,7 +1100,7 @@ export async function* anthropicSseIterable(
           stop_reason: finishReason === 'length' ? 'max_tokens' : hadTool ? 'tool_use' : 'end_turn',
           stop_sequence: null,
         },
-        usage: { output_tokens: usage.output_tokens },
+        usage: anthropicUsage(usage),
       }),
     );
     yield encode(eventFrame('message_stop', { type: 'message_stop' }));

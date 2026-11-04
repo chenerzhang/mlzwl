@@ -4,6 +4,7 @@ import {
   CanonicalMessage,
   CanonicalResult,
   contentBlocks,
+  responsesUsage,
   textBlocks,
   textFromContent,
   toolOutputMessages,
@@ -199,7 +200,7 @@ export function responseJson(
     reasoning: exposeReasoningSummary ? { summary: [{ type: 'summary_text', text: result.reasoning }] } : null,
     store: false,
     tools: [],
-    usage: result.usage,
+    usage: responsesUsage(result.usage),
     metadata: {},
   };
 }

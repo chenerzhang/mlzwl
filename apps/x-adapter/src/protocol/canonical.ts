@@ -80,7 +80,97 @@ export type Usage = {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  /** Prompt tokens served from the provider prompt cache. */
+  cache_read_input_tokens?: number;
+  /** Prompt tokens written into the provider prompt cache by this request. */
+  cache_creation_input_tokens?: number;
 };
+
+/**
+ * Read upstream cache counters that are known to exist on Trae `token_usage`
+ * events. Absent or invalid values stay undefined so protocols only report
+ * cache usage when the provider actually reported it.
+ *
+ * Only for providers whose prompt count is INCLUSIVE: their `prompt_tokens`
+ * already contains the cached part. A provider that reports an exclusive
+ * prompt count must not use this helper, because `anthropicUsage` would
+ * subtract the cache counters a second time.
+ */
+export function upstreamCacheUsage(payload: Record<string, unknown>): Partial<Usage> {
+  const counter = (value: unknown): number | undefined =>
+    typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : undefined;
+  const promptTokens = counter(payload.prompt_tokens ?? payload.input_tokens);
+  const rawCacheRead = counter(payload.cache_read_input_tokens);
+  const rawCacheCreation = counter(payload.cache_creation_input_tokens);
+  const cacheRead =
+    rawCacheRead === undefined || promptTokens === undefined ? rawCacheRead : Math.min(rawCacheRead, promptTokens);
+  const remainingPrompt = promptTokens === undefined ? undefined : Math.max(0, promptTokens - (cacheRead ?? 0));
+  const cacheCreation =
+    rawCacheCreation === undefined || remainingPrompt === undefined
+      ? rawCacheCreation
+      : Math.min(rawCacheCreation, remainingPrompt);
+  return {
+    ...(cacheRead === undefined ? {} : { cache_read_input_tokens: cacheRead }),
+    ...(cacheCreation === undefined ? {} : { cache_creation_input_tokens: cacheCreation }),
+  };
+}
+
+/** Responses API usage, including the `input_tokens_details` cache counters. */
+export function responsesUsage(usage: Usage): Record<string, unknown> {
+  const projected: Record<string, unknown> = {
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
+  };
+  if (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined) {
+    projected.input_tokens_details = {
+      ...(usage.cache_read_input_tokens === undefined ? {} : { cached_tokens: usage.cache_read_input_tokens }),
+      ...(usage.cache_creation_input_tokens === undefined
+        ? {}
+        : { cache_write_tokens: usage.cache_creation_input_tokens }),
+    };
+  }
+  return projected;
+}
+
+/** Chat Completions usage, including `prompt_tokens_details.cached_tokens`. */
+export function chatCompletionsUsage(usage: Usage): Record<string, unknown> {
+  const projected: Record<string, unknown> = {
+    prompt_tokens: usage.input_tokens,
+    completion_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
+  };
+  if (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined) {
+    projected.prompt_tokens_details = {
+      ...(usage.cache_read_input_tokens === undefined ? {} : { cached_tokens: usage.cache_read_input_tokens }),
+      ...(usage.cache_creation_input_tokens === undefined
+        ? {}
+        : { cache_write_tokens: usage.cache_creation_input_tokens }),
+    };
+  }
+  return projected;
+}
+
+/**
+ * Anthropic Messages usage.
+ *
+ * Anthropic counts `input_tokens` WITHOUT the cache counters: the prompt is
+ * `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`.
+ * Trae reports `prompt_tokens` WITH the cached part included, so the cache
+ * counters must be subtracted here. Emitting the upstream prompt unchanged
+ * would double-count the prompt for every Anthropic client.
+ */
+export function anthropicUsage(usage: Usage): Record<string, unknown> {
+  const cacheRead = usage.cache_read_input_tokens;
+  const cacheCreation = usage.cache_creation_input_tokens;
+  const cached = (cacheRead ?? 0) + (cacheCreation ?? 0);
+  return {
+    input_tokens: cached > 0 ? Math.max(0, usage.input_tokens - cached) : usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    ...(cacheRead === undefined ? {} : { cache_read_input_tokens: cacheRead }),
+    ...(cacheCreation === undefined ? {} : { cache_creation_input_tokens: cacheCreation }),
+  };
+}
 
 export type CanonicalWebSearchCall = {
   id: string;
