@@ -6,6 +6,17 @@
 
 - [`@mlzwl/lark-pi-bridge`](apps/lark-pi-bridge)：把飞书/Lark 消息桥接到本机 Pi coding agent。
 - [`@mlzwl/x-adapter`](apps/x-adapter)：Trae 与豆包工作的本地模型网关。
+- [`@mlzwl/magpie-x-adapter`](apps/magpie-x-adapter)：把本机 x-adapter 网关接入 Magpie 的 provider 插件。
+
+Magpie 接入：
+
+```bash
+npm i -g @mlzwl/x-adapter@latest   # 需要 >= 0.1.3
+magpie plugin add @mlzwl/magpie-x-adapter
+magpie plugin login x-adapter
+```
+
+两个包都必须先发布到公共 npm 才能使用上述命令。`@mlzwl/magpie-x-adapter` 依赖 `@mlzwl/x-adapter` 的 `capabilities` 与 `start --no-orphan-recovery`（`>= 0.1.3`），发布顺序为 x-adapter 在前。
 
 ## 开发
 
@@ -22,6 +33,13 @@ pnpm verify
 ```bash
 pnpm --filter @mlzwl/x-adapter verify
 pnpm --filter @mlzwl/x-adapter pack:dry-run
+```
+
+单独验证 Magpie 插件：
+
+```bash
+pnpm --filter @mlzwl/magpie-x-adapter verify
+pnpm --filter @mlzwl/magpie-x-adapter pack:dry-run
 ```
 
 单独验证 bridge：

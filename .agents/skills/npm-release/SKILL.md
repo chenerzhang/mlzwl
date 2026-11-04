@@ -1,18 +1,21 @@
 ---
 name: npm-release
-description: 管理 mlzwl monorepo 公共 npm 子包的 Changelog、首次发布、仅发布及 patch/minor/major 发版。用户要求分析发版差异、发布 lark-pi-bridge 或 x-adapter、升级版本或生成 GitHub Release 时使用。
+description: 管理 mlzwl monorepo 公共 npm 子包的 Changelog、首次发布、仅发布及 patch/minor/major 发版。用户要求分析发版差异、发布 lark-pi-bridge、x-adapter 或 magpie-x-adapter、升级版本或生成 GitHub Release 时使用。
 ---
 
 # mlzwl npm 本地发布
 
 当前支持：
 
-| 包名                    | 包目录                | 包标识           | tag                         |
-| ----------------------- | --------------------- | ---------------- | --------------------------- |
-| `@mlzwl/lark-pi-bridge` | `apps/lark-pi-bridge` | `lark-pi-bridge` | `lark-pi-bridge-v<version>` |
-| `@mlzwl/x-adapter`      | `apps/x-adapter`      | `x-adapter`      | `x-adapter-v<version>`      |
+| 包名                      | 包目录                  | 包标识             | tag                           |
+| ------------------------- | ----------------------- | ------------------ | ----------------------------- |
+| `@mlzwl/lark-pi-bridge`   | `apps/lark-pi-bridge`   | `lark-pi-bridge`   | `lark-pi-bridge-v<version>`   |
+| `@mlzwl/x-adapter`        | `apps/x-adapter`        | `x-adapter`        | `x-adapter-v<version>`        |
+| `@mlzwl/magpie-x-adapter` | `apps/magpie-x-adapter` | `magpie-x-adapter` | `magpie-x-adapter-v<version>` |
 
 以下流程中的 `<package-name>`、`<package-directory>` 和 `<package-id>` 必须使用同一行映射。用户未明确目标包且上下文不能唯一确定时，必须先询问，不能默认发布另一个包。
+
+发布顺序：`@mlzwl/magpie-x-adapter` 自动启动网关依赖 `@mlzwl/x-adapter` 的 `capabilities` 与 `start --no-orphan-recovery`（`>= 0.1.3`）。发布插件前必须确认该 x-adapter 版本已在公共 npm 可见；若尚未发布，先发布 x-adapter。不得先发布插件，否则用户按插件 README 安装会拿到一个无法自动启动的 CLI。
 
 公共 registry 固定为 `https://registry.npmjs.org`，默认分支为 `master`，托管平台为 GitHub。版本改动通过 PR 合入，npm publish 从维护者本机执行。
 
@@ -109,6 +112,7 @@ README 发布区间使用 `<!-- npm-release:start -->` / `<!-- npm-release:end -
    ```bash
    pnpm --filter @mlzwl/lark-pi-bridge smoke:local # lark-pi-bridge
    pnpm --filter @mlzwl/x-adapter smoke             # x-adapter
+   # magpie-x-adapter 没有独立 smoke；其 verify 与 pack:dry-run 覆盖 bundle 和 hook 形状。
    ```
 
 7. 按 `.agents/skills/create-pr/SKILL.md` 的验证、commit、普通 push 和 PR 规则交付版本 PR；上游授权来自本次完整发布请求。create-pr 不负责合并或发布。

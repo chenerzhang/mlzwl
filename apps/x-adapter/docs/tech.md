@@ -167,7 +167,9 @@ Responses history 记录 provider；跨 provider `previous_response_id` 被拒�
 
 ## 生命周期与验证状态
 
-CLI 使用 owner-only runtime lock 和 control socket 管理 daemon。停止与更新先关闭活动 data-plane 连接，再释放 lock。孤儿恢复仅针对命令行已验证为本包 `__daemon__` 的进程。
+CLI 使用 owner-only runtime lock 和 control socket 管理 daemon。停止与更新先关闭活动 data-plane 连接，再释放 lock。孤儿恢复仅针对命令行已验证为本包 `__daemon__` 的进程。共享 daemon 的调用方可先用 `x-adapter capabilities` 探测能力，再通过 `x-adapter start --no-orphan-recovery` 或 `X_ADAPTER_NO_ORPHAN_RECOVERY=1` 禁止孤儿恢复。该模式只报告 lock 冲突，不终止仍在运行的 daemon。
+
+Magpie 使用独立的 OpenCode 插件包 `@mlzwl/magpie-x-adapter`。插件只连接 loopback 网关，透传稳定的 `x-session-id`，并复用同一数据目录、登录与额度。插件需要补启动 daemon 时，必须先确认 CLI 支持禁止孤儿恢复，再启动一次；插件从不停止 daemon。
 
 Pi extension 仅接受 loopback URL，可自动安装公共 npm 包并启动 daemon；不自动执行 provider 登录。
 

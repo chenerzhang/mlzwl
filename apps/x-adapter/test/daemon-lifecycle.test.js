@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { getDaemonStatus, startDaemon, stopDaemon } from '../dist/daemon/lifecycle.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cli = path.join(root, 'dist', 'bin', 'index.js');
+const packageVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const execFileAsync = promisify(execFile);
 
 function testEnvironment() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'x-adapter-daemon-'));
@@ -44,6 +48,17 @@ async function withDaemonEnvironment(run) {
 function waitForSocketClose(socket) {
   return new Promise((resolve) => socket.once('close', resolve));
 }
+
+test('CLI advertises and reports non-destructive daemon start support', async () => {
+  const capabilities = await execFileAsync(process.execPath, [cli, 'capabilities'], { encoding: 'utf8' });
+  assert.deepEqual(JSON.parse(capabilities.stdout), {
+    version: packageVersion,
+    noOrphanRecovery: true,
+    startNoOrphanRecoveryFlag: true,
+  });
+  const help = await execFileAsync(process.execPath, [cli, 'help'], { encoding: 'utf8' });
+  assert.match(help.stdout, /x-adapter start \[--port <port>\] \[--no-orphan-recovery\]/);
+});
 
 test(
   'daemon lifecycle starts, reports isolated realm/provider status, and stops cleanly',
@@ -145,3 +160,69 @@ test(
     });
   },
 );
+
+async function withStandInDaemon(run) {
+  // The real CLI path and __daemon__ marker make this stand-in pass the same
+  // identity check as a detached x-adapter daemon.
+  const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', cli, '__daemon__'], {
+    stdio: 'ignore',
+  });
+  const exited = new Promise((resolve) => holder.once('exit', resolve));
+  await new Promise((resolve, reject) => {
+    holder.once('spawn', resolve);
+    holder.once('error', reject);
+  });
+  try {
+    return await run(holder.pid);
+  } finally {
+    if (holder.exitCode === null && holder.signalCode === null) {
+      holder.kill('SIGKILL');
+    }
+    await exited;
+  }
+}
+
+function lockOwnerIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+for (const route of [
+  { name: 'the --no-orphan-recovery flag alone', args: ['--no-orphan-recovery'], env: {} },
+  { name: 'the X_ADAPTER_NO_ORPHAN_RECOVERY variable alone', args: [], env: { X_ADAPTER_NO_ORPHAN_RECOVERY: '1' } },
+]) {
+  test(
+    `daemon start with ${route.name} reports the live lock owner and leaves it running`,
+    { concurrency: false },
+    async () => {
+      await withDaemonEnvironment(async (environment) => {
+        await withStandInDaemon(async (ownerPid) => {
+          const runtimeDir = path.join(environment.dataDir, 'runtime');
+          const lockPath = path.join(runtimeDir, 'x-adapter.lock');
+          fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+          const lockContents = JSON.stringify({ pid: ownerPid });
+          fs.writeFileSync(lockPath, lockContents, { mode: 0o600 });
+
+          const env = {
+            ...process.env,
+            X_ADAPTER_DATA_DIR: environment.dataDir,
+            X_ADAPTER_PORT: environment.port,
+          };
+          delete env.X_ADAPTER_NO_ORPHAN_RECOVERY;
+          Object.assign(env, route.env);
+          await assert.rejects(
+            () => execFileAsync(process.execPath, [cli, 'start', ...route.args], { env, encoding: 'utf8' }),
+            (error) => /still-running daemon pid/.test(`${error.stdout ?? ''}${error.stderr ?? ''}`),
+          );
+          assert.equal(lockOwnerIsRunning(ownerPid), true);
+          assert.equal(fs.readFileSync(lockPath, 'utf8'), lockContents);
+          fs.unlinkSync(lockPath);
+        });
+      });
+    },
+  );
+}

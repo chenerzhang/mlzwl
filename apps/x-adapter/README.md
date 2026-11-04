@@ -134,6 +134,18 @@ extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向
 
 自定义地址、本机鉴权、关闭自动启动/安装及离线模式见 [`docs/pi-provider-setup.md`](docs/pi-provider-setup.md)。
 
+## 接入 Magpie
+
+Magpie 插件尚未发布时，先完成 x-adapter 发版，再发布插件。安装顺序如下：
+
+```bash
+npm i -g @mlzwl/x-adapter@latest   # 需要 >= 0.1.3
+magpie plugin add @mlzwl/magpie-x-adapter
+magpie plugin login x-adapter
+```
+
+该插件复用已运行的 x-adapter daemon、登录、模型可见性和额度。网关未运行时，插件可安全地执行一次 `x-adapter start`；该自动启动依赖 `x-adapter capabilities` 与 `start --no-orphan-recovery`，`0.1.2` 及更早版本会被拒绝。完整说明见 [`../magpie-x-adapter/README.md`](../magpie-x-adapter/README.md)。
+
 ## 接入 Claude Code 与 Codex
 
 参见 [`docs/cc-codex-setup.md`](docs/cc-codex-setup.md)。
@@ -142,12 +154,13 @@ extension 默认连接 `http://127.0.0.1:10100/v1`，并按模型发现结果向
 
 配置、缓存、日志、运行时文件和凭据默认保存在 `~/.x-adapter/`。
 
-| 变量                      | 用途                                     |
-| ------------------------- | ---------------------------------------- |
-| `X_ADAPTER_PORT`          | 修改监听端口，默认为 `10100`。           |
-| `X_ADAPTER_DATA_DIR`      | 修改数据根目录，默认为 `~/.x-adapter`。  |
-| `X_ADAPTER_DEFAULT_MODEL` | 修改默认模型。                           |
-| `X_ADAPTER_CLIENT_TOKEN`  | 为本机客户端请求启用可选的 Bearer 鉴权。 |
+| 变量                           | 用途                                                   |
+| ------------------------------ | ------------------------------------------------------ |
+| `X_ADAPTER_PORT`               | 修改监听端口，默认为 `10100`。                         |
+| `X_ADAPTER_DATA_DIR`           | 修改数据根目录，默认为 `~/.x-adapter`。                |
+| `X_ADAPTER_DEFAULT_MODEL`      | 修改默认模型。                                         |
+| `X_ADAPTER_CLIENT_TOKEN`       | 为本机客户端请求启用可选的 Bearer 鉴权。               |
+| `X_ADAPTER_NO_ORPHAN_RECOVERY` | 启动时只报告现有 daemon lock 冲突，不终止 lock owner。 |
 
 完整环境变量说明见 [`docs/operations.md`](docs/operations.md)。
 
@@ -174,6 +187,13 @@ x-adapter update
 ## Changelog
 
 <!-- npm-release:start -->
+
+### Unreleased
+
+#### Added
+
+- 新增供共享客户端使用的 `x-adapter capabilities` 与 `x-adapter start --no-orphan-recovery`。调用方可要求启动只报告 daemon lock 冲突，不终止仍在运行的 lock owner。`@mlzwl/magpie-x-adapter` 的自动启动依赖这两个能力，因此本版本必须先于该插件发布。
+- 新增独立的 Magpie provider 插件 `@mlzwl/magpie-x-adapter` 接入说明。
 
 ### [0.1.0] - 2026-10-14
 

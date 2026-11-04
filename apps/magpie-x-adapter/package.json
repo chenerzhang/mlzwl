@@ -1,0 +1,56 @@
+{
+  "name": "@mlzwl/magpie-x-adapter",
+  "version": "0.1.0",
+  "description": "Magpie (OpenCode plugin format) provider for the local x-adapter model gateway.",
+  "type": "module",
+  "keywords": [
+    "opencode-plugin",
+    "magpie",
+    "x-adapter",
+    "local-gateway"
+  ],
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "magpie": {
+    "maxConcurrency": 4
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-magpie-plugin.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "format": "prettier --write package.json src docs README.md",
+    "format:check": "prettier --check package.json src docs README.md",
+    "test": "pnpm build && node ../../scripts/check-magpie-plugin.mjs",
+    "prepack": "pnpm build",
+    "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
+    "pack:dry-run": "pnpm build && rm -rf ../../.tmp/magpie-x-adapter-pack && mkdir -p ../../.tmp/magpie-x-adapter-pack && pnpm pack --pack-destination ../../.tmp/magpie-x-adapter-pack"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "chenerzhang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chenerzhang/mlzwl.git",
+    "directory": "apps/magpie-x-adapter"
+  },
+  "homepage": "https://github.com/chenerzhang/mlzwl/tree/master/apps/magpie-x-adapter#readme",
+  "bugs": {
+    "url": "https://github.com/chenerzhang/mlzwl/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  }
+}
