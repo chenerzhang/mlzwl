@@ -9,9 +9,10 @@ Trae 接口不是公开稳定 API，可能随官方客户端、账号区域或�
 ## CLI
 
 ```bash
-x-adapter start [--port <port>]
+x-adapter start [--port <port>] [--no-orphan-recovery]
 x-adapter status
 x-adapter stop
+x-adapter capabilities
 x-adapter models [--json] [--all]
 x-adapter models refresh
 x-adapter models hide
@@ -28,7 +29,7 @@ x-adapter uninstall-service [--path <path>]
 x-adapter version
 ```
 
-交互终端可在省略 `--realm` 后选择 Trae realm；脚本、管道或其他非交互环境必须显式传入 realm，不会猜测。`start` 启动后台 daemon；`status` 返回版本、PID、地址、运行目录和 provider/realm 状态；`stop` 关闭活动连接后释放 daemon lock。
+交互终端可在省略 `--realm` 后选择 Trae realm；脚本、管道或其他非交互环境必须显式传入 realm，不会猜测。`start` 启动后台 daemon；`status` 返回版本、PID、地址、运行目录和 provider/realm 状态；`stop` 关闭活动连接后释放 daemon lock。共享 daemon 的调用方可先用 `capabilities` 检查支持，再用 `start --no-orphan-recovery` 或 `X_ADAPTER_NO_ORPHAN_RECOVERY=1` 禁止自动终止被判为孤儿的 lock owner。
 
 ## 数据目录
 
@@ -131,6 +132,7 @@ Trae 聊天不会执行通用网络/HTTP 自动重试。仅当响应尚未开始
 | `X_ADAPTER_CONFIG_PATH`                           | `<data>/config.json`。                             |
 | `X_ADAPTER_DEFAULT_MODEL`                         | `doubao-work-auto`。                               |
 | `X_ADAPTER_CLIENT_TOKEN`                          | 可选本机 data-plane token。                        |
+| `X_ADAPTER_NO_ORPHAN_RECOVERY`                    | 显式启用时，启动只报告 daemon lock 冲突。          |
 | `X_ADAPTER_TRAE_DATA_DIR`                         | `<data>/trae`。                                    |
 | `X_ADAPTER_TRAE_AUTH_TIMEOUT_MS`                  | 浏览器登录和 OAuth 请求时限，默认 `120000`。       |
 | `X_ADAPTER_TRAE_REFRESH_SKEW_MS`                  | 提前刷新窗口，默认 `300000`。                      |

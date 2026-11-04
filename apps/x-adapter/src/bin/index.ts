@@ -33,7 +33,8 @@ function printHelp(): void {
   console.log(
     [
       'Usage:',
-      '  x-adapter start [--port <port>]',
+      '  x-adapter start [--port <port>] [--no-orphan-recovery]',
+      '  x-adapter capabilities',
       '  x-adapter status',
       '  x-adapter stop',
       '  x-adapter models [--json] [--all]',
@@ -129,6 +130,11 @@ async function acquireDaemonLockWithRecovery() {
     if ((error as NodeJS.ErrnoException).code !== 'daemon_lock_held') {
       throw error;
     }
+    // A shared client such as the Magpie plugin must never terminate a daemon
+    // that Pi, Claude Code, Codex, or another client can still be using.
+    if (orphanRecoveryDisabled()) {
+      throw error;
+    }
     const paths = getRuntimePaths();
     const ownerPid = readLockPid(paths.lockPath);
     if (
@@ -152,6 +158,12 @@ async function acquireDaemonLockWithRecovery() {
     }
     return acquireDaemonLock();
   }
+}
+
+/** Whether this caller requires a lock conflict instead of orphan recovery. */
+function orphanRecoveryDisabled(): boolean {
+  const value = process.env.X_ADAPTER_NO_ORPHAN_RECOVERY?.trim().toLowerCase();
+  return !!value && value !== '0' && value !== 'false' && value !== 'no' && value !== 'off';
 }
 
 async function waitForControlSocket(pid: number, timeoutMs: number): Promise<boolean> {
@@ -381,7 +393,14 @@ async function main(): Promise<void> {
       }
       process.env.X_ADAPTER_PORT = requestedPort;
     }
+    if (args.includes('--no-orphan-recovery')) {
+      process.env.X_ADAPTER_NO_ORPHAN_RECOVERY = '1';
+    }
     console.log(JSON.stringify(await startDaemon(fileURLToPath(import.meta.url)), null, 2));
+    return;
+  }
+  if (command === 'capabilities') {
+    console.log(JSON.stringify({ version: VERSION, noOrphanRecovery: true, startNoOrphanRecoveryFlag: true }, null, 2));
     return;
   }
   if (command === 'status') {
