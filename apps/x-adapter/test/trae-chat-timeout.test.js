@@ -9,6 +9,8 @@ import { clearModelCache, getModelCatalog, resolveModel } from '../dist/provider
 import { publicModelAliases } from '../dist/providers/trae/models/discovery.js';
 import {
   buildTraeBody,
+  eventToCanonical,
+  resultFromSseText,
   runTraeChat,
   streamTraeChat,
   traeChatOutputLimits,
@@ -996,4 +998,110 @@ test('mergeModelGroups never merges identical config names across realms', () =>
   assert.equal(global[0].id, 'global-same');
   assert.equal(cn[0].id, 'cn-same');
   assert.notEqual(global[0].id, cn[0].id);
+});
+
+function upstreamSse(frames) {
+  return frames.map(({ event, payload }) => `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`).join('');
+}
+
+test('Trae token_usage clamps fractional cache counters to the integer prompt size', () => {
+  const usageEvent = eventToCanonical(
+    'token_usage',
+    {
+      prompt_tokens: 10,
+      completion_tokens: 2,
+      total_tokens: 12,
+      cache_read_input_tokens: 8.9,
+      cache_creation_input_tokens: 1.7,
+    },
+    'timeout-test',
+  );
+  assert.deepEqual(usageEvent.usage, {
+    input_tokens: 10,
+    output_tokens: 2,
+    total_tokens: 12,
+    cache_read_input_tokens: 8,
+    cache_creation_input_tokens: 1,
+  });
+});
+
+test('Trae token_usage keeps cache counters inside the reported prompt size', () => {
+  // A cache read larger than the whole prompt is truncated to the prompt, which
+  // leaves no room for a cache write on the same request.
+  const oversizedRead = eventToCanonical(
+    'token_usage',
+    {
+      prompt_tokens: 10,
+      completion_tokens: 2,
+      total_tokens: 12,
+      cache_read_input_tokens: 12,
+      cache_creation_input_tokens: 3,
+    },
+    'timeout-test',
+  );
+  assert.deepEqual(oversizedRead.usage, {
+    input_tokens: 10,
+    output_tokens: 2,
+    total_tokens: 12,
+    cache_read_input_tokens: 10,
+    cache_creation_input_tokens: 0,
+  });
+  // A cache write larger than what the cache read left over is truncated to the remainder.
+  const oversizedWrite = eventToCanonical(
+    'token_usage',
+    {
+      prompt_tokens: 10,
+      completion_tokens: 2,
+      total_tokens: 12,
+      cache_read_input_tokens: 4,
+      cache_creation_input_tokens: 9,
+    },
+    'timeout-test',
+  );
+  assert.deepEqual(oversizedWrite.usage, {
+    input_tokens: 10,
+    output_tokens: 2,
+    total_tokens: 12,
+    cache_read_input_tokens: 4,
+    cache_creation_input_tokens: 6,
+  });
+});
+
+test('Trae non-streaming results carry the upstream cache counters', () => {
+  const result = resultFromSseText(
+    upstreamSse([
+      { event: 'output', payload: { response: 'OK' } },
+      {
+        event: 'token_usage',
+        payload: {
+          prompt_tokens: 17040,
+          completion_tokens: 11,
+          total_tokens: 17051,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 17024,
+        },
+      },
+      { event: 'done', payload: { finish_reason: 'stop' } },
+    ]),
+    'timeout-test',
+  );
+  assert.deepEqual(result.usage, {
+    input_tokens: 17040,
+    output_tokens: 11,
+    total_tokens: 17051,
+    cache_read_input_tokens: 17024,
+    cache_creation_input_tokens: 0,
+  });
+});
+
+test('Trae non-streaming results omit cache counters the provider did not report', () => {
+  const result = resultFromSseText(
+    upstreamSse([
+      { event: 'output', payload: { response: 'OK' } },
+      { event: 'token_usage', payload: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } },
+      { event: 'done', payload: { finish_reason: 'stop' } },
+    ]),
+    'timeout-test',
+  );
+  assert.deepEqual(result.usage, { input_tokens: 10, output_tokens: 2, total_tokens: 12 });
 });

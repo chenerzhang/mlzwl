@@ -3,6 +3,7 @@ import {
   canonicalMessageRole,
   CanonicalMessage,
   CanonicalResult,
+  anthropicUsage,
   contentBlocks,
   textBlocks,
   textFromContent,
@@ -161,90 +162,6 @@ export function anthropicMessageJson(result: CanonicalResult, options: { id?: st
     content,
     stop_reason: result.tool_calls.length ? 'tool_use' : result.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
     stop_sequence: null,
-    usage: {
-      input_tokens: result.usage.input_tokens,
-      output_tokens: result.usage.output_tokens,
-    },
+    usage: anthropicUsage(result.usage),
   };
-}
-
-function anthropicEvent(event: string, payload: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
-}
-
-export function anthropicSseFromResult(result: CanonicalResult): string {
-  const message = anthropicMessageJson(result);
-  const lines: string[] = [];
-  lines.push(
-    anthropicEvent('message_start', {
-      type: 'message_start',
-      message: { ...message, content: [], stop_reason: null, usage: { input_tokens: 0, output_tokens: 0 } },
-    }),
-  );
-  let index = 0;
-  if (result.reasoning && shouldExposeReasoningSummary()) {
-    lines.push(
-      anthropicEvent('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'thinking', thinking: '' },
-      }),
-    );
-    lines.push(
-      anthropicEvent('content_block_delta', {
-        type: 'content_block_delta',
-        index,
-        delta: { type: 'thinking_delta', thinking: result.reasoning },
-      }),
-    );
-    lines.push(anthropicEvent('content_block_stop', { type: 'content_block_stop', index }));
-    index += 1;
-  }
-  if (result.text) {
-    lines.push(
-      anthropicEvent('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'text', text: '' },
-      }),
-    );
-    lines.push(
-      anthropicEvent('content_block_delta', {
-        type: 'content_block_delta',
-        index,
-        delta: { type: 'text_delta', text: result.text },
-      }),
-    );
-    lines.push(anthropicEvent('content_block_stop', { type: 'content_block_stop', index }));
-    index += 1;
-  }
-  for (const toolCall of result.tool_calls) {
-    lines.push(
-      anthropicEvent('content_block_start', {
-        type: 'content_block_start',
-        index,
-        content_block: { type: 'tool_use', id: toolCall.id, name: toolCall.function.name, input: {} },
-      }),
-    );
-    if (toolCall.function.arguments) {
-      lines.push(
-        anthropicEvent('content_block_delta', {
-          type: 'content_block_delta',
-          index,
-          delta: { type: 'input_json_delta', partial_json: toolCall.function.arguments },
-        }),
-      );
-    }
-    lines.push(anthropicEvent('content_block_stop', { type: 'content_block_stop', index }));
-    index += 1;
-  }
-  lines.push(
-    anthropicEvent('message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: message.stop_reason, stop_sequence: null },
-      usage: { output_tokens: result.usage.output_tokens },
-    }),
-  );
-  lines.push(anthropicEvent('message_stop', { type: 'message_stop' }));
-  return lines.join('');
 }

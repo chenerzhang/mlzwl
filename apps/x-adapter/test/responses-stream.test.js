@@ -6,6 +6,9 @@ import {
   responsesSseFromEvents,
   responsesSseIterable,
 } from '../dist/protocol/streaming.js';
+import { chatCompletionJson } from '../dist/protocol/chat-completions.js';
+import { anthropicMessageJson } from '../dist/protocol/anthropic.js';
+import { responseJson } from '../dist/protocol/responses.js';
 
 async function* streamTextToolText() {
   yield { type: 'start', model: 'trae-test' };
@@ -361,4 +364,151 @@ test('Responses streaming reports Doubao parallel tool support as disabled', asy
   const text = Buffer.concat(chunks).toString('utf8');
   assert.equal(events(text, 'response.created')[0].response.parallel_tool_calls, false);
   assert.equal(events(text, 'response.completed')[0].response.parallel_tool_calls, false);
+});
+
+const projectionResult = {
+  model: 'trae-test',
+  text: 'answer',
+  reasoning: 'thought',
+  tool_calls: [],
+  finish_reason: 'stop',
+  usage: { input_tokens: 1, output_tokens: 2, total_tokens: 3 },
+};
+
+async function* streamCachedUsage() {
+  yield { type: 'start', model: 'trae-test' };
+  yield { type: 'text', delta: 'OK' };
+  yield {
+    type: 'usage',
+    usage: {
+      input_tokens: 17040,
+      output_tokens: 14,
+      total_tokens: 17054,
+      cache_read_input_tokens: 17024,
+      cache_creation_input_tokens: 0,
+    },
+  };
+  yield { type: 'done', finish_reason: 'stop' };
+}
+
+async function* streamUncachedUsage() {
+  yield { type: 'start', model: 'trae-test' };
+  yield { type: 'text', delta: 'OK' };
+  yield { type: 'usage', usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } };
+  yield { type: 'done', finish_reason: 'stop' };
+}
+
+test('public protocols project cache counters with their native field names', () => {
+  const cached = {
+    ...projectionResult,
+    usage: {
+      input_tokens: 17040,
+      output_tokens: 14,
+      total_tokens: 17054,
+      cache_read_input_tokens: 17024,
+      cache_creation_input_tokens: 0,
+    },
+  };
+  // OpenAI counts the cached part inside prompt_tokens, so the prompt is unchanged.
+  assert.deepEqual(chatCompletionJson(cached).usage, {
+    prompt_tokens: 17040,
+    completion_tokens: 14,
+    total_tokens: 17054,
+    prompt_tokens_details: { cached_tokens: 17024, cache_write_tokens: 0 },
+  });
+  assert.deepEqual(responseJson(cached).usage, {
+    input_tokens: 17040,
+    output_tokens: 14,
+    total_tokens: 17054,
+    input_tokens_details: { cached_tokens: 17024, cache_write_tokens: 0 },
+  });
+  // Anthropic counts input_tokens without the cache counters, so the upstream
+  // prompt (which includes them) must be reduced to keep the total equal.
+  assert.deepEqual(anthropicMessageJson(cached).usage, {
+    input_tokens: 16,
+    output_tokens: 14,
+    cache_read_input_tokens: 17024,
+    cache_creation_input_tokens: 0,
+  });
+  // Providers that report no cache counters must not gain fabricated zero details.
+  assert.equal(chatCompletionJson(projectionResult).usage.prompt_tokens_details, undefined);
+  assert.equal(responseJson(projectionResult).usage.input_tokens_details, undefined);
+  assert.equal(anthropicMessageJson(projectionResult).usage.cache_read_input_tokens, undefined);
+});
+
+test('OpenAI usage details do not fabricate a missing cache counter', () => {
+  const onlyRead = {
+    ...projectionResult,
+    usage: { ...projectionResult.usage, cache_read_input_tokens: 2 },
+  };
+  assert.deepEqual(chatCompletionJson(onlyRead).usage.prompt_tokens_details, { cached_tokens: 2 });
+  assert.deepEqual(responseJson(onlyRead).usage.input_tokens_details, { cached_tokens: 2 });
+});
+
+test('Anthropic usage never reports a negative input_tokens when cache counters exceed the prompt', () => {
+  const oversized = {
+    ...projectionResult,
+    usage: {
+      input_tokens: 10,
+      output_tokens: 2,
+      total_tokens: 12,
+      cache_read_input_tokens: 12,
+      cache_creation_input_tokens: 3,
+    },
+  };
+  assert.equal(anthropicMessageJson(oversized).usage.input_tokens, 0);
+  assert.equal(anthropicMessageJson(oversized).usage.cache_read_input_tokens, 12);
+});
+
+test('Responses streaming projects provider cache counters into input_tokens_details', async () => {
+  const text = await responsesSseFromEvents(streamCachedUsage(), 'trae-test');
+  const completed = events(text, 'response.completed')[0].response;
+  assert.deepEqual(completed.usage, {
+    input_tokens: 17040,
+    output_tokens: 14,
+    total_tokens: 17054,
+    input_tokens_details: { cached_tokens: 17024, cache_write_tokens: 0 },
+  });
+});
+
+test('Responses streaming omits input_tokens_details when the provider reports no cache counters', async () => {
+  const text = await responsesSseFromEvents(streamParallelToolsWithUsage(), 'trae-test');
+  const completed = events(text, 'response.completed')[0].response;
+  assert.deepEqual(completed.usage, { input_tokens: 2, output_tokens: 3, total_tokens: 5 });
+  assert.equal(completed.usage.input_tokens_details, undefined);
+});
+
+test('Anthropic streaming subtracts cache counters from input_tokens in message_delta', async () => {
+  const text = await anthropicSseFromEvents(streamCachedUsage(), 'trae-test');
+  const delta = events(text, 'message_delta')[0];
+  // Anthropic counts input_tokens without the cached part, so the prompt stays 17040 in total.
+  assert.equal(delta.usage.input_tokens, 16);
+  assert.equal(delta.usage.cache_read_input_tokens, 17024);
+  assert.equal(delta.usage.cache_creation_input_tokens, 0);
+  assert.equal(
+    delta.usage.input_tokens + delta.usage.cache_read_input_tokens + delta.usage.cache_creation_input_tokens,
+    17040,
+  );
+});
+
+test('Anthropic streaming keeps input_tokens unchanged when the provider reports no cache counters', async () => {
+  const text = await anthropicSseFromEvents(streamUncachedUsage(), 'trae-test');
+  const delta = events(text, 'message_delta')[0];
+  assert.deepEqual(delta.usage, { input_tokens: 10, output_tokens: 2 });
+});
+
+test('Chat Completions streaming projects cache counters in the final usage chunk', async () => {
+  const text = await chatCompletionsSseFromEvents(streamCachedUsage(), 'trae-test');
+  const done = text
+    .split('\n\n')
+    .filter((block) => block.startsWith('data: ') && block !== 'data: [DONE]')
+    .map((block) => JSON.parse(block.slice('data: '.length)))
+    .find((chunk) => chunk.usage);
+  // OpenAI counts the cached part inside prompt_tokens, so the prompt is unchanged.
+  assert.deepEqual(done.usage, {
+    prompt_tokens: 17040,
+    completion_tokens: 14,
+    total_tokens: 17054,
+    prompt_tokens_details: { cached_tokens: 17024, cache_write_tokens: 0 },
+  });
 });
