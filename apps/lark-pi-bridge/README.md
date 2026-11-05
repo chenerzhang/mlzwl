@@ -236,6 +236,18 @@ lark-pi-bridge service-manifest --profile default
 
 <!-- npm-release:start -->
 
+### [0.1.5] - 2026-11-05
+
+#### Changed
+
+- 用户级 service 标识统一改为 `mlzwl` 命名：macOS launchd label 从 `ai.x-connect.lark-pi-bridge.<profile>` 改为 `ai.mlzwl.lark-pi-bridge.<profile>`，Windows 计划任务名从 `\x-connect\lark-pi-bridge-<profile>` 改为 `\mlzwl\lark-pi-bridge-<profile>`。`service-manifest`、`service status` 与 Web 控制面展示同步更新。
+- `service install` 现在自动退役旧标识：旧 launchd job 处于 loaded 时先卸载，再 disable 旧 label 并删除 owned 旧 plist；Windows 上删除旧计划任务。旧 plist 已丢失但 job 仍 loaded 时同样会被处理。从未使用过旧标识的 profile 不会写入 disabled 记录。
+- `update` 迁移逻辑同步更新：发现旧标识的 owned 定义时，会把当前定义写在旧定义同目录并完成退役，不需要手工重建 service。
+
+#### Removed
+
+- 不再使用旧 `x-connect` service 标识。升级后旧 launchd label 保持 `disabled`，需要重新执行 `service install` 才会以新标识注册。
+
 ### [0.1.4] - 2026-10-20
 
 #### Added
