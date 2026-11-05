@@ -755,7 +755,7 @@ program
       throw new Error('无法确定当前 CLI 可执行路径');
     }
     const manifest = renderLaunchdManifest({
-      label: `ai.x-connect.lark-pi-bridge.${paths.profile}`,
+      label: `ai.mlzwl.lark-pi-bridge.${paths.profile}`,
       programArguments: [
         process.execPath,
         executable,

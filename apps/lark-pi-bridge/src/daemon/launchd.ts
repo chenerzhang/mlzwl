@@ -14,7 +14,7 @@ export interface LaunchdManifestInput {
  * loading remain a separately authorized service/E2E operation.
  */
 export function renderLaunchdManifest(input: LaunchdManifestInput): string {
-  if (!/^ai\.x-connect\.lark-pi-bridge\.[A-Za-z0-9._-]+$/.test(input.label)) {
+  if (!/^ai\.mlzwl\.lark-pi-bridge\.[A-Za-z0-9._-]+$/.test(input.label)) {
     throw new Error('invalid launchd label');
   }
   if (!input.programArguments.length || input.programArguments.some((value) => !value)) {

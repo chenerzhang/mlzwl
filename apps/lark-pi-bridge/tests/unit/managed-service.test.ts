@@ -1,6 +1,6 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ManagedService,
@@ -131,7 +131,7 @@ describe('managed platform services', () => {
         if (command === 'launchctl' && args[0] === 'print-disabled') {
           return {
             code: 0,
-            stdout: `disabled services = { "ai.x-connect.lark-pi-bridge.phase7" => ${disabledValue} }\n`,
+            stdout: `disabled services = { "ai.mlzwl.lark-pi-bridge.phase7" => ${disabledValue} }\n`,
             stderr: '',
           };
         }
@@ -172,6 +172,68 @@ describe('managed platform services', () => {
     await expect(manager.install()).rejects.toThrow(/absolute Pi binary path/);
   });
 
+  it('retires the pre-rename launchd job when installing the renamed one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-service-launchd-legacy-'));
+    roots.push(root);
+    const legacyPath = join(root, 'Library', 'LaunchAgents', 'ai.x-connect.lark-pi-bridge.phase7.plist');
+    await mkdir(dirname(legacyPath), { recursive: true });
+    await writeFile(
+      legacyPath,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<!-- Managed-By: @mlzwl/lark-pi-bridge; Service-Id: ai.x-connect.lark-pi-bridge.phase7; Original-Disabled: false -->\n<plist version="1.0"><dict><key>Label</key><string>ai.x-connect.lark-pi-bridge.phase7</string></dict></plist>\n`,
+      { mode: 0o600 },
+    );
+    const calls: string[][] = [];
+    const manager = fixtureManager('darwin', root, async (command, args) => {
+      calls.push([command, ...args]);
+      if (command === 'launchctl' && args[0] === 'print') {
+        return args[1]!.includes('ai.x-connect')
+          ? { code: 0, stdout: 'state = running\npid = 42\n', stderr: '' }
+          : { code: 1, stdout: '', stderr: 'not loaded' };
+      }
+      return ok();
+    });
+    await manager.install();
+    expect(calls).toContainEqual(['launchctl', 'bootout', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    expect(calls).toContainEqual(['launchctl', 'disable', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    await expect(readFile(legacyPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(manager.definitionPath, 'utf8')).toContain('Service-Id: ai.mlzwl.lark-pi-bridge.phase7');
+  });
+
+  it('installs the renamed launchd job when no pre-rename job exists', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-service-launchd-fresh-'));
+    roots.push(root);
+    const calls: string[][] = [];
+    const manager = fixtureManager('darwin', root, async (command, args) => {
+      calls.push([command, ...args]);
+      if (command === 'launchctl' && args[0] === 'print') {
+        return { code: 1, stdout: '', stderr: 'not loaded' };
+      }
+      return ok();
+    });
+    await manager.install();
+    expect(calls).not.toContainEqual(['launchctl', 'bootout', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    expect(await readFile(manager.definitionPath, 'utf8')).toContain('Service-Id: ai.mlzwl.lark-pi-bridge.phase7');
+  });
+
+  it('retires a pre-rename launchd job whose definition file is already gone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'lark-pi-service-launchd-legacy-loaded-'));
+    roots.push(root);
+    const calls: string[][] = [];
+    const manager = fixtureManager('darwin', root, async (command, args) => {
+      calls.push([command, ...args]);
+      if (command === 'launchctl' && args[0] === 'print') {
+        return args[1]!.includes('ai.x-connect')
+          ? { code: 0, stdout: 'state = running\npid = 42\n', stderr: '' }
+          : { code: 1, stdout: '', stderr: 'not loaded' };
+      }
+      return ok();
+    });
+    await manager.install();
+    expect(calls).toContainEqual(['launchctl', 'bootout', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    expect(calls).toContainEqual(['launchctl', 'disable', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    expect(await readFile(manager.definitionPath, 'utf8')).toContain('Service-Id: ai.mlzwl.lark-pi-bridge.phase7');
+  });
+
   it('restores the original launchd disabled override during uninstall', async () => {
     const root = await mkdtemp(join(tmpdir(), 'lark-pi-service-launchd-restore-'));
     roots.push(root);
@@ -181,7 +243,7 @@ describe('managed platform services', () => {
       if (command === 'launchctl' && args[0] === 'print-disabled') {
         return {
           code: 0,
-          stdout: 'disabled services = { "ai.x-connect.lark-pi-bridge.phase7" => true }\n',
+          stdout: 'disabled services = { "ai.mlzwl.lark-pi-bridge.phase7" => true }\n',
           stderr: '',
         };
       }
@@ -193,7 +255,7 @@ describe('managed platform services', () => {
     await manager.install();
     expect(await readFile(manager.definitionPath, 'utf8')).toContain('Original-Disabled: true');
     await manager.uninstall();
-    expect(calls).toContainEqual(['launchctl', 'disable', 'gui/501/ai.x-connect.lark-pi-bridge.phase7']);
+    expect(calls).toContainEqual(['launchctl', 'disable', 'gui/501/ai.mlzwl.lark-pi-bridge.phase7']);
   });
 
   it('refuses to overwrite an existing Windows task without an owned launcher', async () => {

@@ -30,6 +30,8 @@ export interface ManagedServiceOptions {
   userId?: number;
   definitionPath?: string;
   runner?: CommandRunner;
+  /** Operate on the pre-rename `x-connect` service identity so it can be migrated. */
+  legacy?: boolean;
 }
 
 export interface ManagedServiceStatus {
@@ -53,6 +55,9 @@ interface OwnedDefinition {
 
 const MANAGED_MARKER = 'Managed-By: @mlzwl/lark-pi-bridge';
 const OUTPUT_LIMIT = 64 * 1024;
+/** Service identity used before the package renamed its launchd label and Windows task. */
+const LEGACY_DARWIN_LABEL_PREFIX = 'ai.x-connect.lark-pi-bridge.';
+const LEGACY_WINDOWS_TASK_PREFIX = '\\x-connect\\lark-pi-bridge-';
 
 export class ManagedService {
   readonly platform: ServicePlatform;
@@ -75,10 +80,13 @@ export class ManagedService {
       rootDir: this.rootDir,
     };
     this.runner = options.runner ?? runCommand;
-    this.serviceId = serviceId(this.platform, this.profile);
+    this.serviceId =
+      options.legacy === true ? legacyServiceId(this.platform, this.profile) : serviceId(this.platform, this.profile);
     this.definitionPath = options.definitionPath
       ? absoluteSafePath(options.definitionPath, 'service definition path')
-      : defaultDefinitionPath(this.platform, this.profile, this.rootDir, options.userHome ?? homedir());
+      : options.legacy === true
+        ? legacyDefinitionPath(this.platform, this.profile, this.rootDir, options.userHome ?? homedir())
+        : defaultDefinitionPath(this.platform, this.profile, this.rootDir, options.userHome ?? homedir());
   }
 
   renderDefinition(options: { launchdOriginalDisabled?: boolean } = {}): string {
@@ -150,6 +158,7 @@ export class ManagedService {
         windowsTaskMutationStarted = true;
         await this.installWindowsTask();
       }
+      await this.removeLegacyService();
       return await this.status();
     } catch (error) {
       const rollbackErrors: unknown[] = [];
@@ -487,6 +496,53 @@ export class ManagedService {
     ]);
   }
 
+  /**
+   * Remove the pre-rename service so one profile never runs two identities.
+   * The old job is unloaded, its label stays disabled, and its definition is
+   * deleted. A profile that never had the old identity is left untouched, so a
+   * fresh install does not write a disabled entry for a label it never used.
+   * A loaded job counts as present even when its definition file is gone.
+   */
+  private async removeLegacyService(): Promise<void> {
+    if (this.input.legacy === true || this.platform === 'linux') {
+      return;
+    }
+    const legacy = new ManagedService({
+      platform: this.platform,
+      profile: this.profile,
+      rootDir: this.rootDir,
+      nodePath: this.input.nodePath,
+      cliEntryPath: this.input.cliEntryPath,
+      ...(this.input.piBin ? { piBin: this.input.piBin } : {}),
+      envPath: this.input.envPath ?? '',
+      userHome: this.input.userHome,
+      userId: this.input.userId,
+      runner: this.runner,
+      legacy: true,
+      definitionPath: legacyDefinitionPathNextTo(this.platform, this.profile, this.definitionPath),
+    });
+    if (this.platform === 'darwin') {
+      const definitionExists = (await snapshotOwnedDefinition(legacy.definitionPath, legacy.serviceId)).exists;
+      const loaded = (await this.runner('launchctl', ['print', legacy.launchdTarget()])).code === 0;
+      if (!definitionExists && !loaded) {
+        return;
+      }
+      if (loaded) {
+        await this.requireSuccess('launchctl', ['bootout', legacy.launchdTarget()]);
+      }
+      await this.requireSuccess('launchctl', ['disable', legacy.launchdTarget()]);
+      if (definitionExists) {
+        await rm(legacy.definitionPath, { force: true });
+      }
+      return;
+    }
+    const args = ['/Query', '/TN', legacy.serviceId];
+    if ((await this.runner('schtasks.exe', args)).code !== 0) {
+      return;
+    }
+    await this.requireSuccess('schtasks.exe', ['/Delete', '/F', '/TN', legacy.serviceId]);
+  }
+
   private async requireOwnedDefinition(): Promise<void> {
     if (!(await snapshotOwnedDefinition(this.definitionPath, this.serviceId)).exists) {
       throw new Error(`service definition is not installed: ${this.definitionPath}`);
@@ -577,7 +633,7 @@ export class ManagedService {
     return `gui/${uid}`;
   }
 
-  private launchdTarget(): string {
+  launchdTarget(): string {
     return `${this.userDomain()}/${this.serviceId}`;
   }
 
@@ -683,20 +739,48 @@ function nativeServicePlatform(): ServicePlatform {
 
 function serviceId(platform: ServicePlatform, profile: string): string {
   return platform === 'darwin'
-    ? `ai.x-connect.lark-pi-bridge.${profile}`
+    ? `ai.mlzwl.lark-pi-bridge.${profile}`
     : platform === 'linux'
       ? `lark-pi-bridge-${profile}.service`
-      : `\\x-connect\\lark-pi-bridge-${profile}`;
+      : `\\mlzwl\\lark-pi-bridge-${profile}`;
 }
 
 function defaultDefinitionPath(platform: ServicePlatform, profile: string, rootDir: string, userHome: string): string {
   if (platform === 'darwin') {
-    return join(userHome, 'Library', 'LaunchAgents', `ai.x-connect.lark-pi-bridge.${profile}.plist`);
+    return join(userHome, 'Library', 'LaunchAgents', `ai.mlzwl.lark-pi-bridge.${profile}.plist`);
   }
   if (platform === 'linux') {
     return join(userHome, '.config', 'systemd', 'user', `lark-pi-bridge-${profile}.service`);
   }
   return join(rootDir, 'profiles', profile, 'runtime', 'lark-pi-bridge-service.ps1');
+}
+
+function legacyServiceId(platform: ServicePlatform, profile: string): string {
+  return platform === 'darwin'
+    ? `${LEGACY_DARWIN_LABEL_PREFIX}${profile}`
+    : platform === 'win32'
+      ? `${LEGACY_WINDOWS_TASK_PREFIX}${profile}`
+      : serviceId(platform, profile);
+}
+
+function legacyDefinitionPath(platform: ServicePlatform, profile: string, rootDir: string, userHome: string): string {
+  return platform === 'darwin'
+    ? join(userHome, 'Library', 'LaunchAgents', `${LEGACY_DARWIN_LABEL_PREFIX}${profile}.plist`)
+    : defaultDefinitionPath(platform, profile, rootDir, userHome);
+}
+
+/** Path of the current-identity definition that lives next to `definitionPath`. */
+export function currentDefinitionPathFor(platform: ServicePlatform, profile: string, definitionPath: string): string {
+  return platform === 'darwin'
+    ? join(dirname(definitionPath), `ai.mlzwl.lark-pi-bridge.${profile}.plist`)
+    : definitionPath;
+}
+
+/** Path of the pre-rename definition that lives next to `definitionPath`. */
+function legacyDefinitionPathNextTo(platform: ServicePlatform, profile: string, definitionPath: string): string {
+  return platform === 'darwin'
+    ? join(dirname(definitionPath), `${LEGACY_DARWIN_LABEL_PREFIX}${profile}.plist`)
+    : definitionPath;
 }
 
 function serviceProgramArguments(input: ManagedServiceOptions, profile: string): string[] {

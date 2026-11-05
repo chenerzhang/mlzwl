@@ -108,7 +108,7 @@ describe('Pi-only profile schema', () => {
   it('preserves normalized model and transport preferences when profile credentials are updated', () => {
     const previous = createProfileConfig({
       app,
-      preferences: { transport: 'rpc', model: 'x-connect/trae-gpt-5.5', showToolCalls: true },
+      preferences: { transport: 'rpc', model: 'x-adapter/trae-gpt-5.5', showToolCalls: true },
     });
     const updated = createProfileConfig({
       app: { id: 'cli_test', secretFile: 'profiles/default/app-secret', tenant: 'feishu' },
@@ -117,7 +117,7 @@ describe('Pi-only profile schema', () => {
     expect(updated.preferences).toEqual({
       piConfigScope: 'user',
       transport: 'rpc',
-      model: 'x-connect/trae-gpt-5.5',
+      model: 'x-adapter/trae-gpt-5.5',
       showToolCalls: true,
       sessionRetention: { enabled: true, activeDays: 90, archivedDays: 7, orphanDays: 7 },
     });

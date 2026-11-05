@@ -75,7 +75,7 @@ lark-pi-bridge init --profile default --app-id cli_xxx \
 
 新 profile 的普通 `config.json` 只保存 bridge-home-relative `secretFile` 引用；secret 会原子写入 `profiles/<profile>/app-secret`，权限为 `0600`。运行时拒绝指向 profile 外、符号链接或权限过宽的 secret 文件。再次 `init` 既有 profile 时，未显式传入的模型、transport、workspace、allowlist 与 permissions 会保留，适合只更新应用权限或凭据。不要将真实 App Secret、Pi/provider token、Cookie 或 JWT 提交到仓库、聊天消息或日志。
 
-新 profile 默认 `piConfigScope=user`：Pi 通过用户目录 `~/.pi/agent` 读取 settings、认证、extensions、skills、prompts 与 packages；Bridge 管理面只读使用这些资源，不修改其内容，也不传入 profile 的 model 覆盖。`profile` scope 则继续使用 `profiles/<profile>/pi-agent` 作为独立 `PI_CODING_AGENT_DIR`，并允许 `model-config` 管理 profile-local endpoint/model。两种 scope 下，session 目录和 Bridge system prompt 都始终保存在 profile-local `pi-agent/` 内。Bridge 不启动或配置 `x-connect`。默认 `validate` 不连接真实 provider；`doctor --check-provider` 与显式 `doctor --check-credentials` 分别检查 endpoint 可达性和真实模型。
+新 profile 默认 `piConfigScope=user`：Pi 通过用户目录 `~/.pi/agent` 读取 settings、认证、extensions、skills、prompts 与 packages；Bridge 管理面只读使用这些资源，不修改其内容，也不传入 profile 的 model 覆盖。`profile` scope 则继续使用 `profiles/<profile>/pi-agent` 作为独立 `PI_CODING_AGENT_DIR`，并允许 `model-config` 管理 profile-local endpoint/model。两种 scope 下，session 目录和 Bridge system prompt 都始终保存在 profile-local `pi-agent/` 内。Bridge 不启动或配置 `x-adapter`。默认 `validate` 不连接真实 provider；`doctor --check-provider` 与显式 `doctor --check-credentials` 分别检查 endpoint 可达性和真实模型。
 
 配置形态示例（schema v3）：
 
@@ -216,7 +216,7 @@ lark-pi-bridge service-manifest --profile default
 - 新 profile 默认 `user` scope 与 `full/full`。`user` scope 直接共享用户 Pi 的配置、认证、packages、extensions、skills、prompt templates 和其他原生资源，但 Bridge CLI/Web 管理面不写 `~/.pi/agent`；用户主动执行公开 Pi 扩展命令时，扩展自身的受信任行为仍按 Pi 语义运行。`profile` scope 使用独立配置目录。两种 scope 的 session 与 Bridge prompt 始终 profile-local。
 - `validate` 的协议探测使用新建临时 Pi profile、非真实 key 和进程内 `127.0.0.1` 随机端口 mock；不会读取默认 Pi auth，也不会访问 provider。为避免自定义 CA 变量在进程启动前触发文件读取，probe 还会移除 `SSL_CERT_FILE`、`SSL_CERT_DIR` 与 `NODE_EXTRA_CA_CERTS`。
 - 普通运行两种 transport 都固定使用 `--no-approve`。显式 `/handoff` 是唯一例外：Bridge 先在用户默认 sessions、用户 settings 可推导的 sessionDir 与当前 profile sessions 这些有界可信 roots 中精确定位完整 ID，再用 Pi 原生 `--fork` 创建不同 ID 的 profile-local fork；source 不续写、不修改、不同步。handoff 固定 source cwd、用户 Pi config、完整工具和 `--approve`，会绕过 workspace 与 profile access 上限，因此可执行项目资源及运行用户有权访问的 OS 资源。
-- RPC 只改变 bridge 与本机 Pi 的控制协议，Pi 到所选 provider（包括用户自行配置的 `x-connect`）仍使用原有模型 HTTP 数据面。
+- RPC 只改变 bridge 与本机 Pi 的控制协议，Pi 到所选 provider（包括用户自行配置的 `x-adapter`）仍使用原有模型 HTTP 数据面。
 - RPC Extension UI 是与普通 agent event 隔离的 sideband：严格校验 Pi 官方九种请求；阻塞交互使用随机一次性 token 并绑定 run/scope/原始 open ID，发送失败、超时、中断、断连或关闭一律安全取消，confirm 从不默认同意。`notify/status/widget` 只做有界私密展示，`setTitle` 忽略，`set_editor_text` 只提示建议文本而不自动执行。
 - RPC fallback 仅在 prompt 确定尚未被接受（例如握手前失败或 `prompt success:false`）时才允许重放到 spawn-per-turn；写入后超时、断连、子进程退出、UI 故障或 malformed protocol 均禁止重放，以免重复执行。spawn-per-turn 不支持 `/model`、`/thinking`、`/pi` 或阻塞 Extension UI。
 - `read-only` 仅把 Pi 工具限制为 `read,grep,find,ls`；它**不是**容器、虚拟机或操作系统 sandbox。`full` 使用运行用户的完整本机权限。handoff 总在新建或当前话题内建立 `chatId:threadId` binding；话题参与者共享上下文与上述权限。`/handoff off` 归档但不删除 fork 并恢复普通路由，handoff 中 `/new` 仅归档当前 fork并保留 handoff 策略，显式 `/workspace use ...` 会退出 handoff。自定义 session root 只有能由用户 Pi settings 推导时才会被搜索。

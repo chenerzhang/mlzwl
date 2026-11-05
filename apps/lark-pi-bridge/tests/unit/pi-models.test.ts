@@ -171,7 +171,7 @@ describe('profile-local Pi model configuration', () => {
     await writeFile(
       join(root, 'settings.json'),
       JSON.stringify({
-        defaultProvider: 'x-connect',
+        defaultProvider: 'x-adapter',
         defaultModel: 'trae-gpt-5.6-sol',
         defaultThinkingLevel: 'high',
         apiKey: 'must-not-be-returned',
@@ -181,7 +181,7 @@ describe('profile-local Pi model configuration', () => {
     expect(await inspectUserPiModelConfiguration(root)).toEqual({
       state: 'follow_pi_default',
       scope: 'user',
-      providerId: 'x-connect',
+      providerId: 'x-adapter',
       modelId: 'trae-gpt-5.6-sol',
       thinkingLevel: 'high',
       message: 'new sessions follow the user Pi startup model',
