@@ -158,14 +158,14 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 
 Chat Completions、Responses 与 Anthropic Messages 转换为 canonical request，由选定 adapter 执行，再投影回调用方协议。
 
-用量投影遵循各协议的原生字段名和计数约定。参考实现 x-connect `789c6bc` 的观测表明，Trae IDE 聊天链路的上游 `token_usage` 事件提供 `cache_read_input_tokens` 与 `cache_creation_input_tokens`，adapter 据此把这两个值写入 canonical `Usage`。该字段形状在本仓尚无真实上游探针，只有离线构造 payload 覆盖（见 verification.md 的未验证清单）。按该观测，上游 `prompt_tokens` 包含缓存命中与写入部分，且 `prompt_tokens + completion_tokens` 与 `total_tokens` 一致；canonical `Usage` 中因此不改变 `input_tokens` 与 `total_tokens` 的取值，只把缓存计数作为其子集附加。
+用量投影遵循各协议的原生字段名和计数约定。Trae IDE 聊天链路的上游 `token_usage` 事件按当前实现假设提供 `cache_read_input_tokens` 与 `cache_creation_input_tokens`，adapter 把这两个值写入 canonical `Usage`。该字段形状尚无本仓真实上游探针证据，目前只有离线构造 payload 覆盖协议投影与钳制（见 verification.md 的未验证清单）。按该假设，上游 `prompt_tokens` 包含缓存命中与写入部分，且 `prompt_tokens + completion_tokens` 与 `total_tokens` 一致；canonical `Usage` 中因此不改变 `input_tokens` 与 `total_tokens` 的取值，只把缓存计数作为其子集附加。
 
 两种计数约定必须分别处理：
 
 1. OpenAI 系（Responses 与 Chat Completions）的 `input_tokens` / `prompt_tokens` 包含缓存部分，缓存计数是其子集。因此保持上游原值，输出 `usage.input_tokens_details.cached_tokens` / `usage.prompt_tokens_details.cached_tokens` 与 `cache_write_tokens`。
 2. Anthropic Messages 的 `input_tokens` 不包含缓存计数，三者相加才是完整 prompt。因此必须先减去 `cache_read_input_tokens` 与 `cache_creation_input_tokens`，再输出，并保证结果不小于 0。直接透传上游 `prompt_tokens` 会让 Anthropic 客户端的上下文计量接近翻倍，并让缓存命中率算成约 50% 而非真实值。
 
-上游未提供缓存计数时必须省略对应字段，不得补 0，否则客户端无法区分“未命中”与“未上报”。目前只有 Trae IDE 聊天链路按上述参考观测投影缓存计数；Trae SOLO work 链路与豆包工作的内部用量事件尚未验证，因此这两条链路不输出缓存字段。
+上游未提供缓存计数时必须省略对应字段，不得补 0，否则客户端无法区分“未命中”与“未上报”。目前只有 Trae IDE 聊天链路投影缓存计数；Trae SOLO work 链路与豆包工作的内部用量事件尚未验证，因此这两条链路不输出缓存字段。
 
 Anthropic 流式 `message_start` 在流开始时尚不知道上游用量，只能输出 `{ input_tokens: 0, output_tokens: 0 }`。上游 `token_usage` 事件在流末尾才到达，因此该限制无法在本网关内消除。Anthropic 客户端若在 `message_delta` 之前读取上下文用量，会读到 0；`message_delta` 输出完整 usage，包含缓存计数。
 

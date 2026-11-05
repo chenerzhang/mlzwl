@@ -14,7 +14,7 @@ import { mergeToolCallDeltas, stringifyJson } from '../protocol/tools.js';
 import { truncateToolOutput } from '../protocol/tool-output.js';
 
 /** Never expose this provider-internal function name to a gateway client. */
-export const INTERNAL_WEB_SEARCH_TOOL_NAME = '__x_connect_web_search';
+export const INTERNAL_WEB_SEARCH_TOOL_NAME = '__x_adapter_web_search';
 
 const HOSTED_WEB_SEARCH_NAMES = new Set([
   'web_search',

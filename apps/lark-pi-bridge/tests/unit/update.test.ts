@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -169,6 +169,64 @@ describe('safe self update orchestration', () => {
         lockPath: join(fixture.root, 'service-failure.lock'),
       }),
     ).rejects.toThrow(/"phase":"service".*"installed":true.*synthetic service failure/);
+  });
+
+  it('migrates a pre-rename owned service to the current identity during update', async () => {
+    const fixture = await createFixture('0.1.0');
+    cleanup.push(fixture.root);
+    const legacyDefinitionPath = join(fixture.root, 'ai.x-connect.lark-pi-bridge.default.plist');
+    await writeFile(
+      legacyDefinitionPath,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<!-- Managed-By: @mlzwl/lark-pi-bridge; Service-Id: ai.x-connect.lark-pi-bridge.default; Original-Disabled: false -->\n<plist version="1.0"><dict><key>Label</key><string>ai.x-connect.lark-pi-bridge.default</string></dict></plist>\n`,
+      { mode: 0o600 },
+    );
+    const calls: Array<[string, string[]]> = [];
+    const service = {
+      platform: 'darwin' as const,
+      profile: 'default',
+      rootDir: fixture.home,
+      nodePath: fixture.install.nodePath,
+      cliEntryPath: fixture.install.cliEntryPath,
+      piBin: join(fixture.root, 'bin', 'pi'),
+      envPath: join(fixture.root, 'bin'),
+      definitionPath: legacyDefinitionPath,
+      status: {
+        platform: 'darwin' as const,
+        profile: 'default',
+        serviceId: 'ai.x-connect.lark-pi-bridge.default',
+        definitionPath: legacyDefinitionPath,
+        installed: true,
+        enabled: true,
+        loaded: false,
+        running: false,
+      },
+    };
+    const runner: CommandRunner = async (command, args) => {
+      calls.push([command, [...args]]);
+      if (args[0] === 'view') {
+        return { code: 0, stdout: '"0.2.0"', stderr: '' };
+      }
+      if (command === fixture.install.nodePath && args.includes('--version')) {
+        return { code: 0, stdout: '0.2.0\n', stderr: '' };
+      }
+      if (command === 'launchctl' && args[0] === 'print') {
+        return { code: 1, stdout: '', stderr: 'not loaded' };
+      }
+      return ok();
+    };
+    await updateBridge({
+      runner,
+      discoverInstall: async () => fixture.install,
+      discoverServices: async () => [service],
+      lockPath: join(fixture.root, 'migrate.lock'),
+    });
+    expect(calls).toContainEqual([
+      'launchctl',
+      ['disable', `gui/${process.getuid?.()}/ai.x-connect.lark-pi-bridge.default`],
+    ]);
+    const current = await readFile(join(fixture.root, 'ai.mlzwl.lark-pi-bridge.default.plist'), 'utf8');
+    expect(current).toContain('Service-Id: ai.mlzwl.lark-pi-bridge.default');
+    await expect(readFile(legacyDefinitionPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('refuses maintenance when an unmanaged foreground runtime is present', async () => {

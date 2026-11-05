@@ -11,7 +11,7 @@
 - Pi 再按 profile 的 user/profile 配置来源连接模型 provider；
 - CLI、Web console 和用户级 service 负责本地管理。
 
-它不是模型网关，也不依赖、导入或管理其他 workspace app。用户可以把任意兼容服务（包括自行部署的 `x-connect`）配置成 Pi 的 OpenAI-compatible endpoint，但这只是外部数据面选择。
+它不是模型网关，也不依赖、导入或管理其他 workspace app。用户可以把任意兼容服务（包括自行部署的 `x-adapter`）配置成 Pi 的 OpenAI-compatible endpoint，但这只是外部数据面选择。
 
 ```text
 Feishu / Lark

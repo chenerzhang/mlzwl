@@ -12,7 +12,7 @@ describe('launchd manifest rendering', () => {
 
   it('renders an inert user-agent manifest and writes it privately without invoking launchctl', async () => {
     const manifest = renderLaunchdManifest({
-      label: 'ai.x-connect.lark-pi-bridge.default',
+      label: 'ai.mlzwl.lark-pi-bridge.default',
       programArguments: ['/usr/local/bin/node', '/package/dist/cli.js', '--home', '/private/home', 'run'],
       workingDirectory: '/private/home',
       standardOutPath: '/private/home/logs/out.log',

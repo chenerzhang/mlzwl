@@ -66,7 +66,7 @@ export function resolveAppPaths(opts: ResolveAppPathsOptions = {}): AppPaths {
     controlSocketFile: join(runtimeDir, process.platform === 'win32' ? 'control.port' : 'control.sock'),
     controlTokenFile: join(runtimeDir, 'control-token'),
     connectionRetryFile: join(runtimeDir, 'connection-retry.json'),
-    launchdManifestFile: join(runtimeDir, `ai.x-connect.lark-pi-bridge.${profile}.plist`),
+    launchdManifestFile: join(runtimeDir, `ai.mlzwl.lark-pi-bridge.${profile}.plist`),
     appLockFile: (appId) => join(appLockRoot, `app-${lockSafeName(appId)}.lock`),
   };
 }

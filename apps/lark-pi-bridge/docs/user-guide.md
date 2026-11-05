@@ -2,7 +2,7 @@
 
 本文面向使用和维护 `@mlzwl/lark-pi-bridge` 的开发者，说明如何把飞书/Lark 中的私聊、群聊、话题和云文档评论连接到本机 Pi coding agent，并通过 CLI、Web 控制面或用户级 service 管理运行状态。
 
-`lark-pi-bridge` 是本地 coding-agent 控制面，不是模型网关。它负责飞书入口、scope/session、工作目录、权限和 Pi 子进程；模型由所选 Pi 配置来源连接。新 profile 默认以 Bridge 管理面只读方式共享用户 `~/.pi/agent`，也可切换到 profile-local 配置；这里的“只读”只描述 Bridge 不写用户 Pi 配置，并不把默认 `full` 工具权限降为 read-only。它不会启动、安装或修改 `x-connect`。
+`lark-pi-bridge` 是本地 coding-agent 控制面，不是模型网关。它负责飞书入口、scope/session、工作目录、权限和 Pi 子进程；模型由所选 Pi 配置来源连接。新 profile 默认以 Bridge 管理面只读方式共享用户 `~/.pi/agent`，也可切换到 profile-local 配置；这里的“只读”只描述 Bridge 不写用户 Pi 配置，并不把默认 `full` 工具权限降为 read-only。它不会启动、安装或修改 `x-adapter`。
 
 ## 1. 能力总览
 
@@ -543,13 +543,15 @@ lark-pi-bridge service uninstall --profile default
 
 平台对应关系：
 
-| 平台    | 用户级机制                                                           | 说明                                   |
-| ------- | -------------------------------------------------------------------- | -------------------------------------- |
-| macOS   | `~/Library/LaunchAgents/ai.x-connect.lark-pi-bridge.<profile>.plist` | 使用当前用户 launchd domain            |
-| Linux   | `~/.config/systemd/user/lark-pi-bridge-<profile>.service`            | 只调用 `systemctl --user`，不需要 root |
-| Windows | 当前用户 Task Scheduler                                              | 使用受限任务和 profile 私有 launcher   |
+| 平台    | 用户级机制                                                       | 说明                                   |
+| ------- | ---------------------------------------------------------------- | -------------------------------------- |
+| macOS   | `~/Library/LaunchAgents/ai.mlzwl.lark-pi-bridge.<profile>.plist` | 使用当前用户 launchd domain            |
+| Linux   | `~/.config/systemd/user/lark-pi-bridge-<profile>.service`        | 只调用 `systemctl --user`，不需要 root |
+| Windows | 当前用户 Task Scheduler                                          | 使用受限任务和 profile 私有 launcher   |
 
 Service definition 只包含 Node/CLI/Pi 绝对路径、bridge home、profile、受限 PATH 和日志路径，不包含 App Secret 或模型密钥。管理器拒绝覆盖不带 package ownership marker 的已有定义。
+
+早期版本使用 `ai.x-connect.lark-pi-bridge.<profile>` 作为 macOS label，并使用 `\x-connect\lark-pi-bridge-<profile>` 作为 Windows 任务名。现在不再兼容旧标识：`service install` 会先卸载并停用旧的 launchd job 或删除旧 Windows 任务，再写入新标识的定义。同一个 profile 不会同时存在两个 service 身份。迁移后旧的 launchd label 保持 `disabled` 状态，不会因旧 plist 残留而重新启动。
 
 Bridge 每 20 秒读取一次本地 WebSocket 状态；健康连接不会因此额外访问网络。SDK 的 pong 超时与三次异常去抖会先尝试强制重连；重连连续超过 2 分钟或强制恢复失败时，runtime 会退出并交给持久 service 重启。为避免断网期间形成高频进程循环，连续连接失败会跨进程采用 `5 秒、15 秒、45 秒、2 分钟、5 分钟` 的封顶退避；连接稳定 2 分钟后清除旧失败级别。
 
@@ -616,7 +618,7 @@ workspace 会在下一条消息立即生效。transport、模型、入口策略�
 
 ## 13. 能力边界
 
-当前明确不包括：Meeting ingress、浏览器内注册、Web 密钥录入、Web 真实模型 turn、任意远程 Web bind、OS sandbox、跨 provider fallback，以及由 bridge 自动启动或管理 `x-connect`。
+当前明确不包括：Meeting ingress、浏览器内注册、Web 密钥录入、Web 真实模型 turn、任意远程 Web bind、OS sandbox、跨 provider fallback，以及由 bridge 自动启动或管理 `x-adapter`。
 
 Linux systemd 和 Windows Task Scheduler 已实现并有确定性代理测试，但尚不能表述为对应平台真实 E2E。图片的真实环境验收覆盖显式 RPC 路径；spawn-per-turn 图片链路有自动 contract/process 验证。
 

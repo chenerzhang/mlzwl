@@ -30,7 +30,8 @@ Meeting 当前明确不在产品范围内；本 ADR 不为 Meeting 保留隐藏 
 ### Service 管理
 
 - service definition 只包含绝对 Node/CLI/Pi 路径、bridge home、profile、受限 PATH 和日志路径；不包含 App Secret、provider key、Cookie/JWT 或授权 URL。
-- macOS 安装位置固定为 `~/Library/LaunchAgents/ai.x-connect.lark-pi-bridge.<profile>.plist`，使用用户 `gui/<uid>` domain。
+- macOS 安装位置固定为 `~/Library/LaunchAgents/ai.mlzwl.lark-pi-bridge.<profile>.plist`，使用用户 `gui/<uid>` domain。
+- 早期版本的 service 标识 `ai.x-connect.lark-pi-bridge.<profile>`（macOS label）与 `\x-connect\lark-pi-bridge-<profile>`（Windows 任务名）已废弃且不兼容。`install` 在写入新定义后，会 bootout 并 disable 旧 launchd job、删除旧 plist，或删除旧 Windows 任务。迁移后旧 label 保持 `disabled`。
 - Linux 只使用 `systemctl --user` 与 `~/.config/systemd/user/lark-pi-bridge-<profile>.service`，不调用 sudo/root。
 - Windows 使用当前用户 Task Scheduler（`schtasks.exe`、`LIMITED`）及用户数据目录中的生成 launcher；参数由结构化 argv/编码值生成，不拼接 shell 输入。
 - definition 带 package-owned marker。已有文件缺少 marker 或 identity 不匹配时拒绝覆盖/删除。

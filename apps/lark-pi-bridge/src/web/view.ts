@@ -71,7 +71,7 @@ export function renderWebConsole(input: { csrfToken: string; nonce: string }): s
           <div id="workspaceList" class="workspace-list"><span class="empty">加载中…</span></div>
           <div class="form-block">
             <div class="form-grid workspace-form">
-              <div class="field"><label for="alias">Alias</label><input id="alias" placeholder="如 x-connect"></div>
+              <div class="field"><label for="alias">Alias</label><input id="alias" placeholder="如 x-adapter"></div>
               <div class="field"><label for="workspace">绝对目录</label><input id="workspace" placeholder="已存在的绝对目录"></div>
             </div>
             <div class="action-row">

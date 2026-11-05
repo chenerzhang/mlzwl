@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   ManagedService,
+  currentDefinitionPathFor,
   type CommandRunner,
   type ManagedServiceStatus,
   type ServicePlatform,
@@ -44,6 +45,7 @@ export async function discoverOwnedServices(options: ServiceInventoryOptions = {
       definitionPath,
       userHome,
       runner: options.runner,
+      legacy: isLegacyDefinition(platform, definitionPath),
     });
     services.push({ ...parsed, definitionPath, status: await manager.status() });
   }
@@ -63,6 +65,34 @@ export function managerForOwnedService(
     piBin: service.piBin,
     envPath: service.envPath,
     definitionPath: service.definitionPath,
+    runner: overrides.runner,
+    userHome: overrides.userHome,
+    legacy: isLegacyDefinition(service.platform, service.definitionPath),
+  });
+}
+
+/**
+ * Manager bound to the current service identity for an owned profile, even
+ * when the discovered definition still uses the pre-rename identity. Its
+ * `install` writes the current definition and retires the old one. The
+ * current definition stays in the same directory as the discovered one, so
+ * this never has to re-derive the user home.
+ */
+export function currentIdentityManagerFor(
+  service: OwnedServiceDescriptor,
+  overrides: { nodePath?: string; cliEntryPath?: string; runner?: CommandRunner; userHome?: string } = {},
+): ManagedService {
+  return new ManagedService({
+    platform: service.platform,
+    profile: service.profile,
+    rootDir: service.rootDir,
+    nodePath: overrides.nodePath ?? service.nodePath,
+    cliEntryPath: overrides.cliEntryPath ?? service.cliEntryPath,
+    piBin: service.piBin,
+    envPath: service.envPath,
+    ...(isLegacyDefinition(service.platform, service.definitionPath)
+      ? { definitionPath: currentDefinitionPathFor(service.platform, service.profile, service.definitionPath) }
+      : { definitionPath: service.definitionPath }),
     runner: overrides.runner,
     userHome: overrides.userHome,
   });
@@ -119,10 +149,23 @@ async function definitionCandidates(platform: ServicePlatform, userHome: string)
       .map((entry) => join(directory, entry.name, 'runtime', 'lark-pi-bridge-service.ps1'));
   }
   const entries = await readdir(directory, { withFileTypes: true }).catch(() => []);
-  const pattern = platform === 'darwin' ? /^ai\.x-connect\.lark-pi-bridge\..+\.plist$/ : /^lark-pi-bridge-.+\.service$/;
+  const pattern =
+    platform === 'darwin' ? /^(?:ai\.mlzwl|ai\.x-connect)\.lark-pi-bridge\..+\.plist$/ : /^lark-pi-bridge-.+\.service$/;
   return entries
     .filter((entry) => entry.isFile() && pattern.test(entry.name))
     .map((entry) => join(directory, entry.name));
+}
+
+/**
+ * True for a definition written under the pre-rename service identity. Its
+ * launchd label and Windows task name differ from the current ones, so the
+ * manager must address it with `legacy: true`.
+ */
+function isLegacyDefinition(platform: ServicePlatform, definitionPath: string): boolean {
+  if (platform !== 'darwin') {
+    return false;
+  }
+  return /(?:^|[\\/])ai\.x-connect\.lark-pi-bridge\..+\.plist$/.test(definitionPath);
 }
 
 async function safeOwnedContent(path: string): Promise<string | undefined> {

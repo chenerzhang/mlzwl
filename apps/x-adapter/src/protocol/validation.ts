@@ -3,7 +3,7 @@ import { acceptsImages } from '../models/modality.js';
 import { InputModality, PublicModel } from '../models/types.js';
 import { CanonicalMessage, CanonicalRequest, withoutToolOutputAttachment } from './canonical.js';
 
-const INTERNAL_WEB_SEARCH_TOOL_NAME = '__x_connect_web_search';
+const INTERNAL_WEB_SEARCH_TOOL_NAME = '__x_adapter_web_search';
 
 export type ValidationError = {
   message: string;

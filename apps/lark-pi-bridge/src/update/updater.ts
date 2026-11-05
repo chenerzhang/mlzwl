@@ -7,6 +7,7 @@ import { runCommand } from '../daemon/managed-service.js';
 import { optionalRuntimeControlStatus } from '../runtime/control.js';
 import { acquireRuntimeLock } from '../runtime/locks.js';
 import {
+  currentIdentityManagerFor,
   discoverOwnedServices,
   managerForOwnedService,
   type OwnedServiceDescriptor,
@@ -164,11 +165,17 @@ export async function updateBridge(deps: UpdateDependencies = {}): Promise<Updat
     try {
       for (const service of services) {
         const definitionUpdated = installing;
-        const manager = managerForOwnedService(service, {
-          runner,
-          nodePath: latestInstall.nodePath,
-          cliEntryPath: latestInstall.cliEntryPath,
-        });
+        const manager = definitionUpdated
+          ? currentIdentityManagerFor(service, {
+              runner,
+              nodePath: latestInstall.nodePath,
+              cliEntryPath: latestInstall.cliEntryPath,
+            })
+          : managerForOwnedService(service, {
+              runner,
+              nodePath: latestInstall.nodePath,
+              cliEntryPath: latestInstall.cliEntryPath,
+            });
         if (definitionUpdated) {
           await manager.install();
         }
