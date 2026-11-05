@@ -188,12 +188,18 @@ x-adapter update
 
 <!-- npm-release:start -->
 
-### Unreleased
+### [0.1.3] - 2026-11-05
 
 #### Added
 
-- 新增供共享客户端使用的 `x-adapter capabilities` 与 `x-adapter start --no-orphan-recovery`。调用方可要求启动只报告 daemon lock 冲突，不终止仍在运行的 lock owner。`@mlzwl/magpie-x-adapter` 的自动启动依赖这两个能力，因此本版本必须先于该插件发布。
+- 新增 `x-adapter capabilities` 与 `x-adapter start --no-orphan-recovery`（等价环境变量 `X_ADAPTER_NO_ORPHAN_RECOVERY=1`）。共享 daemon 的调用方可要求启动只报告 daemon lock 冲突，不终止仍在运行的 lock owner。`@mlzwl/magpie-x-adapter` 的自动启动依赖这两个能力，因此本版本必须先于该插件发布。
 - 新增独立的 Magpie provider 插件 `@mlzwl/magpie-x-adapter` 接入说明。
+
+#### Fixed
+
+- 修复 Trae IDE 聊天链路丢弃上游 prompt 缓存计数的问题。`token_usage` 事件中的 `cache_read_input_tokens` 与 `cache_creation_input_tokens` 现在投影到公开 usage：Responses 与 Chat Completions 输出 `usage.input_tokens_details.cached_tokens` / `usage.prompt_tokens_details.cached_tokens` 与 `cache_write_tokens`。此前所有客户端读到的缓存用量恒为 0。
+- 修复 Anthropic Messages 的 `input_tokens` 计数约定。Anthropic 的 `input_tokens` 不含缓存部分，而 Trae 上游 `prompt_tokens` 包含。此前直接透传会让 Anthropic 客户端的上下文计量接近翻倍，并把缓存命中率算成约 50%。现在从 `input_tokens` 中减去缓存计数并保证结果不小于 0。
+- 上游未提供缓存计数时省略对应字段，不补 0，使客户端能区分“未命中”与“未上报”。Trae SOLO work 链路与豆包工作链路仍不输出缓存字段；这两条链路的真实上游用量事件尚未验证。
 
 ### [0.1.0] - 2026-10-14
 
