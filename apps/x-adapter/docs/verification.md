@@ -66,7 +66,7 @@ git diff --check
 - 非品牌 CN 数据 host `trae-api-cn.mchost.guru` 的当前归属与长期稳定性；本轮仅确认当前真实账号链路可用。
 - Trae 工具调用、reasoning、字节上限单独命中、套餐/额度行为与其他业务错误码；当前纯文本边界、客户端取消和最小聊天成功，不代表每个返回模型或高级能力都可用。
 - Standard/Max 展开的离线覆盖只使用构造 payload；真实账号目录是否同时提供 `max_mode` 与 `__max` detail、Max 后端的实际额度与限流行为仍未验证。
-- Trae 上游 `token_usage` 事件是否真的携带 `cache_read_input_tokens` 与 `cache_creation_input_tokens` 尚无本仓真实探针证据：该结论来自参考实现 x-connect `789c6bc` 的观测，本仓只有离线构造 payload 覆盖协议投影与钳制。SOLO work 链路与豆包工作的缓存字段同样未验证，因此这两条链路不输出缓存字段。
+- Trae 上游 `token_usage` 事件是否真的携带 `cache_read_input_tokens` 与 `cache_creation_input_tokens` 尚无本仓真实探针证据：当前实现按该字段形状假设投影，只有离线构造 payload 覆盖协议投影与钳制。SOLO work 链路与豆包工作的缓存字段同样未验证，因此这两条链路不输出缓存字段。
 - 豆包工具桥接的私有接口、Connector 生命周期、内置工具映射、并行拒绝、等待恢复与轮次上限均只有离线覆盖；尚未用真实账号完成桥接 E2E。
 - SOLO remote 链路的多轮长对话、除 `gpt-5.2`/`gpt-6-sol`/`kimi-k3` 外的 preset 模型、`gpt-6.1-sol` 静默无输出的原因、CN 侧是否存在等价 remote 协议，以及 SOLO 会话的服务端保留时长与额度计费细则。
 - 官方客户端升级后的 storage codec、版本、设备身份和请求字段要求。
