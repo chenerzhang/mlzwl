@@ -188,6 +188,13 @@ x-adapter update
 
 <!-- npm-release:start -->
 
+### [0.1.4] - 2026-11-09
+
+#### Fixed
+
+- 修复模型发现中上游元数据覆盖网关解析字段的问题，保留正确的模型显示名、推理强度和输入能力等信息。
+- 修复普通客户端工具 `web_search` 被误判为托管搜索的问题，保留其工具声明及返回调用的类型和命名空间。Trae 托管搜索仍不受支持。
+
 ### [0.1.3] - 2026-11-05
 
 #### Added
@@ -200,26 +207,6 @@ x-adapter update
 - 修复 Trae IDE 聊天链路丢弃上游 prompt 缓存计数的问题。`token_usage` 事件中的 `cache_read_input_tokens` 与 `cache_creation_input_tokens` 现在投影到公开 usage：Responses 与 Chat Completions 输出 `usage.input_tokens_details.cached_tokens` / `usage.prompt_tokens_details.cached_tokens` 与 `cache_write_tokens`。此前所有客户端读到的缓存用量恒为 0。
 - 修复 Anthropic Messages 的 `input_tokens` 计数约定。Anthropic 的 `input_tokens` 不含缓存部分，而 Trae 上游 `prompt_tokens` 包含。此前直接透传会让 Anthropic 客户端的上下文计量接近翻倍，并把缓存命中率算成约 50%。现在从 `input_tokens` 中减去缓存计数并保证结果不小于 0。
 - 上游未提供缓存计数时省略对应字段，不补 0，使客户端能区分“未命中”与“未上报”。Trae SOLO work 链路与豆包工作链路仍不输出缓存字段；这两条链路的真实上游用量事件尚未验证。
-
-### [0.1.0] - 2026-10-14
-
-#### Added
-
-- 提供仅支持 Trae 与豆包工作的本地模型网关，以及 OpenAI Chat Completions、Responses 和 Anthropic Messages 兼容接口。
-- 在单一 `trae` provider 内提供相互隔离的 Global/CN realm、浏览器 OAuth、realm 独立凭据与模型目录，公开模型 ID 为 `trae-global-*` 和 `trae-cn-*`。
-- 提供模型发现、精确 provider/realm 路由、Pi extension、Claude Code/Codex 接入，以及 macOS launchd 和 Linux systemd 用户服务管理。
-- Trae Global SOLO 模型接入 `solo_work_lite` 工作池：提示词模拟的工具调用（`<toolcall>` 协议注入与流式解析、工具结果多轮回喂）、SOLO 身份 token 独立保存并自动刷新。
-- Global 模型目录支持 `/models` 权威源与本机 Trae 客户端 preset 双源合并；OAuth 登录复用已导入设备身份，规避账号设备数量上限。
-- 将配置、缓存、日志、运行时文件和 provider 凭据统一保存到 `~/.x-adapter`，并支持通过 `X_ADAPTER_*` 环境变量覆盖。
-
-#### Security
-
-- 默认仅监听 loopback，隔离 Trae Global、Trae CN 与豆包工作凭据，并对 OAuth callback、上游 host、本机 HTTP 请求、日志脱敏和 daemon 生命周期执行 fail-closed 校验。
-- Trae 浏览器 OAuth 使用 PKCE S256、一次性 loopback callback、P-256 设备证明、realm 内 refresh single-flight 和原子凭据保存；官方凭据导入要求显式命令、精确 realm、匹配 P-256 密钥并拒绝隐式覆盖。
-
-#### Experimental
-
-- Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。Trae Global SOLO 链路（`trae-global-gpt-5.2` 等）经 `solo_work_lite` 池真实验证，模型精确遵从 `<toolcall>` 工具协议；每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 系统开销），高频使用会触发账号级限流。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
 
 ### [0.1.2] - 2026-11-03
 
@@ -244,5 +231,25 @@ x-adapter update
 
 - 客户端工具参数改用 Ajv 2020 严格模式校验，覆盖 `$ref`、`const`、`pattern`、数值与数组边界、`format`。未知关键字与 `$async` schema 在编译期以 `invalid_input` 拒绝，不触发异步校验。
 - 豆包桥接将 `missing_doubao_bridge`、`doubao_bridge_disabled`、`doubao_tool_turn_expired`、`tool_output_mismatch`、`upstream_tool_choice_not_satisfied` 映射为稳定的 HTTP 与 SSE 错误；活动工具轮次只存在于当前 daemon 内存，并受绝对存活上限约束。
+
+### [0.1.0] - 2026-10-14
+
+#### Added
+
+- 提供仅支持 Trae 与豆包工作的本地模型网关，以及 OpenAI Chat Completions、Responses 和 Anthropic Messages 兼容接口。
+- 在单一 `trae` provider 内提供相互隔离的 Global/CN realm、浏览器 OAuth、realm 独立凭据与模型目录，公开模型 ID 为 `trae-global-*` 和 `trae-cn-*`。
+- 提供模型发现、精确 provider/realm 路由、Pi extension、Claude Code/Codex 接入，以及 macOS launchd 和 Linux systemd 用户服务管理。
+- Trae Global SOLO 模型接入 `solo_work_lite` 工作池：提示词模拟的工具调用（`<toolcall>` 协议注入与流式解析、工具结果多轮回喂）、SOLO 身份 token 独立保存并自动刷新。
+- Global 模型目录支持 `/models` 权威源与本机 Trae 客户端 preset 双源合并；OAuth 登录复用已导入设备身份，规避账号设备数量上限。
+- 将配置、缓存、日志、运行时文件和 provider 凭据统一保存到 `~/.x-adapter`，并支持通过 `X_ADAPTER_*` 环境变量覆盖。
+
+#### Security
+
+- 默认仅监听 loopback，隔离 Trae Global、Trae CN 与豆包工作凭据，并对 OAuth callback、上游 host、本机 HTTP 请求、日志脱敏和 daemon 生命周期执行 fail-closed 校验。
+- Trae 浏览器 OAuth 使用 PKCE S256、一次性 loopback callback、P-256 设备证明、realm 内 refresh single-flight 和原子凭据保存；官方凭据导入要求显式命令、精确 realm、匹配 P-256 密钥并拒绝隐式覆盖。
+
+#### Experimental
+
+- Trae Global 已验证个人账号浏览器授权与 loopback callback；独立新设备 token exchange 被上游设备数量上限拒绝。Global/CN 官方客户端凭据与完整绑定设备身份的只读导入、Global SG/CN 模型目录，以及两个 realm 的最小 Chat Completions 均已在本机真实验证；Global DeviceProof refresh 另在官方客户端完全退出后完成一次真实 E2E，确认 token family 轮换、刷新后模型发现与短聊天可用。Trae Global SOLO 链路（`trae-global-gpt-5.2` 等）经 `solo_work_lite` 池真实验证，模型精确遵从 `<toolcall>` 工具协议；每次 SOLO 调用消耗真实额度（单次约 1.7 万 prompt token 系统开销），高频使用会触发账号级限流。CN refresh、长期轮换稳定性、私有接口、共享 token family、服务条款、风控与接口变更风险仍由使用者评估。
 
 <!-- npm-release:end -->
