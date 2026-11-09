@@ -221,16 +221,15 @@ const HOSTED_WEB_SEARCH_TOOL_TYPES = new Set([
   'web_search_preview_2025_03_11',
 ]);
 
+/**
+ * Only an explicit protocol-level hosted declaration counts. Never match on the
+ * tool name: Responses function tools carry `name: 'web_search'` with their own
+ * `parameters`, and Anthropic/OpenAI clients may declare any function name, so a
+ * name match would replace a legitimate client tool with the internal one.
+ */
 function hostedSearchToolName(item: Record<string, unknown>): string {
   const type = typeof item.type === 'string' ? item.type : '';
-  const name = typeof item.name === 'string' ? item.name : '';
-  if (HOSTED_WEB_SEARCH_TOOL_TYPES.has(type)) {
-    return type;
-  }
-  if (HOSTED_WEB_SEARCH_TOOL_TYPES.has(name)) {
-    return name;
-  }
-  return '';
+  return HOSTED_WEB_SEARCH_TOOL_TYPES.has(type) ? type : '';
 }
 
 function hostedSearchCanonical(name: string): CanonicalTool {
@@ -394,17 +393,10 @@ export class ToolNameMapper {
     return { type: 'function', function: { name: this.toUpstream(choice.function.name) } };
   }
 
-  mapToolCall(toolCall: CanonicalToolCall): CanonicalToolCall {
-    if (toolCall.function.name === 'web_search' || toolCall.namespace) {
-      return toolCall;
-    }
-    return { ...toolCall, function: { ...toolCall.function, name: this.toUpstream(toolCall.function.name) } };
-  }
-
   restoreToolCall(toolCall: CanonicalToolCall): CanonicalToolCall {
-    if (toolCall.function.name === 'web_search') {
-      return toolCall;
-    }
+    // Never special-case a name here. An ordinary client tool can legitimately be
+    // called `web_search`, and skipping the binding lookup would drop its
+    // `client_type: custom` and `namespace` on the way back to the client.
     const binding = this.bindingsByUpstream.get(toolCall.function.name);
     const original = this.toOriginal(toolCall.function.name);
     return {

@@ -23,27 +23,55 @@ pnpm test
 pnpm verify
 ```
 
-x-adapter 验证：
+以上命令是全仓或单包的全量命令。日常改动的验证范围按「测试范围」一节决定，不要默认执行这些全量命令。
+
+x-adapter 全量验证：
 
 ```bash
 pnpm --filter @mlzwl/x-adapter verify
 pnpm --filter @mlzwl/x-adapter pack:dry-run
 ```
 
-Magpie 插件验证：
+Magpie 插件全量验证：
 
 ```bash
 pnpm --filter @mlzwl/magpie-x-adapter verify
 pnpm --filter @mlzwl/magpie-x-adapter pack:dry-run
 ```
 
-Bridge 验证：
+Bridge 全量验证：
 
 ```bash
 pnpm --filter @mlzwl/lark-pi-bridge verify
 pnpm --filter @mlzwl/lark-pi-bridge smoke:local
 pnpm --filter @mlzwl/lark-pi-bridge pack:dry-run
 ```
+
+## 测试范围
+
+默认只运行与本次改动范围对应的测试。不要因为改了少量代码就执行 `pnpm verify`、`pnpm test`、`pnpm build` 或全部子包的 `verify`。全量验证只在下面列出的条件下执行。
+
+选择测试范围的步骤：
+
+1. 先确定改动所属的范围：`apps/x-adapter`、`apps/lark-pi-bridge`、`apps/magpie-x-adapter` 或根 `scripts/`。
+2. 只对该范围运行 `typecheck`、`lint`、`format:check` 与相关测试文件。
+3. 改动命中跨包共享层时，才升级为全仓检查。跨包共享层指根 `scripts/*`、`tsconfig.base.json`、`eslint.config.js`、根 `package.json` 脚本和 `pnpm-workspace.yaml`。
+
+各范围的目标测试命令：
+
+- `apps/x-adapter`：`test/*.test.js` 依赖 `dist/` 的模块化编译产物。先在 `apps/x-adapter` 内执行 `node ../../scripts/build-package.mjs --test`，再执行 `node --test test/<name>.test.js`，只跑相关文件。需要发布产物时，最后执行 `pnpm --filter @mlzwl/x-adapter build` 恢复双 bundle 的 `dist/`。
+- `apps/lark-pi-bridge`：按目录选择用例，例如 `pnpm --filter @mlzwl/lark-pi-bridge exec vitest run tests/unit/<name>.test.ts`；集成与进程用例替换目录名即可。只有改动涉及 Pi 进程启动、RPC 或真实平台行为时，才运行 `tests/process` 或 `smoke:local`。
+- `apps/magpie-x-adapter`：改动插件入口或 manifest 时运行 `pnpm --filter @mlzwl/magpie-x-adapter test`。该命令包含构建和 manifest 校验。
+- 根 `scripts/`：`node --test scripts/<name>.test.mjs`。
+- 只改文档或注释时，只对改动文件执行 `pnpm exec prettier --check <file>`，不运行测试。
+
+只有以下情况才运行全量 `pnpm verify`：
+
+1. 改动命中上面列出的跨包共享层。
+2. 用户明确要求全量验证。
+3. 目标用例失败，且怀疑存在跨包影响，需要扩大范围确认。
+
+交付时必须报告实际执行的命令和覆盖范围。不要用一次目标测试的结果声称全仓通过。
 
 ## 开发与安全
 
