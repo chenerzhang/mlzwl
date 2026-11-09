@@ -82,6 +82,13 @@ magpie claude x-adapter/trae-global-<upstream-id>
 
 <!-- npm-release:start -->
 
+### [0.1.1] - 2026-11-09
+
+#### Fixed
+
+- 修复模型选择器中缺少 provider 前缀的问题，兼容新版与旧版 x-adapter；不再在展示名追加负载，避免截断。
+- 兼容旧版网关返回的字符串形式推理档位，避免 Magpie 丢失推理强度选项。
+
 ### [0.1.0] - 2026-11-04
 
 #### Added
