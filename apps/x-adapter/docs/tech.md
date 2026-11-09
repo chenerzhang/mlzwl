@@ -111,6 +111,8 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 
 模型发现三方言都投影总上下文：OpenAI `metadata.context_window_tokens`，Codex `context_window` / `max_context_window` 与 `max_output_tokens`，Claude `max_input_tokens` / `max_tokens`。Provider 的 `prompt_max_tokens` 仍表示输入上限，不与总上下文混用。
 
+发现响应的字段优先级固定：先展开 provider 私有 `metadata`，再写方言字段。这样上游同名键不能覆盖 `display_name`、`supported_reasoning_levels`、`input_modalities`、`max_tokens` 等由网关解析的字段；provider 私有键仍作为附加字段透出。`display_name` 在 Codex 与 Claude 方言的顶层字段带 provider 前缀（`Trae`、`Doubao Work`），前缀标明模型来源。同一 provider 内的多条路由由 `display_name` 自带的 realm 段区分，例如 Trae 的 Global 与 CN 各有一条 `DeepSeek-V4.1-Flash`，分别是 `Trae Global DeepSeek-V4.1-Flash` 与 `Trae CN DeepSeek-V4.1-Flash`。OpenAI 方言的 `metadata.display_name` 保持 provider 原始值，不带前缀。
+
 当前官方包的静态客户端投影明确包含 `/api/ide/v2/llm_raw_chat`，其请求 schema 也并非普通 OpenAI body；它包含 config/model/session/conversation、request/mode/config/access type、reasoning、provider context、biz context 与 extra info 等字段。经授权的 Global 单次受控 probe 使用当前目录模型和该字段族，仍返回 HTTP 400 空体、无 SSE；未 refresh、未探测 v1、未 fallback。结合官方内部 AhaNet/native transport 证据，x-adapter 不把 raw-chat 接入正式聊天链路。
 
 ### SOLO work 聊天链路（仅 Global，solo_work_lite）

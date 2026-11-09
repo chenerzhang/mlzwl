@@ -70,6 +70,7 @@ magpie claude x-adapter/trae-global-<upstream-id>
 - 模型列表刷新失败时，插件报错而不是清空列表；Magpie 会保留上一次的模型并显示失败原因。
 - 插件启动网关时不覆盖 `X_ADAPTER_DATA_DIR`，因此与你自己运行的 x-adapter 共用同一份数据和登录。一个数据目录只允许一个 daemon：若你在默认 `10100` 已有 daemon，再把 `X_ADAPTER_BASE_URL` 指到别的端口，插件会拒绝启动并提示你先用 `x-adapter status` 确认实际端口，或先停止再换端口。
 - 模型目录缓存 30 秒。不同插件实例和不同 token 不共用缓存。刷新失败时 Magpie 保留上一次的列表并显示原因。
+- 选择器里的展示名带 provider 前缀（`Trae` / `Doubao Work`），可以区分两个 provider。但若客户端直接读 `/v1/models` 的 OpenAI 方言，`metadata.display_name` 是上游原始值、不带前缀；要区分 provider 请按公开模型 ID 前缀（`trae-` / `doubao-`）判断，不要按展示名判断。
 - 自动启动的 CLI 子进程最多运行 30 秒。超时后插件仅结束本次 CLI 子进程，不停止共享 daemon。随后仍有独立的 30 秒 health 等待期限。启动失败后，同一插件实例冷却 60 秒再允许重试。
 - 插件拒绝 URL 中的用户名和密码。错误信息不回显原始 URL、请求正文、网关响应正文或 CLI 输出。
 

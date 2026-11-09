@@ -104,11 +104,16 @@ config.provider['x-adapter'] ??= {
 
 `provider.models` 调 `ensureDaemon`，再请求 `GET /v1/models`，带 `User-Agent: codex-cli` 取 Codex 方言：
 
-- `context_window` → `limit.context`，`max_output_tokens` → `limit.output`；
-- `model_load_percent` → 展示名后缀。`0` 是合法值（表示无负载），必须保留；`context_window` 与 `max_output_tokens` 则必须是正数，缺失或 0 时用默认值；
-- `supported_reasoning_levels[].effort` → `variants` 的键，即 Magpie 里可选的推理档位；
+- `context_window` → `limit.context`，`max_output_tokens` → `limit.output`；两者必须是正数，缺失或 0 时用默认值；
+- `supported_reasoning_levels` → `variants` 的键，即 Magpie 里可选的推理档位。两种形状都接受：Codex 方言的 `[{ effort, description }]` 对象数组，以及旧版 x-adapter 可能输出的裸字符串数组；只读对象形式会让 `reasoning` 变 `false`、`variants` 变空，Magpie 里就没有思考档位可选；
 - `input_modalities` → `capabilities.input`，只有 x-adapter 明确声明时才开启 `image`；
-- `display_name` 加上 `· Model load: N%` 作为展示名，与 Pi 侧一致，不改变模型 ID。
+- `display_name` 在补齐缺失的 provider 前缀后作为展示名，不追加负载后缀，不改变模型 ID。
+
+插件不把 `model_load_percent` 拼进展示名。Magpie 把展示名当成选择器的整行标签，追加 `· Model load: N%` 会把 provider 前缀挤出可视区域并截断行。负载仍保留在网关发现响应中（Codex 方言是顶层 `model_load`、`model_load_percent` 与 `hot`，OpenAI 方言是 `metadata` 下的同名字段），需要时直接读 `/v1/models` 的这些字段，不要解析展示名。
+
+展示名必须带 provider 前缀，用来标明模型来源；同一 provider 内的多条路由由 realm 段区分，例如 Trae 的 Global 与 CN realm 各有自己的 `DeepSeek-V4.1-Flash` 路由，选择器里分别是 `Trae Global DeepSeek-V4.1-Flash` 与 `Trae CN DeepSeek-V4.1-Flash`。新网关自己生成前缀；旧网关（尚未含该修复的版本）只发上游裸名，插件按顶层 `provider` 字段补前缀（`trae` → `Trae`，`doubao` → `Doubao Work`）。两种情况都只补一次：展示名已经以 `${label} ` 开头时原样返回。因此任一升级顺序都能保证 provider 前缀存在且不重复拼接；展示名的其余部分以网关响应为准，旧网关不补前缀时插件只能补回 provider 标签，无法还原网关后来才加上的 realm 段（如 `Global`）。
+
+Magpie 与 Pi 的展示名是有意不同的：Pi 的 `providerModelName`（`apps/x-adapter/src/pi/index.ts`）保留 `· Model load: N%` 后缀，Magpie 不加。差异原因是两个客户端的标签布局不同：Pi 的模型选择器单独占一行，后缀不影响识别；Magpie 把展示名当作整个选择器行的标签，后缀会挤掉 provider 前缀并截断。负载数据本身两边都能拿到，只是渲染策略不同。
 
 列表缓存位于每个插件工厂的闭包中，固定对应一个网关。缓存仅保留最近一次 token 对应的目录，存活 30 秒。不同 token 不会命中同一缓存；不同工厂不共用缓存。失败与合法空目录必须区分：
 

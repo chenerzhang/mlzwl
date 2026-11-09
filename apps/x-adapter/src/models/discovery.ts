@@ -42,6 +42,10 @@ export function openAiModelsResponse(models: PublicModel[]) {
       root: model.id,
       parent: null,
       metadata: {
+        // Provider metadata carries provider-private extras only, so it goes
+        // first: an upstream `display_name` or `supported_reasoning_levels`
+        // must never overwrite a field this dialect defines.
+        ...model.metadata,
         provider: model.provider,
         upstream_id: model.upstreamId,
         config_name: model.configName,
@@ -55,7 +59,6 @@ export function openAiModelsResponse(models: PublicModel[]) {
         model_load_percent: modelLoad(model),
         hot: modelLoad(model),
         quota: model.quota ?? null,
-        ...model.metadata,
         // The enforced gateway verdict must not be shadowed by provider metadata.
         input_modalities: inputModalities(model),
       },
@@ -66,6 +69,9 @@ export function openAiModelsResponse(models: PublicModel[]) {
 export function codexModelsResponse(models: PublicModel[]) {
   return {
     models: models.map((model, index) => ({
+      // Provider metadata goes first; every Codex field below it wins, so an
+      // upstream key can never shadow the public ID or the display name.
+      ...model.metadata,
       slug: model.id,
       display_name: displayName(model),
       default_reasoning_level: model.defaultReasoningLevel ?? 'medium',
@@ -99,7 +105,6 @@ export function codexModelsResponse(models: PublicModel[]) {
       model_load: modelLoad(model),
       model_load_percent: modelLoad(model),
       quota: model.quota ?? null,
-      ...model.metadata,
       // The enforced gateway verdict must not be shadowed by provider metadata.
       supports_image_detail_original: acceptsImages(inputModalities(model)),
       input_modalities: inputModalities(model),
@@ -111,6 +116,8 @@ export function claudeModelsResponse(models: PublicModel[]) {
   return {
     object: 'list',
     data: models.map((model) => ({
+      // Provider metadata goes first; every Claude field below it wins.
+      ...model.metadata,
       id: claudeModelId(model),
       type: 'model',
       display_name: displayName(model),
@@ -134,7 +141,6 @@ export function claudeModelsResponse(models: PublicModel[]) {
       model_load: modelLoad(model),
       model_load_percent: modelLoad(model),
       quota: model.quota ?? null,
-      ...model.metadata,
       // The enforced gateway verdict must not be shadowed by provider metadata.
       input_modalities: inputModalities(model),
     })),

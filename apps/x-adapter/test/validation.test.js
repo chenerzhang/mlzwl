@@ -9,8 +9,10 @@ import {
   validateModelInputModalities,
   maxContextBytes,
 } from '../dist/protocol/validation.js';
+import { createApp } from '../dist/daemon/server.js';
 import { claudeModelsResponse, codexModelsResponse, openAiModelsResponse } from '../dist/models/discovery.js';
 import { resolveTraeInputModalities } from '../dist/models/modality.js';
+import { ModelRegistry } from '../dist/models/registry.js';
 import xAdapterPiExtension from '../dist/pi/index.js';
 
 function withEnv(values, run) {
@@ -173,6 +175,201 @@ test('Codex discovery uses total context separately from provider input and outp
   assert.equal(openai.metadata.prompt_max_tokens, 936000);
   assert.equal(openai.metadata.max_tokens, 64000);
   assert.equal(openai.metadata.context_window_tokens, 1000000);
+});
+
+test('provider metadata cannot override dialect display_name or reasoning levels', () => {
+  // This test pins the writing order: every dialect object spreads provider
+  // metadata first, so an upstream `display_name` copy can never win. Trae and
+  // Doubao Work publish their own upstream display names, and only the prefix
+  // x-adapter adds keeps the two routes apart in a picker.
+  const trae = {
+    id: 'trae-global-deepseek-v4.1-flash',
+    provider: 'trae',
+    upstreamId: 'global-deepseek-v4.1-flash',
+    configName: 'deepseek-v4.1-flash',
+    modelName: 'deepseek-v4.1-flash__dev',
+    displayName: 'Global DeepSeek-V4.1-Flash',
+    modelLoad: 42.6,
+    supportedReasoningLevels: ['low', 'high'],
+    metadata: {
+      display_name: 'DeepSeek-V4.1-Flash',
+      supported_reasoning_levels: ['low', 'medium', 'high', 'max'],
+    },
+  };
+  const codex = codexModelsResponse([trae]).models[0];
+  const claude = claudeModelsResponse([trae]).data[0];
+  const openai = openAiModelsResponse([trae]).data[0];
+  assert.equal(codex.display_name, 'Trae Global DeepSeek-V4.1-Flash');
+  assert.equal(claude.display_name, 'Trae Global DeepSeek-V4.1-Flash');
+  assert.deepEqual(
+    codex.supported_reasoning_levels.map((level) => level.effort),
+    ['low', 'high'],
+  );
+  // Provider-private extras still reach the response.
+  assert.equal(codex.model_load, 42.6);
+  // The OpenAI dialect keeps the provider's raw name: the prefix lives only in
+  // the Codex and Claude top-level `display_name`.
+  assert.equal(openai.metadata.display_name, 'Global DeepSeek-V4.1-Flash');
+});
+
+test('provider metadata cannot shadow any dialect field, and extras stay additive', () => {
+  // The merge order is a writing rule, not one field's bug: a dialect field
+  // added above the spread would silently lose to an upstream key. Pin the
+  // whole reserved set instead of checking one key at a time.
+  const hostile = {
+    id: 'doubao-work-pro',
+    provider: 'doubao',
+    upstreamId: 'work-pro',
+    configName: 'work-pro',
+    modelName: 'work-pro',
+    displayName: 'Pro',
+    isDefault: true,
+    maxInputTokens: 128000,
+    maxOutputTokens: 32000,
+    contextWindowTokens: 128000,
+    modelLoad: 42.6,
+    quota: { remaining: 12 },
+    supportedReasoningLevels: ['low', 'high'],
+    defaultReasoningLevel: 'high',
+    inputModalities: ['text'],
+    metadata: {
+      id: 'hijacked',
+      type: 'hijacked',
+      slug: 'hijacked',
+      display_name: 'Hijacked',
+      supported_reasoning_levels: ['low'],
+      default_reasoning_level: 'low',
+      max_output_tokens: 1,
+      max_tokens: 1,
+      max_input_tokens: 1,
+      context_window: 1,
+      context_window_tokens: 1,
+      max_context_window: 1,
+      input_modalities: ['image'],
+      supports_image_detail_original: true,
+      provider: 'trae',
+      upstream_id: 'hijacked',
+      hot: 999,
+      model_load: 999,
+      model_load_percent: 999,
+      quota: { hijacked: true },
+      is_default: false,
+      priority: 999,
+      owned_by: 'trae',
+      root: 'hijacked',
+      created: 1,
+      capabilities: { image_input: { supported: true } },
+      prompt_max_tokens: 1,
+      // A provider-private extra that must survive the merge.
+      backend_variant: 'standard',
+    },
+  };
+
+  const codex = codexModelsResponse([hostile]).models[0];
+  assert.equal(codex.slug, 'doubao-work-pro');
+  assert.equal(codex.display_name, 'Doubao Work Pro');
+  assert.deepEqual(
+    codex.supported_reasoning_levels.map((level) => level.effort),
+    ['low', 'high'],
+  );
+  assert.equal(codex.default_reasoning_level, 'high');
+  assert.equal(codex.max_output_tokens, 32000);
+  assert.equal(codex.context_window, 128000);
+  assert.equal(codex.max_context_window, 128000);
+  assert.equal(codex.priority, -1000);
+  assert.equal(codex.provider, 'doubao');
+  assert.equal(codex.upstream_id, 'work-pro');
+  assert.equal(codex.model_load, 42.6);
+  assert.equal(codex.model_load_percent, 42.6);
+  assert.equal(codex.hot, 42.6);
+  assert.deepEqual(codex.input_modalities, ['text']);
+  assert.equal(codex.supports_image_detail_original, false);
+  assert.deepEqual(codex.quota, { remaining: 12 });
+  assert.equal(codex.backend_variant, 'standard');
+
+  const claude = claudeModelsResponse([hostile]).data[0];
+  assert.equal(claude.id, 'claude-doubao-work-pro[1m]');
+  assert.equal(claude.type, 'model');
+  assert.equal(claude.display_name, 'Doubao Work Pro');
+  assert.equal(claude.max_tokens, 32000);
+  assert.equal(claude.max_input_tokens, 128000);
+  assert.equal(claude.provider, 'doubao');
+  assert.equal(claude.upstream_id, 'work-pro');
+  assert.equal(claude.model_load, 42.6);
+  assert.deepEqual(claude.input_modalities, ['text']);
+  assert.equal(claude.capabilities.image_input.supported, false);
+  assert.equal(claude.capabilities.effort.low.supported, true);
+  assert.equal(claude.capabilities.effort.max.supported, false);
+  assert.equal(claude.backend_variant, 'standard');
+
+  const openai = openAiModelsResponse([hostile]).data[0];
+  assert.equal(openai.id, 'doubao-work-pro');
+  assert.equal(openai.owned_by, 'doubao');
+  assert.equal(openai.root, 'doubao-work-pro');
+  assert.equal(openai.created, 0);
+  assert.equal(openai.metadata.provider, 'doubao');
+  assert.equal(openai.metadata.upstream_id, 'work-pro');
+  assert.equal(openai.metadata.config_name, 'work-pro');
+  assert.equal(openai.metadata.model_name, 'work-pro');
+  assert.equal(openai.metadata.display_name, 'Pro');
+  assert.equal(openai.metadata.is_default, true);
+  assert.equal(openai.metadata.max_tokens, 32000);
+  assert.equal(openai.metadata.prompt_max_tokens, 128000);
+  assert.equal(openai.metadata.context_window_tokens, 128000);
+  assert.equal(openai.metadata.model_load, 42.6);
+  assert.equal(openai.metadata.model_load_percent, 42.6);
+  assert.equal(openai.metadata.hot, 42.6);
+  assert.deepEqual(openai.metadata.input_modalities, ['text']);
+  assert.deepEqual(openai.metadata.quota, { remaining: 12 });
+  assert.equal(openai.metadata.backend_variant, 'standard');
+});
+
+test('GET /v1/models/:id keeps dialect fields ahead of provider metadata', async () => {
+  // This endpoint builds its own OpenAI-shaped model instead of going through
+  // openAiModelsResponse, so the merge order has to be pinned here too.
+  const adapters = [
+    {
+      id: 'trae',
+      displayName: 'Trae',
+      async discoverModels() {
+        return {
+          provider: 'trae',
+          displayName: 'Trae',
+          models: [
+            {
+              upstreamId: 'global-deepseek-v4.1-flash',
+              configName: 'deepseek-v4.1-flash',
+              modelName: 'deepseek-v4.1-flash__dev',
+              displayName: 'Global DeepSeek-V4.1-Flash',
+              modelLoad: 28.67,
+              metadata: {
+                display_name: 'DeepSeek-V4.1-Flash',
+                config_name: 'upstream-config',
+                model_load: 999,
+                hot: 999,
+                backend_variant: 'standard',
+              },
+            },
+          ],
+        };
+      },
+    },
+  ];
+  const app = createApp({ adapters, registry: new ModelRegistry(adapters) });
+  const response = await app.request('http://127.0.0.1:10100/v1/models/trae-global-deepseek-v4.1-flash', {
+    headers: { host: '127.0.0.1:10100' },
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.id, 'trae-global-deepseek-v4.1-flash');
+  assert.equal(payload.owned_by, 'trae');
+  assert.equal(payload.metadata.config_name, 'deepseek-v4.1-flash');
+  assert.equal(payload.metadata.display_name, 'Global DeepSeek-V4.1-Flash');
+  assert.equal(payload.metadata.model_load, 28.67);
+  assert.equal(payload.metadata.model_load_percent, 28.67);
+  assert.equal(payload.metadata.hot, 28.67);
+  // Provider-private extras still reach the payload.
+  assert.equal(payload.metadata.backend_variant, 'standard');
 });
 
 test('Trae image capability follows upstream metadata with measured exceptions', () => {
