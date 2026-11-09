@@ -1,6 +1,6 @@
 {
   "name": "@mlzwl/magpie-x-adapter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Magpie (OpenCode plugin format) provider for the local x-adapter model gateway.",
   "type": "module",
   "keywords": [
