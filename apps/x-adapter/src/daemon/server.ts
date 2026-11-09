@@ -394,6 +394,9 @@ function openAiModel(model: PublicModel) {
     root: model.id,
     parent: null,
     metadata: {
+      // Provider metadata goes first so an upstream `display_name` cannot
+      // shadow the field x-adapter resolved for this public ID.
+      ...model.metadata,
       provider: model.provider,
       upstream_id: model.upstreamId,
       config_name: model.configName,
@@ -402,7 +405,6 @@ function openAiModel(model: PublicModel) {
       model_load: model.modelLoad ?? null,
       model_load_percent: model.modelLoad ?? null,
       hot: model.modelLoad ?? null,
-      ...model.metadata,
       input_modalities: model.inputModalities ?? ['text'],
     },
   };

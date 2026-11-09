@@ -18,6 +18,7 @@ assertPublishArtifacts();
 await withIsolatedEnvironment(async (sandbox) => {
   await assertPluginShape();
   await assertGatewayBehavior();
+  await assertModelProjection();
   await assertStartTimeout(sandbox);
 });
 console.log('Magpie plugin contracts and isolated behavior checks passed.');
@@ -247,7 +248,7 @@ async function assertGatewayBehavior() {
     const authB = { type: 'api', key: keyB };
     assert.equal(await hooks.provider.models(provider), provider.models);
     const first = await hooks.provider.models(provider, { auth: authA });
-    assert.equal(first['mock-model'].name, 'Mock · Model load: 0%');
+    assert.equal(first['mock-model'].name, 'Mock');
     assert.deepEqual(first['mock-model'].limit, { context: 128000, output: 32000 });
     assert.deepEqual(Object.keys(first['mock-model'].variants), ['low', 'high']);
     assert.equal(first['mock-model'].capabilities.input.image, true);
@@ -255,7 +256,7 @@ async function assertGatewayBehavior() {
     await hooks.provider.models(provider, { auth: authA });
     assert.equal(modelRequests, count, 'The same account should reuse its catalogue.');
     const other = await hooks.provider.models(provider, { auth: authB });
-    assert.equal(other['mock-model'].name, 'Other account · Model load: 0%');
+    assert.equal(other['mock-model'].name, 'Other account');
     assert.equal(modelRequests, count + 1, 'A different account must not reuse the cached catalogue.');
     await assert.rejects(hooks.provider.models(provider, { auth: { key: 'invalid' } }), /HTTP 401/);
 
@@ -383,6 +384,134 @@ async function assertGatewayBehavior() {
   console.log(
     'Checked saved credentials, protected login, cache isolation, catalogue mapping, redirects and safe URL errors.',
   );
+}
+
+/**
+ * What the picker shows must survive both x-adapter releases.
+ *
+ * Two `supported_reasoning_levels` shapes reach this plugin and both are covered
+ * here: the Codex dialect's `{ effort }` objects, and the bare string array an
+ * older gateway emits when an upstream metadata key overwrote the dialect
+ * field. A string array read as "no levels" silently removes the reasoning
+ * picker.
+ *
+ * Display names carry a provider prefix because Trae and Doubao Work publish
+ * their own upstream names. A gateway that predates the prefix fix sends the
+ * bare name, so the plugin adds the prefix; a name that already carries it must
+ * not get it twice.
+ *
+ * Every mock entry carries `model_load_percent`, so the "the picker name has no
+ * model-load suffix" assertion tests a real payload field instead of passing
+ * because the field is absent. `0` is included because it is a valid load.
+ *
+ * The mock listens on a loopback port this script owns, so it never touches a
+ * developer's running gateway or data directory.
+ */
+async function assertModelProjection() {
+  const payload = {
+    models: [
+      {
+        slug: 'trae-global-deepseek-v4.1-flash',
+        display_name: 'Global DeepSeek-V4.1-Flash',
+        provider: 'trae',
+        model_load_percent: 42.6,
+        supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }],
+        input_modalities: ['text', 'image'],
+      },
+      {
+        // An older gateway lets metadata win, so the levels arrive as strings.
+        slug: 'doubao-work-pro',
+        display_name: 'Doubao Work Pro',
+        provider: 'doubao',
+        model_load_percent: 0,
+        supported_reasoning_levels: ['low', 'medium', 'high', 'max'],
+        input_modalities: ['text'],
+      },
+      {
+        // A gateway that already prefixes the name must not be prefixed twice.
+        slug: 'trae-global-gpt-5.6-sol',
+        display_name: 'Trae Global GPT-5.6-Sol',
+        provider: 'trae',
+        model_load_percent: 17.5,
+        supported_reasoning_levels: [{ effort: 'high' }],
+        input_modalities: ['text'],
+      },
+    ],
+  };
+
+  const server = http.createServer((request, response) => {
+    const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    const body =
+      pathname === '/health'
+        ? {
+            ok: true,
+            name: 'x-adapter',
+            version: 'test',
+            host: '127.0.0.1',
+            port: server.address().port,
+          }
+        : pathname === '/v1/models'
+          ? payload
+          : undefined;
+    response.setHeader('content-type', 'application/json');
+    if (!body) {
+      response.writeHead(404);
+      response.end('{}');
+      return;
+    }
+    response.writeHead(200);
+    response.end(JSON.stringify(body));
+  });
+
+  const previousBaseUrl = process.env.X_ADAPTER_BASE_URL;
+  const previousPort = process.env.X_ADAPTER_PORT;
+  try {
+    const base = await listen(server);
+    process.env.X_ADAPTER_BASE_URL = base;
+    process.env.X_ADAPTER_PORT = String(server.address().port);
+    const hooks = await (await freshPlugin())();
+    const models = await hooks.provider.models(
+      { id: 'x-adapter', models: {} },
+      { auth: { type: 'api', key: 'projection-check-token' } },
+    );
+
+    const byId = (id) => {
+      const model = models[id];
+      if (!model) {
+        throw new Error(`Expected the mock catalogue to project ${id}; found ${Object.keys(models).join(', ')}.`);
+      }
+      return model;
+    };
+
+    const trae = byId('trae-global-deepseek-v4.1-flash');
+    // The mock carries `model_load_percent`, so a suffix would show up here.
+    assert.ok(!String(trae.name).includes('Model load'), 'The picker name must not carry a model-load suffix.');
+    assert.equal(trae.name, 'Trae Global DeepSeek-V4.1-Flash');
+    assert.equal(trae.reasoning, true);
+    assert.deepEqual(Object.keys(trae.variants), ['low', 'high']);
+
+    const doubao = byId('doubao-work-pro');
+    assert.equal(doubao.name, 'Doubao Work Pro');
+    assert.equal(doubao.reasoning, true);
+    assert.deepEqual(Object.keys(doubao.variants), ['low', 'medium', 'high', 'max']);
+
+    const prefixed = byId('trae-global-gpt-5.6-sol');
+    assert.equal(prefixed.name, 'Trae Global GPT-5.6-Sol');
+    assert.deepEqual(Object.keys(prefixed.variants), ['high']);
+  } finally {
+    if (previousBaseUrl === undefined) {
+      delete process.env.X_ADAPTER_BASE_URL;
+    } else {
+      process.env.X_ADAPTER_BASE_URL = previousBaseUrl;
+    }
+    if (previousPort === undefined) {
+      delete process.env.X_ADAPTER_PORT;
+    } else {
+      process.env.X_ADAPTER_PORT = previousPort;
+    }
+    await closeServer(server);
+  }
+  console.log('Checked the Magpie model projection: provider prefix, both reasoning-level shapes and no name suffix.');
 }
 
 async function assertStartTimeout(sandbox) {

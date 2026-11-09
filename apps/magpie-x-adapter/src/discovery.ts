@@ -6,7 +6,6 @@ export type DiscoveryModel = {
   displayName: string;
   contextWindow?: number;
   maxOutputTokens?: number;
-  modelLoad?: number;
   reasoningLevels: string[];
   inputModalities: ('text' | 'image')[];
   provider?: string;
@@ -14,6 +13,12 @@ export type DiscoveryModel = {
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
+
+/** The provider prefix x-adapter puts in front of a resolved display name. */
+const PROVIDER_LABELS: Record<string, string> = {
+  trae: 'Trae',
+  doubao: 'Doubao Work',
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -23,16 +28,21 @@ function optionalPositiveNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** Model load is a percentage that may legitimately be 0, so zero is kept. */
-function optionalPercent(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
+/**
+ * Reasoning levels reach the plugin in two shapes: the Codex dialect's
+ * `[{ effort, description }]` objects, and a bare string array that an older
+ * x-adapter release emits when an upstream metadata key overwrites the dialect
+ * field. Accept both, because reading a string array as "no levels" removes the
+ * reasoning picker from magpie while the gateway still forwards effort.
+ */
 function parseReasoningLevels(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
   const levels = value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      return entry ? [entry] : [];
+    }
     if (!isRecord(entry) || typeof entry.effort !== 'string' || !entry.effort) {
       return [];
     }
@@ -63,7 +73,6 @@ export function parseDiscoveryModel(value: unknown): DiscoveryModel | undefined 
     displayName: typeof value.display_name === 'string' && value.display_name ? value.display_name : value.slug,
     contextWindow: optionalPositiveNumber(value.context_window ?? value.max_context_window),
     maxOutputTokens: optionalPositiveNumber(value.max_output_tokens),
-    modelLoad: optionalPercent(value.model_load_percent ?? value.model_load ?? value.hot),
     reasoningLevels: parseReasoningLevels(value.supported_reasoning_levels),
     inputModalities: parseInputModalities(value.input_modalities),
     provider: typeof value.provider === 'string' ? value.provider : undefined,
@@ -89,14 +98,29 @@ export function parseDiscoveryModels(payload: unknown): DiscoveryModel[] | undef
 }
 
 /**
- * Keep the model load readable in magpie's picker without changing the ID.
- * magpie shows the name, and x-adapter already publishes the same figure to
- * Pi, so the two clients stay consistent.
+ * Keep magpie's picker readable and unambiguous.
+ *
+ * The model load figure belongs to the gateway's metadata, not to the name a
+ * user picks a model by. magpie renders the name as the whole row label, so
+ * appending `· Model load: N%` pushes the provider distinction off the row and
+ * truncates it.
+ *
+ * The provider prefix marks where a model comes from: Trae and Doubao Work are
+ * separate providers, and magpie lists their models in one flat picker. Inside
+ * Trae, the realm segment the gateway already puts in the name (`Global`, `CN`)
+ * is what tells two routes with the same upstream name apart.
+ *
+ * A gateway that predates the prefix fix still sends the bare upstream name, so
+ * add the prefix here when it is missing. That keeps the provider visible in
+ * either upgrade order; the rest of the name still comes from the gateway, so a
+ * gateway that omits the realm segment cannot have it restored here.
  */
 export function providerModelName(model: DiscoveryModel): string {
-  return model.modelLoad === undefined
-    ? model.displayName
-    : `${model.displayName} · Model load: ${Math.round(model.modelLoad)}%`;
+  const label = model.provider ? PROVIDER_LABELS[model.provider] : undefined;
+  if (!label || model.displayName.startsWith(`${label} `)) {
+    return model.displayName;
+  }
+  return `${label} ${model.displayName}`;
 }
 
 export function toProviderModel(model: DiscoveryModel): ProviderModel {
