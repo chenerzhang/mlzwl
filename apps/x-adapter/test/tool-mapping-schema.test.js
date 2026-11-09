@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ToolNameMapper,
+  anthropicToolsToCanonical,
   bindCanonicalToolCalls,
   canonicalToolsToTrae,
   normalizeSchema,
@@ -205,4 +206,79 @@ test('Responses to Trae conversion never serializes object-valued additionalProp
 
   assert.equal(upstream[0].function.name, 'subagent');
   assert.deepEqual(collectAdditionalProperties(parameters), [false, false]);
+});
+
+test('a client function tool named web_search keeps its schema and is not hosted (Anthropic)', () => {
+  const schema = {
+    type: 'object',
+    properties: { queries: { type: 'array', items: { type: 'string' } } },
+    required: ['queries'],
+  };
+  const tools = anthropicToolsToCanonical([
+    { name: 'web_search', description: 'Search the client index.', input_schema: schema },
+    { type: 'web_search_20250305', name: 'web_search', max_uses: 5 },
+  ]);
+
+  assert.equal(tools[0].hosted, undefined);
+  assert.equal(tools[0].function.name, 'web_search');
+  assert.equal(tools[0].function.description, 'Search the client index.');
+  assert.deepEqual(tools[0].function.parameters, schema);
+  assert.equal(tools[1].hosted, true);
+  assert.equal(tools[1].function.name, 'web_search_20250305');
+});
+
+test('a client function tool named web_search keeps its schema and is not hosted (Responses)', () => {
+  const schema = {
+    type: 'object',
+    properties: { queries: { type: 'array', items: { type: 'string' } } },
+    required: ['queries'],
+  };
+  const tools = responsesToolsToCanonical([
+    { type: 'function', name: 'web_search', description: 'Search the client index.', parameters: schema },
+    { type: 'web_search_preview' },
+  ]);
+
+  assert.equal(tools[0].hosted, undefined);
+  assert.equal(tools[0].function.name, 'web_search');
+  assert.equal(tools[0].function.description, 'Search the client index.');
+  assert.deepEqual(tools[0].function.parameters, schema);
+  assert.equal(tools[1].hosted, true);
+  assert.equal(tools[1].function.name, 'web_search_preview');
+});
+
+test('an ordinary custom tool named web_search keeps its client type through the upstream mapper', () => {
+  const tools = responsesToolsToCanonical([{ type: 'custom', name: 'web_search', description: 'Run raw input.' }]);
+  const mapper = new ToolNameMapper();
+  const upstream = canonicalToolsToTrae(tools, mapper);
+  const restored = mapper.restoreToolCalls([
+    {
+      id: 'custom',
+      type: 'function',
+      index: 0,
+      function: { name: upstream[0].function.name, arguments: '{"input":"pwd"}' },
+    },
+  ]);
+
+  assert.deepEqual(
+    restored.map((call) => [call.function.name, call.client_type]),
+    [['web_search', 'custom']],
+  );
+  const response = responseJson({
+    model: 'traex-test',
+    text: '',
+    reasoning: '',
+    tool_calls: restored,
+    finish_reason: 'tool_calls',
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  });
+  assert.deepEqual(response.output, [
+    {
+      id: 'cc_custom',
+      type: 'custom_tool_call',
+      status: 'completed',
+      call_id: 'custom',
+      name: 'web_search',
+      input: 'pwd',
+    },
+  ]);
 });

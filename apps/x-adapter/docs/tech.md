@@ -107,6 +107,8 @@ Trae 数据面使用 `/api/agent/v3/llm_utils_chat` 与 `Cloud-IDE-JWT`。请求
 
 配额、权益、429、普通 HTTP 错误、timeout、取消或已开始的 SSE 不得触发 function、模型或 realm fallback。Trae hosted search 明确返回 `unsupported_hosted_search`；不接入通用本地搜索执行链。
 
+hosted 判定只依据协议层显式的 hosted 声明（`type`），不依据函数名：Anthropic Messages、OpenAI Chat Completions 与 Responses 的普通函数工具即使叫 `web_search` 也按普通工具处理，其 schema 与调用原样保留给客户端。按函数名匹配会把客户端工具替换为内部工具，让该工具的声明与调用不可用；Responses 函数工具本就携带 `name: 'web_search'` 和自有 `parameters`，名称匹配必然误判。回程同理，`ToolNameMapper` 不对 `web_search` 做名字特判，否则普通 custom 工具会丢掉 `client_type: custom` 与 `namespace`。
+
 真实诊断证明 `llm_utils_chat` 不可靠地执行请求级 `max_tokens`。网关因此使用两个独立的本地输出边界：请求 `max_tokens` 限制可见的 text/reasoning/tool-call 增量事件数，`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_EVENTS` 可进一步收紧；`X_ADAPTER_TRAE_CHAT_MAX_OUTPUT_BYTES` 默认将这些事件的文本或序列化 tool-call 总量限制在 1 MiB。达到上限后取消上游流并合成唯一 `done(length)`，流式和非流式调用都通过同一 canonical generator 获得一致结果；协议出口再分别映射为 Chat Completions `length`、Responses `incomplete/max_output_tokens` 和 Anthropic `max_tokens`。该边界只负责限制本机暴露和聚合的数据量，不把 SSE 事件或 UTF-8 字节伪装成 token，也不承诺取消前的上游计费精度。
 
 模型发现三方言都投影总上下文：OpenAI `metadata.context_window_tokens`，Codex `context_window` / `max_context_window` 与 `max_output_tokens`，Claude `max_input_tokens` / `max_tokens`。Provider 的 `prompt_max_tokens` 仍表示输入上限，不与总上下文混用。
