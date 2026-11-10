@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // 本包是同构代码：server（Node）与 web（浏览器）都会引用。
+    // 用 DOM lib 提供 TextDecoder / atob / btoa 等两端都有的全局，
+    // 同时用 node 类型兜住 Node 专属部分（不在本包使用）。
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

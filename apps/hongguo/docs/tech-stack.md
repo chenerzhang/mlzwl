@@ -1,0 +1,688 @@
+# 技术栈与工程结构
+
+本文是 `docs/reverse-engineering.md` 的落地篇。前者回答「上游是什么、能不能做」，本文回答「怎么搭、用什么、边界在哪」。
+
+配套约定见仓库根目录 `AGENTS.md`。
+
+---
+
+## 1. 形态选型：方案 B
+
+已确定采用 **B：服务端 NestJS 持有 SDK 与密钥**。
+
+| 维度 | A：浏览器 WASM + 哑转发 | **B：服务端 NestJS（已选）** |
+| --- | --- | --- |
+| 签名运行位置 | 浏览器（`openhongguo.wasm`） | 服务端 |
+| 内容密钥位置 | 浏览器内存 | 服务端内存 |
+| 设备档案位置 | 浏览器 `localStorage` | 服务端 SQLite |
+| 浏览器首屏 | 6.85 MB WASM（brotli 1.34 MB） | 业务 JS |
+| 媒体路径 | 浏览器直连 CDN | 浏览器 ← 本服务 ← CDN |
+| HEVC 兼容 | 受浏览器限制 | 可服务端转码（当前不做） |
+| HEIC 封面 | 需 Web Worker 转码 | 服务端转码 + 缓存 |
+| 雪碧图 | 需 Web Worker | 服务端转码 + 缓存 |
+| 服务端状态 | 无 | 有（SQLite） |
+
+选 B 的核心理由：雪碧图与封面转码需要在服务端缓存（转一次、所有人复用），且内容密钥集中管理。A 形态下这两点都要靠浏览器重复计算。
+
+### 已明确不做的事
+
+| 不做 | 原因 |
+| --- | --- |
+| 视频转码（HEVC → H.264） | 成本高（软编 2–5 倍速），且 Chrome/Safari/Edge 都能播 HEVC。先做能力检测 + 提示 |
+| HLS / DASH | 上游短剧是单文件 MP4，没有 HLS 源 |
+| ffmpeg 或任何系统二进制 | 见第 3 节，两条路都已用纯 JS 替代 |
+| SSR | 纯 SPA，没有 SEO 需求 |
+
+---
+
+## 2. 依赖清单
+
+版本均已实测可协同工作。
+
+### 运行时与工具链
+
+| 用途 | 选择 | 版本 | 备注 |
+| --- | --- | --- | --- |
+| 运行时 | Node | 22.20.0 | WASM SDK 与 `better-sqlite3` 已验证 |
+| 包管理 | pnpm | 10.17.1 | workspace |
+| 类型检查 | **TypeScript** | **6.0.3** | 见 2.1 |
+| Lint | ESLint | 10.14.0 | flat config |
+| Lint 插件 | typescript-eslint | 8.72.1 | type-aware |
+| 格式化 | Prettier | 3.9.10 | 行宽 120 |
+| Git 钩子 | lefthook | 最新 | 见 6.3 |
+| 单元测试 | Vitest | 5.1.0 | |
+| 端到端 | Playwright | 1.65.0 | |
+
+### 后端
+
+| 用途 | 选择 | 版本 |
+| --- | --- | --- |
+| 框架 | **NestJS** | 12.4.1 |
+| HTTP 适配器 | `@nestjs/platform-fastify` | 12.4.1（内含 Fastify 5.12.8） |
+| 校验 | Zod | 4.6.7 |
+| 数据库驱动 | `better-sqlite3` | 13.0.3 |
+| ORM | Drizzle ORM + `drizzle-kit` | 0.45.4 |
+| 上游 SDK | `openhongguo` | 0.1.0 |
+| 视频解密 | `node:crypto` | 内置 |
+| HEIC 转码 | `heic-convert` | 2.x（纯 JS WASM） |
+| 图片缩放 | `sharp` | 最新 |
+
+### 前端
+
+| 用途 | 选择 | 版本 |
+| --- | --- | --- |
+| 构建 | Vite | 8.3.7 |
+| 框架 | React | 19.3.1 |
+| 样式 | Tailwind CSS | 4.3.5（`@tailwindcss/vite`） |
+| 路由 | React Router | 8.5.1（SPA 模式） |
+| 服务端数据 | TanStack Query | 5.107.1 |
+| 客户端状态 | Zustand | 5.0.16 |
+
+### 2.1 三个版本约束（实测）
+
+**① TypeScript 必须锁 6.0.3，不能用 7.0.2。**
+
+```
+typescript@7.0.2：tsc 编译通过，Nest 装饰器正常，但
+typescript-eslint@8.72.1 启动即报错：
+  Error: typescript-eslint does not support TS 7.0.
+```
+
+`typescript-eslint` 的 peer 是 `typescript: >=4.8.4 <6.1.0`。等它支持 TS 7 再升。
+
+**② 不用 `nestjs-zod`。**
+
+```
+nestjs-zod@5.6.0 peer: @nestjs/common ^10.0.0 || ^11.0.0
+当前 Nest: 12.4.1
+```
+
+为保留 Nest 12，改用 15 行自定义 Pipe（见 4.3）。已实测校验、默认值、类型转换、400 响应都正常。
+
+**③ 不用 `node:sqlite`。**
+
+Node 22 内置可用，但每次启动打印 `ExperimentalWarning`，且 API 仍可能变动。用 `better-sqlite3`（预编译二进制，`pnpm i` 自动装，无需编译器）。
+
+---
+
+## 3. 为什么不需要 ffmpeg
+
+上游 `index.js` 依赖 ffmpeg 做两件事。两件都有纯 JS 替代，且我实测过。
+
+### 3.1 HEIC 封面转码
+
+上游做法（`index.js:107-127`）：macOS 用系统 `sips`，其他平台用 ffmpeg。
+
+实测替代：
+
+| 步骤 | 工具 | 耗时 |
+| --- | --- | --- |
+| HEIC → JPEG | `heic-convert`（libheif WASM） | 52 ms（30 KB 封面） |
+| 缩放 | `sharp` | 6 ms |
+
+雪碧图（191 KB，2400×1360）：
+
+| 步骤 | 耗时 |
+| --- | --- |
+| HEIC → JPEG | 211 ms |
+| 缩放 | 7 ms |
+
+**关键陷阱**：`sharp` **不能**读 HEIC。实测直接报 `bad seek to 30907`。网上说 sharp 支持 HEIF 指的是 AVIF。必须 `heic-convert` 先转，再交给 sharp 缩放。
+
+### 3.2 视频解密与重封装
+
+上游做法（`index.js:283`）：
+
+```
+ffmpeg -decryption_key <hex> -i enc.mp4 -map 0 -c copy -tag:v hvc1 -movflags +faststart out.mp4
+```
+
+它用 ffmpeg 做两件事：解密，以及把 `moov` 移到文件头（faststart），因为浏览器要先读到 `moov` 才能播放。
+
+**实测发现红果的原始文件本来就是 faststart**，不需要重封装：
+
+```
+ftyp@0   moov@28   free@194226   mdat@194234
+```
+
+5 档清晰度（360p/480p/540p/720p/1080p）全部如此，`moov` 固定在偏移 28，且都在 `mdat` 之前。
+
+所以流程简化为：
+
+```
+下载加密 MP4 → 原地解密（node:crypto aes-128-ctr）→ 直接 Range 流式返回
+```
+
+无临时文件、无重封装、无转码。1080p 14.7 MB 解密约 60 ms。
+
+### 3.3 结论
+
+整个项目**零系统依赖**。`pnpm i && pnpm dev` 即可运行，不需要 Docker、不需要 `brew install ffmpeg`。
+
+Docker 只在未来部署时考虑，不是开发前提。
+
+---
+
+## 4. 后端设计
+
+### 4.1 模块划分
+
+```
+apps/server/src/
+├── main.ts
+├── app.module.ts
+├── config/
+│   └── config.module.ts          环境变量 + Zod 校验
+├── common/
+│   ├── zod-validation.pipe.ts
+│   ├── http-exception.filter.ts
+│   └── bytes.ts                  at() / readU32() 等安全读工具
+├── hongguo/                      上游 SDK 封装
+│   ├── hongguo.module.ts
+│   ├── hongguo.service.ts        持有 client、串行化设备注册
+│   ├── device-pool.service.ts    设备池（轮换 + 配额）
+│   └── profile.store.ts          SQLite 持久化
+├── catalog/                      业务数据
+│   ├── catalog.module.ts
+│   ├── catalog.controller.ts     /api/feed /api/search /api/series
+│   ├── catalog.service.ts
+│   └── catalog.mapper.ts         上游模型 → 自有契约
+├── media/                        视频
+│   ├── media.module.ts
+│   ├── media.controller.ts       /api/media/:episodeId
+│   ├── playback.controller.ts    /api/episodes/:id/playback
+│   ├── playback.service.ts       resolvePlayback + 密钥缓存
+│   ├── spade.service.ts          spade_a → key
+│   ├── cenc.service.ts           CENC 原地解密
+│   └── range.ts                  206 / 416 处理
+├── cover/                        图片
+│   ├── cover.module.ts
+│   ├── cover.controller.ts       /api/cover?u=
+│   ├── sprite.controller.ts      /api/sprite/:episodeId
+│   ├── heic.service.ts           heic-convert + sharp
+│   └── cover-cache.service.ts    磁盘缓存 + LRU 清理
+└── db/
+    ├── db.module.ts
+    ├── schema.ts                 Drizzle schema
+    └── migrations/
+```
+
+### 4.2 数据库表
+
+```ts
+// apps/server/src/db/schema.ts（示意）
+devices        id, profileJson, state(active|limited), lastUsedAt, createdAt
+deviceQuota    deviceId, day, playbackCount
+playbackKeys   episodeId, keyHex, version, streamUrl, expiresAt, deviceId
+spriteCache    videoId, sheetIndex, path, width, height, gridX, gridY, frameCount, interval
+coverCache     urlHash, path, contentType, bytes, createdAt
+watchProgress  seriesId, episodeId, position, updatedAt   // 可选，也可只放前端
+```
+
+密钥表只在内存里保留，落库只为跨重启复用播放地址；`expiresAt` 到期即删。
+
+### 4.3 Zod 校验 Pipe
+
+```ts
+// apps/server/src/common/zod-validation.pipe.ts
+import { BadRequestException, type ArgumentMetadata, type PipeTransform } from '@nestjs/common'
+import type { z } from 'zod'
+
+export class ZodValidationPipe<T extends z.ZodType> implements PipeTransform {
+  constructor(private readonly schema: T) {}
+
+  transform(value: unknown, _metadata: ArgumentMetadata): z.output<T> {
+    const parsed = this.schema.safeParse(value)
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues)
+    return parsed.data
+  }
+}
+```
+
+用法：
+
+```ts
+@Get('search')
+search(@Query(new ZodValidationPipe(SearchQuery)) query: z.output<typeof SearchQuery>) { ... }
+```
+
+已实测：`?page=2` 自动转成 `number`，缺 `keyword` 返回 400 且错误体是 Zod issue 数组。
+
+### 4.4 Range 流式响应
+
+Nest + Fastify 下需要 `@Res()` 手动接管：
+
+```ts
+@Get(':episodeId')
+async stream(@Param('episodeId') id: string, @Req() req: FastifyRequest, @Res() reply: FastifyReply) {
+  const file = await this.media.resolve(id)   // 解密后文件路径
+  const size = await stat(file).then((s) => s.size)
+  const range = req.headers.range
+  if (!range) {
+    return reply.header('content-length', String(size)).header('content-type', 'video/mp4').send(createReadStream(file))
+  }
+  const parsed = parseRange(range, size)
+  if (!parsed) return reply.code(416).header('content-range', `bytes */${size}`).send()
+  reply.code(206)
+    .header('content-range', `bytes ${parsed.start}-${parsed.end}/${size}`)
+    .header('accept-ranges', 'bytes')
+    .header('content-length', String(parsed.end - parsed.start + 1))
+    .header('content-type', 'video/mp4')
+  return reply.send(createReadStream(file, { start: parsed.start, end: parsed.end }))
+}
+```
+
+已实测：`HEAD 200`、`Range: bytes=0-99 → 206` 且返回 100 字节、越界 `416`、解密后的 1080p MP4 经此接口在 Chrome 播放（1920×1080，146.8 s，`readyState 4`）。
+
+### 4.5 媒体缓存策略
+
+| 项 | 策略 |
+| --- | --- |
+| 解密后文件 | 存磁盘，键 `episodeId`，LRU 保留 40 个（沿用上游 `MEDIA_KEEP`） |
+| 并发同一集 | 用 `Map<episodeId, Promise>` 去重，避免重复下载解密 |
+| 播放地址 | 按 `expiresAt` 缓存，剩余不足 5 分钟重新解析 |
+| 内容密钥 | 只在内存，随播放地址一起失效 |
+
+### 4.6 接口契约
+
+对外只暴露自有接口，不透传上游松散 JSON。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/feed` | 首页推荐，游标分页 |
+| `GET` | `/api/search?keyword=&cursor=` | 搜索 |
+| `GET` | `/api/series/:id` | 剧集详情 + 分集列表 |
+| `GET` | `/api/episodes/:id/playback` | 返回自有 `streamUrl`、`spriteUrl`、`duration`，**不含**上游签名与密钥 |
+| `GET` | `/api/media/:episodeId` | Range 流式播放 |
+| `GET` | `/api/cover?u=<encoded>` | HEIC → JPEG 代理，带缓存 |
+| `GET` | `/api/sprite/:episodeId?sheet=N` | 进度条雪碧图，JPEG |
+
+**约束**：`/api/episodes/:id/playback` 返回的 `streamUrl` 必须指向 `/api/media/:episodeId`。浏览器永远看不到 `qznovelvod.com` 的签名 URL，也拿不到内容密钥。
+
+---
+
+## 5. 前端设计
+
+### 5.1 响应式策略
+
+Tailwind 断点（默认）：
+
+| 前缀 | 宽度 | 目标 |
+| --- | --- | --- |
+| 无前缀 | < 640px | 手机竖屏 |
+| `sm:` | ≥ 640px | 手机横屏 / 小平板 |
+| `md:` | ≥ 768px | 平板 |
+| `lg:` | ≥ 1024px | 桌面 |
+| `xl:` | ≥ 1280px | 宽屏 |
+
+核心布局差异：
+
+| 区域 | 移动端 | 桌面端 |
+| --- | --- | --- |
+| 首页列表 | 2 列网格 | 4–6 列网格 |
+| 播放页 | 全屏竖屏，上下滑切集 | 居中 16:9，左右键切集 |
+| 搜索 | 顶部全宽输入 | 侧栏输入 |
+| 历史 | 底部抽屉 | 右侧面板 |
+
+### 5.2 播放器
+
+**原生 `<video>` + 自写控件**，不用第三方播放器库。
+
+理由：短剧需要「上下滑切集」「长按倍速」「单击暂停/双击点赞」这类非标准手势，第三方库会限制实现。
+
+封装成单一组件，对外只暴露：
+
+```ts
+interface PlayerProps {
+  src: string
+  poster?: string
+  initialTime?: number
+  spriteUrl?: string
+  spriteMeta?: { gridX: number; gridY: number; interval: number; frameCount: number; cellWidth: number; cellHeight: number }
+  onEnded: () => void
+  onProgress: (position: number, duration: number) => void
+}
+```
+
+换实现时界面代码不用改。
+
+### 5.3 雪碧图（已确认要做）
+
+上游返回 `big_thumbs[0]`：
+
+```jsonc
+{
+  "img_num": 147,          // 总帧数
+  "img_x_len": 10,         // 每行格子数
+  "img_y_len": 10,         // 每列格子数
+  "img_x_size": 240,       // 单帧宽（px）
+  "img_y_size": 136,       // 单帧高（px）
+  "interval": 1,           // 秒
+  "img_urls": ["...", "..."]  // 多张图！见下
+}
+```
+
+**关键：`img_urls` 可能是数组，不止一张图。**
+
+实测同一集：
+
+| 集 | `img_num` | 网格 | 每张容量 | `img_urls.length` | `ceil(img_num/容量)` |
+| --- | --- | --- | --- | --- | --- |
+| A | 97 | 10×10 | 100 | 1 | 1 ✅ |
+| B | 147 | 10×10 | 100 | 2 | 2 ✅ |
+| C | 355 | 10×10 | 100 | 4 | 4 ✅ |
+| D | 545 | 10×10 | 100 | 6 | 6 ✅ |
+
+所以规则是：**每张图 `gridX × gridY` 格，帧数超过就分多张。** 第 `n` 帧在图 `floor(n / (gridX*gridY))` 的第 `n % (gridX*gridY)` 格。
+
+**最后一张图也补满到完整网格。** 实测 545 帧的 6 张图，转 JPEG 后**全部**是 2400×1360（10×10），没有一张是半高的。所以不能靠图片高度推断有效帧数，必须用 `img_num` 判断。第 545 帧之后的格子是空白或重复内容。
+
+单张图转 JPEG 后是 2400×1360（10 列 × 10 行，每格 240×136）。
+
+服务端接口设计：
+
+```
+GET /api/sprite/:episodeId          → { sheets: [{ url, index }], grid, interval, frameCount }
+GET /api/sprite/:episodeId?sheet=0  → image/jpeg
+```
+
+前端定位第 `n` 帧：
+
+```ts
+const cellsPerSheet = gridX * gridY
+const sheet = Math.floor(n / cellsPerSheet)
+const cell = n % cellsPerSheet
+const col = cell % gridX
+const row = Math.floor(cell / gridX)
+// background-image: url(sheets[sheet].url)
+// background-position: -col*cellWidth  -row*cellHeight
+```
+
+两个坑：
+
+1. **不要用 `img_y_len` 推算有效帧数。** 每张图都补满完整网格，最后一张也是满的。
+2. **`img_num` 与 `duration / interval` 不一定相等。** 实测某集 `img_num=110`、`duration=110.334`、`interval=1`，向上取整是 111 帧，但只有 110 张。所以按时间取帧时要 `Math.min(Math.floor(t / interval), frameCount - 1)`，否则最后一秒会越界。
+
+### 5.4 数据层
+
+```ts
+// 服务端数据：TanStack Query
+useInfiniteQuery({
+  queryKey: ['feed'],
+  queryFn: ({ pageParam }) => api.feed({ cursor: pageParam }),
+  initialPageParam: undefined,
+  getNextPageParam: (last) => (last.hasMore ? last.cursor : undefined),
+})
+
+// 客户端状态：Zustand
+usePlayerStore   // 当前剧集、当前集、音量、倍速、静音
+useHistoryStore  // 播放进度（持久化到 localStorage）
+```
+
+localStorage 键沿用上游，便于迁移：
+
+```
+dsh-hongguo.watch-history.v1
+dsh-hongguo.watch-history.v1.volume
+dsh-hongguo
+```
+
+### 5.5 目录
+
+```
+apps/web/src/
+├── main.tsx
+├── app.tsx
+├── routes/
+│   ├── feed-route.tsx
+│   ├── search-route.tsx
+│   ├── series-route.tsx
+│   └── player-route.tsx
+├── features/
+│   ├── feed/
+│   ├── search/
+│   ├── series/
+│   ├── player/
+│   │   ├── player.tsx
+│   │   ├── player-controls.tsx
+│   │   ├── sprite-preview.tsx
+│   │   └── use-gestures.ts
+│   └── history/
+├── components/            通用组件
+├── lib/
+│   ├── api-client.ts
+│   ├── query-keys.ts
+│   └── format.ts
+└── styles/
+    └── index.css
+```
+
+---
+
+## 6. 工程配置
+
+### 6.1 monorepo
+
+```
+hongguo/
+├── AGENTS.md
+├── docs/
+├── upstream/              只读参考
+├── apps/
+│   ├── server/
+│   └── web/
+├── packages/
+│   └── shared/
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+├── eslint.config.js
+├── .prettierrc
+└── lefthook.yml
+```
+
+依赖方向（单向，不允许反向）：
+
+```
+apps/web  ──►  packages/shared  ◄──  apps/server
+```
+
+`apps/web` 不得 import `apps/server`，也不得直接 import `openhongguo`。
+
+### 6.2 tsconfig
+
+`tsconfig.base.json`（各包继承，**不得关闭任何一项**）：
+
+```jsonc
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+
+    // 严格性
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // 模块
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+`apps/server/tsconfig.json` 追加：
+
+```jsonc
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+```
+
+`noUncheckedIndexedAccess` 实测效果（已用 tsc 6.0.3 验证）：
+
+```ts
+const buf = new Uint8Array(10)
+const b = buf[3]
+const n: number = b          // ❌ TS2322: Type 'number | undefined' is not assignable to type 'number'
+
+const obj: { a?: string } = {}
+const s: string = obj.a      // ❌ TS2322: Type 'string | undefined' is not assignable
+```
+
+这对 MP4 解析是必需的：`stsz` 样本表、`stsc` run 表、`senc` IV 表全是下标访问，越界必须被编译器拦住。
+
+收敛方式（禁止 `!`）：
+
+```ts
+// apps/server/src/common/bytes.ts
+export function at(buf: Uint8Array, i: number): number {
+  const v = buf[i]
+  if (v === undefined) throw new RangeError(`byte ${i} out of range (len ${buf.length})`)
+  return v
+}
+export function readU32(buf: Uint8Array, offset: number): number {
+  return new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(offset)
+}
+```
+
+### 6.3 lint / format / hooks
+
+`eslint.config.js`（flat config）：
+
+```js
+import js from '@eslint/js'
+import tseslint from 'typescript-eslint'
+import prettier from 'eslint-config-prettier'
+
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.recommendedTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/no-misused-promises': 'error',
+      '@typescript-eslint/consistent-type-imports': 'error',
+      '@typescript-eslint/no-explicit-any': 'error',
+    },
+  },
+  prettier, // 必须最后
+)
+```
+
+`no-floating-promises` 实测有效：Nest 的 `bootstrap()` 不加 `void` 会报错。
+
+`.prettierrc`：
+
+```json
+{ "semi": false, "singleQuote": true, "printWidth": 120, "trailingComma": "all" }
+```
+
+`lefthook.yml`：
+
+```yaml
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: '*.{ts,tsx,css,md,json}'
+      run: pnpm prettier --write {staged_files}
+      stage_fixed: true
+    lint:
+      glob: '*.{ts,tsx}'
+      run: pnpm eslint --fix {staged_files}
+
+pre-push:
+  commands:
+    typecheck:
+      run: pnpm -r typecheck
+    test:
+      run: pnpm -r test
+```
+
+### 6.4 脚本
+
+根 `package.json`：
+
+```json
+{
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "format": "pnpm prettier --write .",
+    "test": "pnpm -r test",
+    "e2e": "playwright test"
+  }
+}
+```
+
+每个子包各自有 `typecheck: tsc --noEmit`、`lint: eslint .`、`test: vitest run`。
+
+---
+
+## 7. 实施顺序
+
+按这个顺序做，每步都能独立验证：
+
+1. **骨架**：monorepo + tsconfig.base + eslint + prettier + lefthook，跑通 `pnpm -r typecheck`。
+2. **shared**：Zod schema（上游响应 + 自有契约）+ `bytes.ts` + spade 还原 + MP4 box 解析，配单元测试。
+3. **server / hongguo**：SDK 封装 + 设备档案持久化，验证 `discover` 能出数据。
+4. **server / media**：`resolvePlayback` → spade → CENC 解密 → Range 流式，验证 Chrome 能播。
+5. **server / cover**：HEIC → JPEG + 缓存，验证封面正常显示。
+6. **server / sprite**：雪碧图转码 + 多图切片。
+7. **web**：feed → series → player，先功能后样式。
+8. **web 响应式**：移动端手势与布局。
+
+第 4 步是核心链路，验证通过即可确认整体方案成立。我已经单独验证过「解密后 MP4 → Nest Range → Chrome 播放 1080p」这条路可行。
+
+---
+
+## 8. 风险与缓解
+
+| 风险 | 说明 | 缓解 |
+| --- | --- | --- |
+| HEVC 兼容 | Firefox 多数平台不支持 HEVC | 检测 `MediaSource.isTypeSupported('video/mp4; codecs="hvc1..."')`，不支持时提示换浏览器 |
+| 接口变更 | 签名算法是黑盒逆向 | 用 WASM SDK 而非自写签名；升级 `openhongguo` 即可 |
+| 匿名配额 | 单设备 25 次连续播放正常，上限未测 | 设备池轮换；`ANONYMOUS_LIMITED` 时切换设备 |
+| 磁盘占用 | 解密视频与图片缓存 | 视频 LRU 40 个；图片按天清理；都放可配置目录 |
+| 转码 CPU | HEIC 转码是 CPU 密集 | 转一次即缓存；并发限制（同时最多 2 个） |
+| 密钥泄漏 | 内容密钥在服务端内存 | 不落日志、不落库、不进响应；密钥表仅内存 |
+| 滥用 | 服务对公网开放 | 域名白名单、限流、不暴露上游签名 URL |
+| 合规 | 第三方客户端，绕过 DRM | 仅个人研究，不公开部署，不分发解密内容 |
+
+---
+
+## 9. 待确认
+
+| 项 | 状态 |
+| --- | --- |
+| 雪碧图 | ✅ 确认要做 |
+| 设备档案存储 | ✅ SQLite |
+| 视频转码 | ✅ 不做 |
+| API 契约 | ✅ REST + 共享 Zod |
+| 播放器实现 | ✅ 原生 `<video>` + 自写控件 |
+| 文件命名 | ✅ 全部 kebab-case |
+| 是否加 `watchProgress` 表 | ⬜ 待定（也可只放前端 localStorage） |

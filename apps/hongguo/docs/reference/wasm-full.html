@@ -1,0 +1,47 @@
+<!doctype html><meta charset=utf-8><body><pre id=o></pre><script src="/wasm_exec.js"></script>
+<script>
+const log=(m)=>{document.getElementById('o').textContent+=m+'\n'}
+const t0=performance.now()
+;(async () => {
+  const go = new globalThis.Go()
+  const bytes = await (await fetch('/openhongguo.wasm')).arrayBuffer()
+  const { instance } = await WebAssembly.instantiate(bytes, go.importObject)
+  go.run(instance)
+  await new Promise(r=>setTimeout(r,200))
+  let calls = 0
+  const transport = async (req) => {
+    calls++
+    const r = await fetch('http://127.0.0.1:8902/proxy', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ url: req.url, method: req.method, headers: req.headers, body: req.body?.length ? [...req.body] : null }) })
+    const out = await r.json()
+    if (out.error) throw new Error(out.error)
+    return { status: out.status, headers: out.headers, cookies: out.cookies, body: new Uint8Array(out.body) }
+  }
+  // 用 localStorage 持久化 profile，模拟真实部署
+  const profile = {
+    load: async () => { const s = localStorage.getItem('ohg'); return s ? s : null },
+    save: async (p) => { localStorage.setItem('ohg', p) },
+    reset: async () => { localStorage.removeItem('ohg') },
+  }
+  const c = globalThis.__openhongguo.newClient({ transport, profile, options: JSON.stringify({ retryAttempts: 1 }) })
+  try {
+    const t1 = performance.now()
+    const page = JSON.parse(await c.call('discover', JSON.stringify([{}])))
+    log('discover: ' + page.items.length + ' items, ' + Math.round(performance.now()-t1) + 'ms, calls=' + calls)
+    const t2 = performance.now()
+    const eps = JSON.parse(await c.call('listEpisodes', JSON.stringify([page.items[0].id])))
+    log('listEpisodes: ' + eps.items.length + ' eps, ' + Math.round(performance.now()-t2) + 'ms, calls=' + calls)
+    const t3 = performance.now()
+    const play = JSON.parse(await c.call('resolvePlayback', JSON.stringify([eps.items[0].id])))
+    log('resolvePlayback: ' + Math.round(performance.now()-t3) + 'ms, calls=' + calls)
+    log('streams: ' + play.playback.streams.map(s=>s.definition).join(','))
+    log('contentKey: ' + play.contentKey.key + ' v' + play.contentKey.version)
+    log('profile persisted: ' + (localStorage.getItem('ohg') ? 'yes len=' + localStorage.getItem('ohg').length : 'NO'))
+    // 冷启动第二次
+    const t4 = performance.now()
+    const page2 = JSON.parse(await c.call('discover', JSON.stringify([{}])))
+    log('2nd discover (warm device): ' + Math.round(performance.now()-t4) + 'ms, calls=' + calls)
+  } catch (e) { log('FAILED: ' + (e?.code ?? '') + ' ' + String(e?.message ?? e).slice(0,200)) }
+  log('total ' + Math.round(performance.now()-t0) + 'ms')
+})()
+</script>

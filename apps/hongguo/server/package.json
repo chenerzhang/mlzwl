@@ -1,0 +1,40 @@
+{
+  "name": "@mlzwl/hongguo-server",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput & node --watch dist/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "format:check": "prettier --check .",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test"
+  },
+  "dependencies": {
+    "@fastify/static": "^10.1.10",
+    "@mlzwl/hongguo-shared": "workspace:*",
+    "@nestjs/common": "^12.4.1",
+    "@nestjs/core": "^12.4.1",
+    "@nestjs/platform-fastify": "^12.4.1",
+    "better-sqlite3": "^13.0.3",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.8",
+    "heic-convert": "^2.1.0",
+    "openhongguo": "^0.1.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "sharp": "^0.34.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/heic-convert": "^2.1.0",
+    "@types/node": "^22.20.0",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.23.15",
+    "typescript": "6.0.3",
+    "vitest": "^5.1.0"
+  }
+}
