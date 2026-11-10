@@ -10,3 +10,8 @@ apps/*/dist/
 apps/*/node_modules/
 apps/*/coverage/
 apps/*/.playwright-mcp/
+
+# 第三方 skill 资产：数据文件与 fixtures 保持上游原样，不套用本仓库格式规则。
+# 格式化它们会造成与上游 diff，下次同步 skill 时冲突。
+.agents/skills/ui-ux-pro-max/data/
+.agents/skills/ui-ux-pro-max/scripts/tests/fixtures/

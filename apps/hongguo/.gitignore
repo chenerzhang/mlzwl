@@ -1,0 +1,11 @@
+dist/
+node_modules/
+coverage/
+
+# 运行时数据：含已注册设备凭据（devices.profile）与上游媒体缓存。
+# 绝不提交。首次启动会自动建表并注册设备。
+server/data/
+
+# 截图与临时探针
+shots/
+.playwright-mcp/

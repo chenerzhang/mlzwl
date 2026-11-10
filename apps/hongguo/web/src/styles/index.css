@@ -1,0 +1,240 @@
+@import 'tailwindcss';
+
+/*
+ * ============================================================
+ * 主题 token
+ * ============================================================
+ *
+ * 两套主题共用一套语义变量。组件只写 `bg-surface` / `text-text-secondary`
+ * 这类语义类，不写 `bg-white` / `text-black`——否则浅色主题下会直接失效。
+ *
+ * 变量覆盖放在 `[data-theme='...']` 上，`<html>` 由 `theme-store` 写入。
+ * 不靠 `prefers-color-scheme` 媒体查询分支，避免「系统浅色 + 用户手动选深色」
+ * 时两套规则同时命中。
+ *
+ * 对比度全部用脚本核算过，数值见 `docs/ui-redesign-log.md`。
+ */
+@theme {
+  /* ---- 深色（默认）----
+   *
+   * 底色用 `#08080a` 而不是纯黑。纯黑在 OLED 上会把卡片和背景彻底融掉，
+   * 层级只能靠描边硬撑；留 3% 的亮度差，卡片才能"浮"起来而不用画线。
+   *
+   * 三级层级只差 4–5 个亮度单位：`#08080a → #101013 → #17171b`。
+   * 差值再大就会显得"色块拼接"，这是廉价感的主要来源。
+   */
+  --color-surface: #08080a;
+  --color-surface-raised: #101013;
+  --color-surface-overlay: #17171b;
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #9d9da6;
+  --color-text-tertiary: #7d7d86;
+  --color-accent: #e11d48;
+  --color-accent-soft: #fb7185;
+  --color-on-accent: #ffffff;
+  --color-border: #6e6e78;
+  /* 分隔线要极细极淡：它的作用是"暗示边界"，不是"画框"。 */
+  --color-border-subtle: #22222a;
+
+  /*
+   * 播放器专用色。**不随主题变化**：视频画面本身就是暗的，
+   * 浅色主题下把遮罩改成白色会让字幕和控件完全看不清。
+   */
+  --color-scrim: #000000;
+  --color-on-scrim: #ffffff;
+  --color-on-scrim-muted: #ffffffb3;
+}
+
+/*
+ * 浅色主题的层级方向与深色相反。
+ * 深色：越往上越亮（#0a0a0a → #16161a → #1f1f24），因为亮=远离背景=凸起。
+ * 浅色：越往上越白（#f4f4f6 页底 → #ffffff 卡片），因为白=凸起。
+ * 如果浅色也把页面底色设成 #ffffff，卡片就只能靠一条 #e2e2e8 描边
+ * 区分——实测对比度 1.14:1，屏幕上几乎看不见边界（截图已确认）。
+ */
+[data-theme='light'] {
+  /* 浅色是深色的镜像：深色靠"变亮"提升层级，浅色靠"变白"。
+   * 页面 `#f5f5f7`、卡片纯白，靠 4% 的亮度差区分，不依赖描边。 */
+  --color-surface: #f5f5f7;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #ebebef;
+  --color-text-primary: #101013;
+  --color-text-secondary: #57575f;
+  --color-text-tertiary: #63636b;
+  --color-accent: #d61f45;
+  --color-accent-soft: #be123c;
+  --color-on-accent: #ffffff;
+  /* 描边分两档：border 用于需要被看见的交互边界（≥3:1），
+     border-subtle 用于卡片分隔（只要看得出就行，不强制 3:1）。 */
+  --color-border: #78788a;
+  --color-border-subtle: #e3e3e9;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-surface);
+    color: var(--color-text-primary);
+    /* 移动端避免 100vh 被浏览器工具栏挡住。 */
+    min-height: 100dvh;
+    -webkit-font-smoothing: antialiased;
+    /* 禁用双击缩放，短剧需要双击点赞。 */
+    touch-action: manipulation;
+    /*
+     * 主题切换时让底色平滑过渡。只过渡颜色，不过渡布局属性。
+     * 260ms 属于「换肤」这种整屏变化的合理区间。
+     */
+    transition:
+      background-color 260ms ease,
+      color 260ms ease;
+  }
+
+  /*
+   * 顶栏是 sticky 定位，祖先链上任何 `overflow: hidden/auto/scroll` 都会让它
+   * 退化成普通定位。这里显式声明，避免以后有人给容器加 overflow 时顶栏
+   * 悄悄失效。
+   */
+  #root {
+    overflow: visible;
+  }
+
+  /*
+   * Tailwind 4 的 preflight **不再**给 `button` 设 `cursor: pointer`（v4 起
+   * 跟随浏览器默认值）。结果就是 PC 端每个按钮都是箭头光标，用户看不出
+   * 哪里可以点。这里在 base 层一次性补上，而不是给几百个按钮加类。
+   */
+  /*
+   * 每一条都必须排除自己的禁用形式。否则 `button:not(:disabled)`（特异性 0,1,1）
+   * 会压过下面的 `[aria-disabled='true']`（0,1,0），`aria-disabled` 的按钮
+   * 光标仍然是 `pointer`——实测已确认过这个错。
+   */
+  button:not(:disabled):not([aria-disabled='true']),
+  [role='button']:not([aria-disabled='true']),
+  [role='slider']:not([aria-disabled='true']),
+  [role='tab']:not([aria-disabled='true']),
+  summary,
+  label[for],
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /*
+   * 禁用态必须明确表达「点不了」，用 `not-allowed` 而不是 `pointer`。
+   * 同时降低不透明度——光靠光标用户要移上去才知道。
+   */
+  :disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
+
+  /* 文本输入用 I 形光标，不要被上面的规则带跑。 */
+  input:not([type='button']):not([type='submit']):not([type='checkbox']):not([type='radio']),
+  textarea {
+    cursor: text;
+  }
+
+  /*
+   * 键盘焦点必须可见。默认 outline 在暗色背景上偏淡，这里统一成品牌红。
+   * 只用 `:focus-visible`，鼠标点击不显示焦点环，避免视觉噪音。
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-soft);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /*
+   * 文本输入框例外：`:focus-visible` 对输入框总是命中，于是 `autoFocus` 的
+   * 搜索框一进页就带着一圈红环（用户明确反馈过这点）。输入框的焦点状态
+   * 改由边框和底色变化表达，见 `search-route.tsx`。
+   */
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
+
+  /* 尊重系统「减少动态效果」设置。 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* 安全区域，适配刘海屏与底部手势条。 */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .h-safe-screen {
+    height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  }
+
+  /*
+   * 播放器全屏。
+   *
+   * 全屏元素是播放器容器本身（不是 `<video>`），所以需要显式铺满并压黑：
+   * 全屏时浏览器只保证元素占满视口，不保证背景色。若容器背景是透明的，
+   * 会露出浏览器的默认白底，在暗场视频里非常刺眼。
+   *
+   * `overflow: hidden` 防止圆角或溢出内容在全屏下露出滚动条。
+   * 两条选择器分别覆盖标准和 webkit 前缀。
+   */
+  .player-shell:fullscreen,
+  .player-shell:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    background: var(--color-scrim);
+    overflow: hidden;
+  }
+
+  /*
+   * 音量滑块。原生 `input[type=range]` 的轨道在各浏览器默认样式差异很大，
+   * 而且默认是凸起的 3D 轨道，在视频上很突兀。这里只保留一条 4px 的细线，
+   * 滑块（thumb）做成 12px 的圆点，与进度条同一套视觉。
+   */
+  .volume-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 9999px;
+    background: var(--color-on-scrim);
+    cursor: pointer;
+    /* 让 thumb 垂直居中到 4px 轨道上 */
+    margin-top: 0;
+  }
+  .volume-range::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 9999px;
+    background: var(--color-on-scrim);
+    cursor: pointer;
+  }
+  .volume-range:focus-visible {
+    outline: 2px solid var(--color-accent-soft);
+    outline-offset: 3px;
+  }
+
+  /* 隐藏滚动条但保留滚动能力，播放页与横向 chips 需要。 */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

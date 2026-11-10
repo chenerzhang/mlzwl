@@ -13,3 +13,7 @@ coverage/
 **/*/dist/
 **/*/coverage/
 **/*/.playwright-mcp/
+
+# Python 缓存：skill 的脚本用 python3 运行，会在原地生成 __pycache__。
+__pycache__/
+*.pyc

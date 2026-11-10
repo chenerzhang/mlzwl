@@ -4,13 +4,13 @@
   "type": "module",
   "packageManager": "pnpm@11.24.0",
   "scripts": {
-    "build": "pnpm -r --filter './apps/*' build",
-    "typecheck": "pnpm -r --filter './apps/*' typecheck",
-    "lint": "eslint apps/x-adapter apps/lark-pi-bridge/src apps/lark-pi-bridge/tests apps/lark-pi-bridge/scripts apps/lark-pi-bridge/tsup.config.ts apps/lark-pi-bridge/vitest.config.ts apps/magpie-x-adapter/src scripts eslint.config.js",
+    "build": "pnpm -r --filter './apps/**' build",
+    "typecheck": "pnpm -r --filter './apps/**' typecheck",
+    "lint": "eslint apps/hongguo/shared/src apps/hongguo/server/src apps/hongguo/web/src apps/x-adapter apps/lark-pi-bridge/src apps/lark-pi-bridge/tests apps/lark-pi-bridge/scripts apps/lark-pi-bridge/tsup.config.ts apps/lark-pi-bridge/vitest.config.ts apps/magpie-x-adapter/src scripts eslint.config.js",
     "format": "prettier --write \"**/*.{js,cjs,mjs,ts,cts,mts,json,jsonc,yml,yaml}\"",
     "format:check": "prettier --check \"**/*.{js,cjs,mjs,ts,cts,mts,json,jsonc,yml,yaml}\"",
     "precommit": "node scripts/precommit-staged.mjs",
-    "test": "pnpm -r --filter './apps/*' test && node --test scripts/*.test.mjs",
+    "test": "pnpm -r --filter './apps/**' test && node --test scripts/*.test.mjs",
     "verify": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test",
     "x-adapter:build": "pnpm --filter @mlzwl/x-adapter build",
     "x-adapter:test": "pnpm --filter @mlzwl/x-adapter test",
@@ -25,7 +25,14 @@
     "lark-pi-bridge:smoke:local": "pnpm --filter @mlzwl/lark-pi-bridge smoke:local",
     "npm:auth-check": "node scripts/npm-publish-local.mjs auth-check",
     "npm:publish:preflight": "node scripts/npm-publish-local.mjs preflight",
-    "npm:publish:local": "node scripts/npm-publish-local.mjs publish"
+    "npm:publish:local": "node scripts/npm-publish-local.mjs publish",
+    "hongguo:dev": "pnpm -r --filter './apps/hongguo/*' --parallel dev",
+    "hongguo:build": "pnpm -r --filter './apps/hongguo/*' build",
+    "hongguo:typecheck": "pnpm -r --filter './apps/hongguo/*' typecheck",
+    "hongguo:lint": "pnpm -r --filter './apps/hongguo/*' lint",
+    "hongguo:test": "pnpm -r --filter './apps/hongguo/*' test",
+    "hongguo:verify": "pnpm -r --filter './apps/hongguo/*' verify",
+    "hongguo:start": "pnpm --filter @mlzwl/hongguo-server start"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
