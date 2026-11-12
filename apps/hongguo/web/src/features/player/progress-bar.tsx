@@ -1,12 +1,13 @@
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import type { TimeRange } from './buffered-ranges';
 
 export interface ProgressBarProps {
   /** 当前播放位置（秒）。 */
   current: number;
   /** 总时长（秒）。 */
   duration: number;
-  /** 已缓冲到（秒）。 */
-  buffered: number;
+  /** 已缓冲区间（已合并、升序）。空数组表示还没缓冲任何内容。 */
+  bufferedRanges: readonly TimeRange[];
   /** 开始拖动。调用方据此锁住控件、暂停自动隐藏。 */
   onScrubStart: () => void;
   /** 拖动中。调用方更新预览位置，但不要 seek。 */
@@ -36,7 +37,7 @@ function clamp(value: number, min: number, max: number): number {
 export function ProgressBar({
   current,
   duration,
-  buffered,
+  bufferedRanges,
   onScrubStart,
   onScrub,
   onScrubEnd,
@@ -57,7 +58,6 @@ export function ProgressBar({
 
   const value = drag ?? current;
   const ratio = duration > 0 ? clamp(value / duration, 0, 1) : 0;
-  const bufferedRatio = duration > 0 ? clamp(buffered / duration, 0, 1) : 0;
 
   /** 预览位置：拖动优先，其次悬停。 */
   const previewSeconds = drag ?? hover;
@@ -178,11 +178,27 @@ export function ProgressBar({
         }`}
       >
         <div className="relative h-1 w-full overflow-visible rounded-full bg-on-scrim/25 transition-all group-hover:h-1.5">
-          {/* 已缓冲 */}
-          <div
-            className="absolute inset-y-0 left-0 rounded-full bg-on-scrim/35"
-            style={{ width: `${bufferedRatio * 100}%` }}
-          />
+          {/*
+            已缓冲：**按区间分别画**。拖动到未缓冲处时会出现两段，只画到最后一个
+            `end` 会把中间那段未缓冲区域也涂成已缓冲，用户会以为拖过去就能立即播放。
+            每段一个绝对定位的 div，宽度按占比算；段数等于 `video.buffered` 的长度
+            （通常 1–2 段），比叠多层渐变好调。
+          */}
+          {duration > 0 &&
+            bufferedRanges.map((range) => {
+              const start = clamp(range.start / duration, 0, 1);
+              const end = clamp(range.end / duration, 0, 1);
+              if (end <= start) {
+                return null;
+              }
+              return (
+                <div
+                  key={`${range.start}-${range.end}`}
+                  className="absolute inset-y-0 rounded-full bg-on-scrim/35"
+                  style={{ left: `${start * 100}%`, width: `${(end - start) * 100}%` }}
+                />
+              );
+            })}
           {/* 已播放 */}
           <div className="absolute inset-y-0 left-0 rounded-full bg-accent" style={{ width: `${ratio * 100}%` }} />
           {/* 滑块 */}

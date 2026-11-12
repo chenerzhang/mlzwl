@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusTrap } from './use-focus-trap';
 
 export interface VolumeControlProps {
   /** 当前音量 0–1。 */
@@ -33,6 +34,9 @@ export interface VolumeControlProps {
  *
  * **为什么悬停展开也要支持点击**：纯 hover 在触控板、平板、键盘用户那里
  * 不可达。点击展开对所有人有效，hover 只是桌面的额外便利。
+ *
+ * **键盘**：滑块展开后 Esc 收起、Tab 不会跑到弹层外面，收起时焦点回到喇叭按钮。
+ * 这些行为由 `useFocusTrap` 统一提供，与选集抽屉、倍速菜单一致。
  */
 export function VolumeControl({
   value,
@@ -85,6 +89,9 @@ export function VolumeControl({
 
   const level = muted ? 0 : value;
   const label = muted || value === 0 ? '取消静音' : '静音';
+
+  // 滑块展开时才抢焦点：收起状态下容器里只剩一个喇叭按钮，拦 Tab 会打断页面导航。
+  useFocusTrap(containerRef, { onClose: () => setExpandedBoth(false), enabled: expanded && allowSlider });
 
   return (
     <div

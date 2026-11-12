@@ -1,6 +1,6 @@
 # @mlzwl/hongguo
 
-红果短剧的 Web 客户端。一个自托管的浏览器播放器，直接对接红果（`com.phoenix.read`）的公开接口，提供发现、搜索、选集、播放四条主链路。
+红果短剧的 Web 客户端。一个自托管的浏览器播放器，直接对接红果（`com.phoenix.read`）的公开接口，提供发现、搜索、选集、播放、追更五条主链路。
 
 本包由独立的 `hongguo` 仓库迁入，源码、文档与验证记录完整保留在 `docs/`。
 
@@ -11,7 +11,7 @@ apps/hongguo/
 ├── shared/     同构层：签名算法（spade）、CENC 解密规划、MP4 解析、Zod schema
 ├── server/     NestJS + Fastify：上游代理、设备注册、CENC 原地解密、封面/雪碧图缓存、
 │              生产期托管 web/dist（单端口部署）
-├── web/        Vite + React 19 + Tailwind 4：四条路由 + 播放器
+├── web/        Vite + React 19 + Tailwind 4：7 条路由（发现、搜索、详情、播放、历史、收藏、榜单）
 │              静态资源在 src/assets/，由 Vite 打 hash 进 dist/assets/
 ├── docs/       逆向记录、技术选型、逐轮 UI 改造日志
 ├── design-system/  设计 token 与页面规格
@@ -64,27 +64,73 @@ Vite 在 `:5173` 提供前端与热更新，把 `/api` 代理到后端 `:9133`�
 
 > 只想跑后端接口调试时，直接 `pnpm hongguo:start`，用 curl 打 `:9133/api/*`。
 
+## 追更
+
+剧集详情页有一个三态追更按钮：**想看 → 在看 → 看完 → 取消**，点一下切到下一态。
+追更记录只存在浏览器 `localStorage`（`dsh-hongguo.follow.v1`），不上传服务端。
+
+追更之后，首页与搜索页的卡片会在元信息行末尾显示「更新 N 集」角标。
+计数用**高水位**语义：`knownEpisodes`（上游报告过的最大集数）减去 `confirmedEpisodes`
+（你实际看到过的集数），下限 0。上游偶发返回更少的集数时角标不会变成负数或重复提示。
+
+看完一集会记进观看历史。回到详情页时，已看完的那集默认高亮**下一集**，
+「继续看」按钮也直接指向下一集；没看完则回到原来的位置。
+
+进度达到 95% 或触发 `ended` 就算看完。这条标记存在观看历史里（`completed`），
+刷新页面后仍然生效。
+
+## 离线目录
+
+首页第一页会自动存一份快照到 `localStorage`（`dsh-hongguo.catalog.v1`）。
+断网时刷新首页，仍能显示上次看到的剧集，顶部提示「当前显示的是离线缓存」。
+
+快照的限制：最多 30 条、序列化后不超过 200 KB、7 天后过期、`description`
+截断到 1500 字符。读取时逐字段校验，任何一条不合法就**整体丢弃**，不做部分信任。
+
+快照**不包含**播放地址与签名参数，只留 id、标题、封面代理地址、简介与集数。
+封面地址走服务端的 `/api/cover?u=` 白名单代理，不是上游 CDN 直链。
+
 ## 接口
 
 开发期经 Vite 代理（`:5173/api/*`），生产期由后端直接提供（`:9133/api/*`）。
 两者路径一致，前端代码用相对路径，不需要配置 base URL。
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/api/feed` | 发现页分页 |
-| GET | `/api/search?keyword=` | 搜索（上游 cursor 有问题，前端跨页去重） |
-| GET | `/api/series/:id` | 剧集详情 |
-| GET | `/api/series/:id/episodes` | 分集列表 |
-| GET | `/api/episodes/:id/playback` | 播放参数（含雪碧图元数据） |
-| GET | `/api/media/:episodeId` | 解密后的 MP4，支持 Range / HEAD |
-| GET | `/api/cover?url=` | 封面代理（HEIC → JPEG） |
-| GET | `/api/sprite/:episodeId/:sheet` | 雪碧图 |
+| 方法 | 路径                            | 说明                                                   |
+| ---- | ------------------------------- | ------------------------------------------------------ |
+| GET  | `/api/feed`                     | 发现页分页                                             |
+| GET  | `/api/search?keyword=`          | 搜索（上游 cursor 有问题，前端跨页去重）               |
+| GET  | `/api/suggest?prefix=`          | 搜索联想；上游失败降级为空列表                         |
+| GET  | `/api/random`                   | 随机一部剧；候选池缓存 60 秒，空池返回 404             |
+| GET  | `/api/series/:id`               | 剧集详情                                               |
+| GET  | `/api/series/:id/episodes`      | 分集列表                                               |
+| GET  | `/api/episodes/:id/playback`    | 播放参数与自有媒体地址（不含上游签名 URL 或内容密钥）  |
+| GET  | `/api/media/:episodeId`         | 解密后的 MP4，支持 Range / HEAD                        |
+| GET  | `/api/cover?u=`                 | 封面代理（HEIC → JPEG）                                |
+| GET  | `/api/sprite/:episodeId`        | 雪碧图网格元数据与切片地址                             |
+| GET  | `/api/sprite/:episodeId/:sheet` | 指定雪碧图切片                                         |
+| GET  | `/api/health`                   | 健康检查（上游三态、版本、运行时长）                   |
+| GET  | `/api/diagnostics`              | 诊断：服务端日志最后 200 行（已脱敏）+ 版本 + 运行时长 |
+
+### 诊断日志
+
+服务端默认只写 stdout。需要排障时把 `LOG_TO_FILE` 设成非空值再重启，日志会额外落到
+`server/data/logs/app.jsonl`（每行一条 JSON，写入前过 `redact()`，单文件 5 MB 轮转，
+只保留 `app.jsonl` 与 `app.1.jsonl`）。`GET /api/diagnostics` 返回的就是这个文件的尾部。
+
+也可以不碰命令行：打开「观看历史」页，点顶栏的**导出诊断**。它把前端事件环形缓冲
+（最近 200 条）、浏览器环境信息、`/api/health` 与 `/api/diagnostics` 的返回一起打包成
+JSON 写进剪贴板。服务端接口取不到时仍会导出其余部分，并把失败原因记在 `failure` 字段。
+
+注意 `LOG_TO_FILE` 走的是 zod 的 `z.coerce.boolean()`，**任何非空字符串都算开启**，
+包括 `LOG_TO_FILE=false`。要关闭就别设它（或设为空值）。
 
 ## 安全提示
 
-- `server/data/` 含已注册设备的指纹（`devices.profile`），已被 `.gitignore` 排除。不要提交、不要外传。
+- 服务默认监听 `0.0.0.0`（所有 IPv4 网卡），方便同一局域网的手机访问；启动日志会打印可用的局域网地址与风险提示。
+- `0.0.0.0` **不代表**访问范围被限制在局域网。主机若有公网地址、VPN、容器网桥或端口转发，服务同样可被那些网络访问。实际隔离依赖主机防火墙与路由器。
+- `/api/*` 没有鉴权，`server/data/` 又含已注册设备的指纹（`devices.profile`）。只应在可信网络使用，严禁暴露到公网；需要仅限本机时设置 `HOST=127.0.0.1`。
+- `server/data/` 已被 `.gitignore` 排除，不要提交、不要外传。
 - 本包使用红果的未公开接口，可能受服务条款、风控、额度或接口变更影响。仅使用你有权访问的内容。
-- 仅监听 `127.0.0.1`，不要暴露到公网。
 
 ## 文档
 

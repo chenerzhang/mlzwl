@@ -302,14 +302,114 @@ const ENCRYPTED_ENTRY_CLEAR_TYPE: Record<string, string> = {
 };
 
 /**
+ * `moov` 允许的最大字节数。
+ *
+ * 为什么要有上限：解密后 `moov` 的偏移表要继续有效，所以我们必须把整个 `moov`
+ * 读进内存。上游正常文件的 `moov` 是 194 KB 量级（实测 360p 194210、1080p 194198），
+ * 8 MB 留了 40 倍余量。超过这个量级说明不是我们认识的容器，应当 fail closed。
+ */
+export const MAX_MOOV_BYTES = 8 * 1024 * 1024;
+
+/**
+ * `moov` 之前允许出现的 box。
+ *
+ * 判据是「**不是样本数据容器**」，不是「我们实测见过哪些」。真正的约束是
+ * **`mdat`/`moof` 这类携带样本数据的 box 不得排在 `moov` 之前**：那样浏览器必须
+ * 先拿到文件尾部才能起播，而本项目的解密与 Range 都依赖 `moov` 在文件开头。
+ *
+ * - `pdin`：progressive download info，faststart 文件常把它紧跟在 `ftyp` 后面。
+ * - `uuid`：通用扩展 box，内容由具体实现定义。它与已有的 `free`/`skip` 属同一风险类别：
+ *   都是「`moov` 前的任意长度盒子」，放行不引入新的风险类别。不要据此推断它
+ *   「不携带媒体负载」——ISO BMFF 允许它包任意数据。
+ */
+const MOOV_LEADING_ALLOWED = new Set(['ftyp', 'free', 'wide', 'skip', 'pdin', 'uuid']);
+
+/**
+ * 校验「索引前置」布局，返回 `moov`。
+ *
+ * 三项检查，任何一项失败都抛 `Mp4ParseError`：
+ * 1. `ftyp` 必须是文件第一个 box，且在偏移 0。
+ * 2. `moov` 之前不得出现 `mdat` 等数据 box（只允许 {@link MOOV_LEADING_ALLOWED} 里的类型）。
+ * 3. `moov` 不得超过 {@link MAX_MOOV_BYTES}。
+ */
+function requireFrontLoadedMoov(buf: Uint8Array, top: readonly Box[]): Box {
+  const first = top[0];
+  if (first === undefined || first.type !== 'ftyp' || first.offset !== 0) {
+    throw new Mp4ParseError(`ftyp must be the first box at offset 0 (found ${first?.type ?? 'nothing'})`);
+  }
+  const moov = findBox(top, 'moov');
+  if (moov === undefined) {
+    throw new Mp4ParseError('missing moov inside file');
+  }
+  if (moov.size > MAX_MOOV_BYTES) {
+    throw new Mp4ParseError(`moov is too large (${moov.size} > ${MAX_MOOV_BYTES} bytes)`);
+  }
+  const index = top.indexOf(moov);
+  for (let i = 1; i < index; i += 1) {
+    const box = top[i];
+    if (box !== undefined && !MOOV_LEADING_ALLOWED.has(box.type)) {
+      throw new Mp4ParseError(`moov is not front-loaded (${box.type} at ${box.offset} precedes it)`);
+    }
+  }
+  // 读一次以确认 body 落在文件内：`readBoxes` 只校验了父区间。
+  if (moov.end > buf.length) {
+    throw new Mp4ParseError(`moov overruns file (${moov.end} > ${buf.length})`);
+  }
+  return moov;
+}
+
+/**
+ * 从 `sinf/frma` 读出原始编码，读不到时回退固定映射。
+ *
+ * 为什么要读 `frma`：加密后 sample entry 的类型被改成 `encv`/`enca`，原始编码只
+ * 保留在 `frma` 里。上游当前实测是 HEVC（`hvc1`）与 AAC（`mp4a`），但硬编码意味着
+ * 上游一旦改用 AVC（`avc1`）或 `ac-3`，我们就会把 codec tag 写错——浏览器据此选
+ * 解码器，写错的表现是「能下载但播不了」。
+ */
+function resolveClearType(
+  buf: Uint8Array,
+  entry: Box,
+  sinf: Box,
+  onWarn: ((message: string) => void) | undefined,
+): string {
+  const fallback = ENCRYPTED_ENTRY_CLEAR_TYPE[entry.type] ?? entry.type;
+  const frma = findBox(readBoxes(buf, sinf.body, sinf.end), 'frma');
+  let reason = 'no usable sinf/frma';
+  if (frma !== undefined && frma.size - frma.headerSize >= 4) {
+    const original = ascii(buf, frma.body, 4);
+    // 只接受 4 个可打印 ASCII 字符，避免把垃圾字节写进 sample entry。
+    if (/^[\x20-\x7e]{4}$/.test(original)) {
+      // `frma` 等于 `encv`/`enca` 时写回去等于没解密，而 `tenc` 的保护位已经被清零，
+      // 文件会自相矛盾（声明明文却仍是加密 entry）。这种情况按不可用处理，走回退。
+      if (original !== entry.type) {
+        return original;
+      }
+      reason = `sinf/frma === ${original}`;
+    }
+  }
+  onWarn?.(`${entry.type} at ${entry.offset} has ${reason}; falling back to ${fallback}`);
+  return fallback;
+}
+
+export interface PlanTracksOptions {
+  /**
+   * 回退路径的告警出口。
+   *
+   * 本包同时被浏览器与服务端引用，不能直接依赖 `console` 或 Nest 的 `Logger`，
+   * 所以用回调注入。不传时静默回退，行为与旧版本一致。
+   */
+  onWarn?: (message: string) => void;
+}
+
+/**
  * 遍历 `moov/trak`，为每条受保护的轨道生成解密计划。
  *
  * sample entry 的 header 长度取决于它是视频（`encv`，VisualSampleEntry，8+70 字节）
  * 还是音频（`enca`，AudioSampleEntry，8+20 字节）。这个偏移必须对，否则找不到 `sinf`。
  */
-export function planTracks(buf: Uint8Array): TrackPlan[] {
+export function planTracks(buf: Uint8Array, options: PlanTracksOptions = {}): TrackPlan[] {
   const top = readBoxes(buf, 0, buf.length);
-  const moov = requireBox(top, 'moov', 'file');
+  const moov = requireFrontLoadedMoov(buf, top);
   const moovChildren = readBoxes(buf, moov.body, moov.end);
   const plans: TrackPlan[] = [];
 
@@ -354,6 +454,7 @@ export function planTracks(buf: Uint8Array): TrackPlan[] {
     if (sinf === undefined) {
       throw new Mp4ParseError(`encrypted entry ${entry.type} has no sinf`);
     }
+    const resolvedClearType = resolveClearType(buf, entry, sinf, options.onWarn);
     const schi = requireBox(readBoxes(buf, sinf.body, sinf.end), 'schi', 'sinf');
     const tenc = readTenc(buf, requireBox(readBoxes(buf, schi.body, schi.end), 'tenc', 'schi'));
 
@@ -371,7 +472,7 @@ export function planTracks(buf: Uint8Array): TrackPlan[] {
 
     plans.push({
       entryType: entry.type,
-      clearType,
+      clearType: resolvedClearType,
       sampleEntryOffset: entry.offset,
       tenc,
       offsets,
