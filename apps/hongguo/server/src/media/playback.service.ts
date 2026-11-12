@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { ContentKey } from '@mlzwl/hongguo-shared';
 import type { Client, PlaybackResult, Stream } from 'openhongguo';
+import { redact } from '../common/redact.js';
 import { HongguoService } from '../hongguo/hongguo.service.js';
 import { VideoModelCapture } from './video-model-capture.service.js';
 
@@ -10,6 +11,13 @@ export interface ResolvedPlayback {
   key: ContentKey;
   /** 选定的流。 */
   stream: Stream;
+  /**
+   * 可下载的地址，主地址在前、`backup_url` 在后，已去重。
+   *
+   * 单独给一份数组而不是让下载层自己拼：去重规则只写一次，下载层不必知道
+   * `backup_url` 这个字段名。`stream.url` 保持原样，其它地方可能在用。
+   */
+  urls: string[];
   /** 该集所有可用清晰度，从低到高。 */
   availableDefinitions: string[];
 }
@@ -19,15 +27,50 @@ export class PlaybackUnavailableError extends Error {
     message: string,
     readonly reason: 'no_stream' | 'not_encrypted' | 'key_unavailable',
   ) {
-    super(message);
+    // 这条 message 经 `MediaController` 变成响应体回到浏览器。构造点分散，
+    // 统一在这里过一道 `redact`，避免以后有人顺手把上游字符串拼进来。
+    super(redact(message));
     this.name = 'PlaybackUnavailableError';
   }
 }
 
-/** 清晰度排序：把 "1080p" 这类标签转成数字。 */
-function resolutionOf(stream: Stream): number {
-  if (stream.height !== undefined && stream.height > 0) {
-    return stream.height;
+/**
+ * 同一文件的候选地址：主地址在前，`backup_url` 在后，去空去重。
+ *
+ * 上游把备用地址注释为「同一文件的第二个 CDN 地址」，所以两个地址的字节应当
+ * 完全一致。这也是「写响应头之前完成下载」这条约束的前提（见 `MediaCacheService`）。
+ */
+export function streamUrls(stream: Stream): string[] {
+  const candidates = [stream.url, stream.backup_url];
+  const urls: string[] = [];
+  for (const candidate of candidates) {
+    if (candidate !== undefined && candidate !== '' && !urls.includes(candidate)) {
+      urls.push(candidate);
+    }
+  }
+  return urls;
+}
+
+/**
+ * 清晰度排序键：取**短边**像素数。
+ *
+ * 为什么不能用 `height`：竖屏短剧是 540×960。按 `height` 排序会把 540p 当成 960，
+ * 判定为高于 720p，于是默认选档与"可用清晰度从低到高"的排序同时出错。
+ * 取 `min(width, height)` 后，横屏 1280×720 与竖屏 540×960 都归到 720 与 540。
+ *
+ * 只有一个维度时用它，但这种情况说明上游字段不全，`pickStream` 会记一条 warn。
+ */
+export function resolutionOf(stream: Stream): number {
+  const width = stream.width !== undefined && stream.width > 0 ? stream.width : undefined;
+  const height = stream.height !== undefined && stream.height > 0 ? stream.height : undefined;
+  if (width !== undefined && height !== undefined) {
+    return Math.min(width, height);
+  }
+  if (width !== undefined) {
+    return width;
+  }
+  if (height !== undefined) {
+    return height;
   }
   const match = /^(\d{3,4})p$/.exec(stream.definition ?? '');
   return match?.[1] === undefined ? 0 : Number.parseInt(match[1], 10);
@@ -35,6 +78,8 @@ function resolutionOf(stream: Stream): number {
 
 @Injectable()
 export class PlaybackService {
+  private readonly logger = new Logger(PlaybackService.name);
+
   constructor(
     private readonly hongguo: HongguoService,
     private readonly capture: VideoModelCapture,
@@ -59,19 +104,43 @@ export class PlaybackService {
     if (stream === undefined) {
       throw new PlaybackUnavailableError('no matching stream', 'no_stream');
     }
+    this.warnOnIncompleteDimensions(playable);
 
     const key = this.resolveKey(result, stream);
     return {
       playback: result.playback,
       key,
       stream,
-      availableDefinitions: [...new Set(playable.map((item) => item.definition ?? 'unknown'))],
+      urls: streamUrls(stream),
+      // 按短边从低到高排序，与 `pickStream` 的判定口径一致。
+      availableDefinitions: [...playable]
+        .sort((a, b) => resolutionOf(a) - resolutionOf(b))
+        .map((item) => item.definition ?? 'unknown')
+        .filter((definition, index, all) => all.indexOf(definition) === index),
     };
+  }
+
+  /**
+   * 缺 `width` 或 `height` 时记一条 warn。
+   *
+   * 这不影响选档（会退回按单一维度或 `definition` 数字判断），但说明上游字段
+   * 变了。留一条日志，比等用户报"清晰度不对"再回头查要省事。
+   */
+  private warnOnIncompleteDimensions(streams: readonly Stream[]): void {
+    const incomplete = streams.filter((stream) => stream.width === undefined || stream.height === undefined);
+    if (incomplete.length === 0) {
+      return;
+    }
+    this.logger.warn(
+      `stream dimensions incomplete for ${incomplete.length}/${streams.length} streams ` +
+        `(${incomplete.map((stream) => stream.definition ?? '?').join(',')}); resolution falls back to one axis or label`,
+    );
   }
 
   private resolveKey(result: PlaybackResult, stream: Stream): ContentKey {
     const fromSdk = result.contentKey;
     if (fromSdk !== undefined && /^[0-9a-f]{32}$/i.test(fromSdk.key)) {
+      this.capture.clearKey(result.playback.episode_id);
       return { key: fromSdk.key.toLowerCase(), version: fromSdk.version ?? '1' };
     }
 
@@ -83,14 +152,22 @@ export class PlaybackService {
     }
 
     const failure = result.contentKeyError;
+    // 只透传 SDK 的错误码，不透传 `failure.message`：那个字符串来自上游响应，
+    // 可能带地址或其它凭证，而这条 message 会经 `MediaError` 回到浏览器。
     throw new PlaybackUnavailableError(
-      `content key unavailable (${failure?.code ?? 'unknown'}: ${failure?.message ?? 'no key'}, protected=${String(stream.protected)})`,
+      `content key unavailable (${failure?.code ?? 'unknown'}, protected=${String(stream.protected)})`,
       'key_unavailable',
     );
   }
 }
 
-/** 按偏好挑一档；没有偏好时挑 720p，没有 720p 就挑中间那档。 */
+/**
+ * 按偏好挑一档。
+ *
+ * 优先级：`preferredDefinition` 精确匹配 → 短边为 720 的档 → 中间那档。
+ * "中间"用 `Math.floor((len - 1) / 2)` 而不是 `len / 2`：两档时取较低档，
+ * 避免在弱网下默认选高的那一档。
+ */
 export function pickStream(streams: readonly Stream[], preferredDefinition?: string): Stream | undefined {
   if (streams.length === 0) {
     return undefined;

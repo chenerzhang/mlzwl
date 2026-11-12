@@ -72,17 +72,36 @@ function decryptTrack(buf: Uint8Array, plan: TrackPlan, key: Uint8Array): void {
       continue;
     }
 
+    /*
+     * subsample 必须在**本 sample 的边界内**闭合。
+     *
+     * 只检查 `buf.length` 不够：畸形文件可以让 subsample 声明越过当前 sample
+     * 但仍落在整个文件内，那样会静默解密下一个 sample 的字节，破坏偏移表。
+     * 这里改为 fail-closed：越界即抛错，绝不跨界写入。
+     */
+    const sampleEnd = offset + size;
+    if (sampleEnd > buf.length) {
+      throw new CencError(`sample ${i} overruns file (${sampleEnd} > ${buf.length})`);
+    }
+
     let cursor = offset;
     for (const sub of sample.subsamples) {
       cursor += sub.clearBytes;
       if (sub.encryptedBytes > 0) {
         const end = cursor + sub.encryptedBytes;
-        if (end > buf.length) {
-          throw new CencError(`subsample overruns file at sample ${i}`);
+        if (end > sampleEnd) {
+          throw new CencError(
+            `subsample overruns sample ${i} (${end} > ${sampleEnd}); subsample table is inconsistent`,
+          );
         }
         decryptSample(decipher, buf.subarray(cursor, end), buf, cursor);
         cursor = end;
       }
+    }
+
+    // clear 段累计也可能越过 sample 末尾（没有 encrypted 段可触发上面的检查）。
+    if (cursor > sampleEnd) {
+      throw new CencError(`subsamples overrun sample ${i} (${cursor} > ${sampleEnd})`);
     }
   }
 
@@ -95,6 +114,16 @@ function decryptTrack(buf: Uint8Array, plan: TrackPlan, key: Uint8Array): void {
   buf[tenc.protectedFlagOffset] = 0;
 }
 
+export interface DecryptOptions {
+  /**
+   * 回退路径的告警出口。
+   *
+   * `planTracks` 在读不到 `sinf/frma` 时会回退到固定映射（`encv → hvc1`）。
+   * 回退能用，但意味着上游容器变了，值得记一条。不传时静默。
+   */
+  onWarn?: (message: string) => void;
+}
+
 /**
  * 原地解密一个 CENC 加密的 MP4。
  *
@@ -102,9 +131,9 @@ function decryptTrack(buf: Uint8Array, plan: TrackPlan, key: Uint8Array): void {
  * @param keyHex 16 字节 AES 密钥的小写 hex。
  * @throws {CencError} 结构不支持或样本表不一致。
  */
-export function decryptCenc(input: Uint8Array, keyHex: string): DecryptResult {
+export function decryptCenc(input: Uint8Array, keyHex: string, options: DecryptOptions = {}): DecryptResult {
   const key = hexKey(keyHex);
-  const plans = planTracks(input);
+  const plans = planTracks(input, options.onWarn === undefined ? {} : { onWarn: options.onWarn });
   if (plans.length === 0) {
     throw new CencError('no encrypted tracks found (file may already be clear)');
   }

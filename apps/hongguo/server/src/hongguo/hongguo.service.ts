@@ -8,6 +8,7 @@ import {
   type ProfileStore,
   type Transport,
 } from 'openhongguo';
+import { redact as redactCommon } from '../common/redact.js';
 import { CONFIG, type Config } from '../config/config.js';
 import { DB } from '../db/db.module.js';
 import { devices } from '../db/schema.js';
@@ -15,6 +16,14 @@ import type { DatabaseHandle } from '../db/database.js';
 import { eq } from 'drizzle-orm';
 
 export const HONGUO_CLIENT = Symbol('HONGUO_CLIENT');
+
+/**
+ * 上游可用性的三态。
+ *
+ * `catalog_only` 是初始值：还没发起过任何上游调用，所以既不能声称可用，也不该
+ * 直接报失败。健康检查据此区分「目录能读但播放不行」与「上游完全不可达」。
+ */
+export type UpstreamStatus = 'ok' | 'catalog_only' | 'failed';
 
 /**
  * 设备档案的 SQLite 适配器。
@@ -93,6 +102,8 @@ function readDeviceId(json: string): string | null {
 export class HongguoService implements OnApplicationBootstrap {
   private readonly logger = new Logger(HongguoService.name);
   private client: Client | null = null;
+  /** 最近一次上游调用的结果。只由 `observe` 与 `recordUpstreamCall` 改写。 */
+  private upstreamStatus: UpstreamStatus = 'catalog_only';
   /** 串行化首次注册，避免并发请求各注册一台设备。 */
   private initPromise: Promise<Client> | null = null;
 
@@ -144,6 +155,7 @@ export class HongguoService implements OnApplicationBootstrap {
     for (const decorate of this.transportDecorators) {
       transport = decorate(transport);
     }
+    transport = this.observe(transport);
     const client = await createClient({
       profile: store,
       transport,
@@ -151,6 +163,25 @@ export class HongguoService implements OnApplicationBootstrap {
     });
     this.logger.log('upstream client ready');
     return client;
+  }
+
+  /**
+   * 在 transport 外面包一层，记录每次上游调用的成败。
+   *
+   * 包在**最外层**（装饰器之后）：`x-argus` 签名失败之类的问题发生在内层，也算
+   * 一次失败。3xx/4xx 同样记为失败——对使用者来说拿不到数据就是不可用。
+   */
+  private observe(inner: Transport): Transport {
+    return async (request) => {
+      try {
+        const response = await inner(request);
+        this.recordUpstreamCall(response.status < 400);
+        return response;
+      } catch (error) {
+        this.recordUpstreamCall(false);
+        throw error;
+      }
+    };
   }
 
   /**
@@ -164,6 +195,32 @@ export class HongguoService implements OnApplicationBootstrap {
     this.logger.log('device reset');
   }
 
+  /**
+   * 记录一次上游调用的结果。
+   *
+   * 公开是为了让将来的调用方（例如直连 CDN 的下载层）也能报告状态；SDK 请求由
+   * `observe` 自动记录，不依赖调用方自觉。
+   */
+  recordUpstreamCall(ok: boolean): void {
+    this.upstreamStatus = ok ? 'ok' : 'failed';
+  }
+
+  /** 最近一次上游调用的状态；还没调用过时是 `catalog_only`。 */
+  lastUpstreamStatus(): UpstreamStatus {
+    return this.upstreamStatus;
+  }
+
+  /**
+   * 设备档案是否已存在且非空。
+   *
+   * 直接读 SQLite 而不是走 `SqliteProfileStore`：那个类的 `load` 会缓存到内存，
+   * 健康检查不该影响客户端的缓存状态。**只读，不触发注册**。
+   */
+  isDeviceRegistered(): boolean {
+    const row = this.handle.db.select().from(devices).orderBy(devices.id).limit(1).get();
+    return row !== undefined && row.profile.trim() !== '';
+  }
+
   /** 是否属于「换设备可能有效」的错误。 */
   static isDeviceLimited(error: unknown): boolean {
     return (
@@ -173,27 +230,28 @@ export class HongguoService implements OnApplicationBootstrap {
 }
 
 /**
- * 脱敏日志。
+ * SDK 日志脱敏。
  *
- * SDK 说它已对 URL 脱敏，但这里再挡一层：device_id、iid、签名参数一旦进日志
- * 就等于泄漏身份，排障时不需要完整值。
+ * 在通用 `redact`（URL 去 query、抹签名参数）之上再挡一层 SDK 特有的字段：
+ * device_id、iid 与 `x-argus` 系列的签名头。这些值一旦进日志就等于泄漏身份，
+ * 排障时不需要完整值。
  */
 export function redact(line: string): string {
-  return line
+  return redactCommon(line)
     .replace(/(device_id=)[^&\s]+/g, '$1***')
     .replace(/(iid=)[^&\s]+/g, '$1***')
-    .replace(/(x-argus|x-gorgon|x-ladon|x-helios|x-medusa|x-khronos|x-ss-stub)[=:]\s*\S+/gi, '$1=***')
-    .replace(/(spade_a=)[^&\s]+/g, '$1***');
+    .replace(/(x-argus|x-gorgon|x-ladon|x-helios|x-medusa|x-khronos|x-ss-stub)[=:]\s*\S+/gi, '$1=***');
 }
 
+/** 把错误压成一行日志。message 可能带上游地址，所以出口统一过 `redact`。 */
 export function describeError(error: unknown): string {
   if (error instanceof OpenhongguoError) {
-    return `${error.code}: ${error.message}`;
+    return redactCommon(`${error.code}: ${error.message}`);
   }
   if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
+    return redactCommon(`${error.name}: ${error.message}`);
   }
-  return String(error);
+  return redactCommon(String(error));
 }
 
 export { memoryProfileStore };

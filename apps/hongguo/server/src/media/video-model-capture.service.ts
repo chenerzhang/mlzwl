@@ -27,10 +27,18 @@ export interface VideoModelData {
  *
  * 捕获是**短期**的：取走即删，避免内存里长期堆着密钥材料。
  */
+interface CapturedEntry {
+  data: VideoModelData;
+  capturedAt: number;
+}
+
+export const VIDEO_MODEL_CAPTURE_TTL_MS = 5 * 60 * 1000;
+export const VIDEO_MODEL_CAPTURE_MAX_ENTRIES = 100;
+
 @Injectable()
 export class VideoModelCapture {
   private readonly logger = new Logger(VideoModelCapture.name);
-  private readonly captured = new Map<string, VideoModelData>();
+  private readonly captured = new Map<string, CapturedEntry>();
 
   /** 包一层 transport，顺手记录原始材料。 */
   wrap(inner: Transport): Transport {
@@ -46,23 +54,39 @@ export class VideoModelCapture {
     };
   }
 
-  /** 取走某个 id 的捕获（取走即删）。 */
+  /** 取走某个 id 的捕获，并按对象身份清掉全部别名。 */
   take(id: string): VideoModelData | undefined {
-    const value = this.captured.get(id);
-    if (value !== undefined) {
-      this.captured.delete(id);
+    this.evictExpired();
+    const entry = this.captured.get(id);
+    if (entry !== undefined) {
+      this.deleteAliases(entry);
     }
-    return value;
+    return entry?.data;
   }
 
-  /** 用捕获到的材料推导内容密钥。 */
+  /** SDK 已给出有效密钥时，只清除密钥材料，保留雪碧图元数据。 */
+  clearKey(id: string): void {
+    this.evictExpired();
+    const entry = this.captured.get(id);
+    if (entry !== undefined) {
+      delete entry.data.spadeA;
+    }
+  }
+
+  /** 用捕获到的材料推导内容密钥；成功与失败都不再保留 spadeA。 */
   takeKey(id: string): ContentKey | undefined {
-    const capture = this.take(id);
-    if (capture?.spadeA === undefined) {
+    this.evictExpired();
+    const capture = this.captured.get(id)?.data;
+    if (capture === undefined) {
       return undefined;
     }
+    const spadeA = capture.spadeA;
+    if (spadeA === undefined) {
+      return undefined;
+    }
+    delete capture.spadeA;
     try {
-      return deriveContentKey(capture.spadeA);
+      return deriveContentKey(spadeA);
     } catch (error) {
       this.logger.warn(`spade fallback failed for ${id}: ${error instanceof Error ? error.message : String(error)}`);
       return undefined;
@@ -115,8 +139,42 @@ export class VideoModelCapture {
     if (fromResponse !== undefined) {
       keys.add(fromResponse);
     }
+    const entry: CapturedEntry = { data: capture, capturedAt: Date.now() };
+    this.evictExpired();
     for (const key of keys) {
-      this.captured.set(key, capture);
+      this.captured.set(key, entry);
+    }
+    this.evictOverflow();
+  }
+
+  private evictExpired(): void {
+    const cutoff = Date.now() - VIDEO_MODEL_CAPTURE_TTL_MS;
+    const expired = new Set<CapturedEntry>();
+    for (const entry of this.captured.values()) {
+      if (entry.capturedAt <= cutoff) {
+        expired.add(entry);
+      }
+    }
+    for (const entry of expired) {
+      this.deleteAliases(entry);
+    }
+  }
+
+  private evictOverflow(): void {
+    const entries = [...new Set(this.captured.values())].sort((a, b) => a.capturedAt - b.capturedAt);
+    while (entries.length > VIDEO_MODEL_CAPTURE_MAX_ENTRIES) {
+      const oldest = entries.shift();
+      if (oldest !== undefined) {
+        this.deleteAliases(oldest);
+      }
+    }
+  }
+
+  private deleteAliases(target: CapturedEntry): void {
+    for (const [key, entry] of this.captured) {
+      if (entry === target) {
+        this.captured.delete(key);
+      }
     }
   }
 }

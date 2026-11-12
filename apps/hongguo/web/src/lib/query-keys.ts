@@ -2,6 +2,8 @@
 export const queryKeys = {
   feed: () => ['feed'] as const,
   search: (keyword: string) => ['search', keyword] as const,
+  rankingCatalog: () => ['ranking', 'catalog'] as const,
+  ranking: (content: string | undefined, board: string | undefined) => ['ranking', content ?? '', board ?? ''] as const,
   series: (id: string) => ['series', id] as const,
   playback: (episodeId: string, definition?: string) =>
     definition === undefined ? (['playback', episodeId] as const) : (['playback', episodeId, definition] as const),

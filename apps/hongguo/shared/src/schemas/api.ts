@@ -92,15 +92,77 @@ export const PlaybackSchema = z.object({
 });
 export type Playback = z.output<typeof PlaybackSchema>;
 
+/**
+ * 媒体错误的稳定错误码。
+ *
+ * 前端不能靠 HTTP 状态码区分原因：`502` 既可能是上游 5xx，也可能是上游返回了
+ * HTML 错误页。这里给出稳定的 code，让前端能选对文案与动作（重试 / 换清晰度 / 换浏览器）。
+ * 新增 code 必须同步 `web/src/features/player/playback-error.ts` 的文案表。
+ */
+export const MEDIA_ERROR_CODES = [
+  'media_timeout',
+  'media_not_video',
+  'media_too_large',
+  'media_upstream_4xx',
+  'media_upstream_5xx',
+  'decrypt_failed',
+  'no_stream',
+  'key_unavailable',
+  'not_encrypted',
+] as const;
+export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
+
+/**
+ * 服务端错误响应体。与 `MediaError` 抛出的形状一致。
+ *
+ * **仅作文档契约。web 侧禁止值导入此 schema，会把 zod 打进浏览器包（实测 +89 kB）；
+ * 需要校验时手写。**
+ */
+export const ApiErrorBodySchema = z.object({ code: z.string(), message: z.string() });
+export type ApiErrorBody = z.infer<typeof ApiErrorBodySchema>;
+
+/** 追更三态。 */
+export const FOLLOW_STATES = ['planned', 'watching', 'watched'] as const;
+export type FollowState = (typeof FOLLOW_STATES)[number];
+
+/**
+ * 一条追更记录。
+ *
+ * **仅作文档契约。web 侧禁止值导入此 schema，会把 zod 打进浏览器包（实测 +89 kB）；
+ * 需要校验时手写。**
+ */
+export const FollowRecordSchema = z.object({
+  seriesId: z.string().min(1),
+  seriesTitle: z.string().min(1),
+  coverUrl: z.string().optional(),
+  state: z.enum(FOLLOW_STATES),
+  /** 上游最近一次报告的已知集数。 */
+  knownEpisodes: z.number().int().nonnegative(),
+  /** 用户已确认看到的集数。**只增不减**，除非用户显式重置。 */
+  confirmedEpisodes: z.number().int().nonnegative(),
+  /** 最后一次更新这些数字的时间。用于防时钟回拨误判。 */
+  checkedAt: z.number().int().nonnegative(),
+});
+export type FollowRecord = z.infer<typeof FollowRecordSchema>;
+
 /** 分页游标参数。 */
 export const CursorQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 export type CursorQuery = z.output<typeof CursorQuerySchema>;
 
+/**
+ * 搜索关键词的最大长度。
+ *
+ * 前后端共用这一个常量。之前 `web` 的搜索历史允许 80 字符、这里只允许 64，
+ * 导致 65–80 字符的输入被前端写入历史、提交后稳定收到 400，
+ * 而且从历史再次点击仍然失败。两套上限不能共存。
+ */
+export const MAX_SEARCH_KEYWORD_LENGTH = 80;
+
 /** 搜索参数。 */
 export const SearchQuerySchema = z.object({
-  keyword: z.string().trim().min(1).max(64),
+  keyword: z.string().trim().min(1).max(MAX_SEARCH_KEYWORD_LENGTH),
   cursor: z.string().optional(),
 });
 export type SearchQuery = z.output<typeof SearchQuerySchema>;
@@ -126,3 +188,50 @@ export const CoverQuerySchema = z.object({
   w: z.coerce.number().int().min(16).max(2048).optional(),
 });
 export type CoverQuery = z.output<typeof CoverQuerySchema>;
+
+/** 榜单中的一部短剧；封面只允许返回本服务的代理地址。 */
+export const RankingEntrySchema = z.object({
+  position: z.number().int().positive(),
+  seriesId: z.string(),
+  title: z.string(),
+  coverUrl: z.string().optional(),
+  episodeCount: z.number().int().nonnegative().optional(),
+  /** 上游已经生成可展示文案，解析数字会丢失「平台推荐」等语义。 */
+  score: z.string().optional(),
+  promoted: z.boolean().optional(),
+});
+export type RankingEntry = z.output<typeof RankingEntrySchema>;
+
+export const RankingBoardSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type RankingBoard = z.output<typeof RankingBoardSchema>;
+
+export const RankingSectionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  boards: z.array(RankingBoardSchema),
+});
+export type RankingSection = z.output<typeof RankingSectionSchema>;
+
+export const RankingPageSchema = z.object({
+  entries: z.array(RankingEntrySchema),
+  cursor: z.string().nullable(),
+  board: z.string(),
+  boardName: z.string().optional(),
+});
+export type RankingPage = z.output<typeof RankingPageSchema>;
+
+export const RankingCatalogSchema = z.object({
+  sections: z.array(RankingSectionSchema),
+});
+export type RankingCatalog = z.output<typeof RankingCatalogSchema>;
+
+/** 榜单 ID 限长，避免任意长字符串占满缓存键并被转发给上游。 */
+export const RankingQuerySchema = z.object({
+  content: z.string().max(64).optional(),
+  board: z.string().max(64).optional(),
+  cursor: z.string().optional(),
+});
+export type RankingQuery = z.output<typeof RankingQuerySchema>;

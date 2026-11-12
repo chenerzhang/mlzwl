@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { useFocusTrap } from './use-focus-trap';
 
 /**
  * 可选倍速。
@@ -30,7 +31,8 @@ export interface SpeedMenuProps {
  * 交互细节：
  * - `role="menu"` + `role="menuitemradio"` + `aria-checked`，屏幕阅读器能读出
  *   当前选中项，而不是只读一串数字。
- * - 点击外部关闭、Esc 关闭。
+ * - 点击外部关闭、Esc 关闭。Esc 与 Tab 循环由 `useFocusTrap` 统一处理，
+ *   关闭后焦点回到触发按钮。
  * - 打开时把焦点移到当前档位，键盘用户不需要再 Tab 一遍。
  * - 向上弹出（`bottom-full`），因为按钮在屏幕底部。
  */
@@ -56,21 +58,11 @@ export function SpeedMenu({ value, onSelect, onClose }: SpeedMenuProps): React.J
     };
   }, [onClose]);
 
-  // Esc 关闭。菜单是瞬态浮层，不值得抢焦点陷阱。
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [onClose]);
+  // Esc 关闭 + Tab 循环 + 关闭后焦点归还触发按钮。
+  useFocusTrap(ref, { onClose });
 
   // 打开时把焦点放到当前档位，键盘用户可以直接上下选。
+  // `useFocusTrap` 只在焦点已经进入容器后才拦 Tab / Esc，所以这一步是陷阱生效的前提。
   useEffect(() => {
     activeRef.current?.focus();
   }, []);

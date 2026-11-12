@@ -47,6 +47,18 @@ describe('parseRange', () => {
     expect(parseRange('bytes=abc-def', SIZE)).toBeNull();
     expect(parseRange('bytes=-0', SIZE)).toBeNull();
   });
+
+  it('rejects malformed numeric segments and unsafe integers', () => {
+    for (const header of [
+      'bytes=1x-20',
+      'bytes=1-20foo',
+      'bytes=-10abc',
+      'bytes=+1-20',
+      'bytes=999999999999999999999-',
+    ]) {
+      expect(parseRange(header, SIZE), header).toBeNull();
+    }
+  });
 });
 
 describe('rangeHeaders', () => {

@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import type { Episode, Series, SeriesSummary } from 'openhongguo';
-import type { Episode as EpisodeDto, SeriesDetail, SeriesSummary as SeriesSummaryDto } from '@mlzwl/hongguo-shared';
+import type {
+  Episode as EpisodeDto,
+  RankingEntry,
+  SeriesDetail,
+  SeriesSummary as SeriesSummaryDto,
+} from '@mlzwl/hongguo-shared';
+import type { RankingRow } from './ranking-rows.js';
 import { CoverProxyService } from '../cover/cover-proxy.service.js';
 
 /**
@@ -22,6 +28,21 @@ export class CatalogMapper {
       ...(source.episode_count === undefined ? {} : { episodeCount: source.episode_count }),
       ...(source.author === undefined ? {} : { author: source.author }),
       ...(source.category === undefined ? {} : { category: source.category }),
+    };
+  }
+
+  /**
+   * 榜单封面也必须经过统一代理边界；让 service 手工改 URL 容易在新增字段时漏出 CDN 直链。
+   */
+  toRankingEntry(source: RankingRow): RankingEntry {
+    return {
+      position: source.position,
+      seriesId: source.seriesId,
+      title: source.title,
+      ...(source.coverUrl === undefined ? {} : { coverUrl: this.covers.proxyUrl(source.coverUrl) }),
+      ...(source.episodeCount === undefined ? {} : { episodeCount: source.episodeCount }),
+      ...(source.score === undefined ? {} : { score: source.score }),
+      ...(source.promoted === undefined ? {} : { promoted: source.promoted }),
     };
   }
 

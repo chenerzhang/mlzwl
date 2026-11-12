@@ -1,4 +1,6 @@
 import type { SeriesSummary } from '@mlzwl/hongguo-shared';
+import { useFollowStore } from '../features/follow/follow-store';
+import { newEpisodes } from '../features/follow/follow-model';
 
 export interface SeriesCardProps {
   series: SeriesSummary;
@@ -25,6 +27,10 @@ export interface SeriesCardProps {
  * 主题下白字角标会消失。这是唯一允许不随主题变化的地方。
  */
 export function SeriesCard({ series, onSelect }: SeriesCardProps): React.JSX.Element {
+  // 只订阅本剧那一条记录：`records[id]` 的引用在别的剧变动时不变，不会连带重渲染。
+  const follow = useFollowStore((state) => state.records[series.id]);
+  const updates = follow === undefined ? 0 : newEpisodes(follow);
+
   return (
     <button
       type="button"
@@ -56,11 +62,22 @@ export function SeriesCard({ series, onSelect }: SeriesCardProps): React.JSX.Ele
            下缘整片压暗。
         现在封面完全裸露，信息统一放在封面下方一行，既稳定又干净。
       */}
-      <p className="mt-0.5 truncate text-[11px] tabular-nums text-text-tertiary">
-        {series.episodeCount !== undefined && <>{series.episodeCount} 集</>}
-        {series.episodeCount !== undefined && series.category !== undefined && <span aria-hidden> · </span>}
-        {series.category}
-      </p>
+      <div className="mt-0.5 flex items-baseline gap-1 text-[11px] tabular-nums text-text-tertiary">
+        <p className="truncate">
+          {series.episodeCount !== undefined && <>{series.episodeCount} 集</>}
+          {series.episodeCount !== undefined && series.category !== undefined && <span aria-hidden> · </span>}
+          {series.category}
+        </p>
+        {/*
+          追更角标（P1-8 / P1-9）。刻意不压在封面上：封面是唯一主角，任何
+          压在图上的色块都会把封面变成「带标签的格子」。放在元信息行末尾，
+          用 accent-soft 而不是新配色，深浅两个主题下都自带对比度。
+
+          `flex-none` 是必需的：元信息文本带 `truncate`，不加它角标会被一起
+          截断成省略号，而角标恰恰是这行里最不能被截断的信息。
+        */}
+        {updates > 0 && <span className="flex-none font-medium text-accent-soft">更新 {updates} 集</span>}
+      </div>
     </button>
   );
 }

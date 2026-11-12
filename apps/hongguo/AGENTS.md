@@ -18,7 +18,7 @@
 - **不转码**。视频是 CENC 加密的，服务端原地解密（长度不变），因此 MP4 偏移表有效、可直接支持 Range 请求。不得引入 ffmpeg。
 - **雪碧图按整张网格返回**。上游 `img_urls` 可能是多张，每张恰好 `img_x_len * img_y_len` 个格子。取帧必须用 `img_num` 并钳制到 `frameCount - 1`。
 - **`server/data/` 不得提交**。`devices.profile` 是设备指纹，泄露等于交出设备身份。首次启动会自动建表并注册新设备，因此删掉它是安全的。
-- 只监听 `127.0.0.1`。不得默认绑定 `0.0.0.0`。
+- 默认监听 `0.0.0.0`（所有 IPv4 网卡），方便同一局域网的手机访问。注意 `0.0.0.0` **不等于**只对局域网开放：主机有公网地址、VPN、容器网桥或端口转发时同样可被访问，而 `/api/*` 没有鉴权、`server/data/` 含设备指纹。实际隔离依赖主机防火墙与路由器，只能在可信网络使用，严禁暴露公网。需要仅限本机时设 `HOST=127.0.0.1`。
 
 ## 命令
 
@@ -60,7 +60,8 @@ pnpm --filter @mlzwl/hongguo-web dev
 
 - 改 `shared/`：跑 `pnpm --filter @mlzwl/hongguo-shared test`，再跑 server 与 web 的 `typecheck`（两者都消费它的类型）。
 - 改 `server/`：跑 `pnpm --filter @mlzwl/hongguo-server test`。
-- 改 `web/`：`web` 没有测试文件，用 `typecheck` + `lint` + 手动验证。**不要为此新建测试文件**。
+- 改 `web/`：跑 `pnpm --filter @mlzwl/hongguo-web test`（可能为空）+ `typecheck` + `lint`。
+  涉及渲染、手势、媒体元素行为的改动仍需手动验证。
 - 改 `scripts/ui-audit.mjs`：需要前后端都在运行，且改动后必须实际跑一次。
 - 只改文档：`pnpm exec prettier --check <file>`。
 
@@ -85,7 +86,26 @@ pnpm --filter @mlzwl/hongguo-web dev
 - 不改 `shared/src/{spade,mp4,cenc}.ts` 与 `server/src/media/*` 的算法语义。这些有真实向量测试（`shared/src/spade.test.ts` 6 组、`server/src/media/cenc.test.ts`）保护，改动必须先确认测试仍绿。
 - 不引入新的 UI 框架、组件库或 CSS-in-JS。只用 Tailwind 4 + 手写组件。
 - 不引入 Google Fonts 等外部字体链接。
-- 不新增测试文件，除非用户明确同意。
+- 不新增测试文件，除非用户明确同意。`web` 的测试白名单见下一条。
+
+### web 测试边界
+
+`web` 允许存在测试，但只测**纯逻辑**，不测渲染。约束：
+
+1. **不引入 `jsdom` / `happy-dom` / `@testing-library/*`**。测试跑在 vitest 默认的
+   node 环境，被测模块不得在 import 期访问 `window` / `document` / `localStorage`。
+   需要浏览器能力时，把它抽成可注入的参数（如传入 `Storage` 或 `now()`），
+   而不是在测试里伪造全局对象。
+2. **测试文件与被测模块同目录**，命名 `<name>.test.ts`，只用 `vitest` 的
+   `describe` / `it` / `expect`。
+3. **只覆盖有分支或边界判断的纯函数**：格式化、归一化、区间合并、状态机、
+   排序、去重、超时与重试策略。不测「组件能渲染出 div」这类断言。
+4. **一个逻辑模块一个测试文件**，不要为同一个模块拆多个测试文件，也不要给组件写测试。
+   同一目录下的多个独立逻辑模块各自带一个测试是正常的（`features/player/`
+   就有画幅、快捷键、分组、区间合并等多个互不相关的纯函数模块）。
+5. 新增测试文件时，同步确认 `pnpm --filter @mlzwl/hongguo-web test` 与
+   `typecheck` 都通过（`tsconfig.json` 的 `include` 已含 `src`，测试文件会被
+   typecheck 覆盖）。
 
 ## 视觉约定
 

@@ -35,16 +35,22 @@ export function parseRange(header: string, size: number): ByteRange | null {
 
   if (rawStart === '') {
     // `bytes=-500`：最后 500 字节。
-    const suffix = Number.parseInt(rawEnd, 10);
-    if (!Number.isFinite(suffix) || suffix <= 0) {
+    if (!/^\d+$/.test(rawEnd)) {
+      return null;
+    }
+    const suffix = Number(rawEnd);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) {
       return null;
     }
     const start = Math.max(0, size - suffix);
     return { start, end: size - 1 };
   }
 
-  const start = Number.parseInt(rawStart, 10);
-  if (!Number.isFinite(start) || start < 0 || start >= size) {
+  if (!/^\d+$/.test(rawStart)) {
+    return null;
+  }
+  const start = Number(rawStart);
+  if (!Number.isSafeInteger(start) || start >= size) {
     return null;
   }
 
@@ -52,8 +58,11 @@ export function parseRange(header: string, size: number): ByteRange | null {
     return { start, end: size - 1 };
   }
 
-  const end = Number.parseInt(rawEnd, 10);
-  if (!Number.isFinite(end) || end < start) {
+  if (!/^\d+$/.test(rawEnd)) {
+    return null;
+  }
+  const end = Number(rawEnd);
+  if (!Number.isSafeInteger(end) || end < start) {
     return null;
   }
   return { start, end: Math.min(end, size - 1) };

@@ -63,7 +63,7 @@ pnpm --filter @mlzwl/lark-pi-bridge pack:dry-run
 - `apps/x-adapter`：`test/*.test.js` 依赖 `dist/` 的模块化编译产物。先在 `apps/x-adapter` 内执行 `node ../../scripts/build-package.mjs --test`，再执行 `node --test test/<name>.test.js`，只跑相关文件。需要发布产物时，最后执行 `pnpm --filter @mlzwl/x-adapter build` 恢复双 bundle 的 `dist/`。
 - `apps/lark-pi-bridge`：按目录选择用例，例如 `pnpm --filter @mlzwl/lark-pi-bridge exec vitest run tests/unit/<name>.test.ts`；集成与进程用例替换目录名即可。只有改动涉及 Pi 进程启动、RPC 或真实平台行为时，才运行 `tests/process` 或 `smoke:local`。
 - `apps/magpie-x-adapter`：改动插件入口或 manifest 时运行 `pnpm --filter @mlzwl/magpie-x-adapter test`。该命令包含构建和 manifest 校验。
-- `apps/hongguo`：`pnpm hongguo:typecheck` / `hongguo:lint` / `hongguo:test` 按改动范围选；`shared` 改动要连带跑 server 与 web 的 typecheck（两者都消费它的类型）。`web` 没有测试文件，用 typecheck + lint + 手动验证，不要为此新建测试文件。改 `server/src/serve-web-dist.ts` 或前端路由结构时必须实测单端口的三条回落规则，详见 `apps/hongguo/AGENTS.md`。
+- `apps/hongguo`：`pnpm hongguo:typecheck` / `hongguo:lint` / `hongguo:test` 按改动范围选；`shared` 改动要连带跑 server 与 web 的 typecheck（两者都消费它的类型）。`web` 的测试只测纯逻辑，不引入 `jsdom`/`happy-dom`/`@testing-library/*`，边界详见 `apps/hongguo/AGENTS.md` 的「web 测试边界」。改 `server/src/serve-web-dist.ts` 或前端路由结构时必须实测单端口的三条回落规则，详见 `apps/hongguo/AGENTS.md`。
 - 根 `scripts/`：`node --test scripts/<name>.test.mjs`。
 - 只改文档或注释时，只对改动文件执行 `pnpm exec prettier --check <file>`，不运行测试。
 
