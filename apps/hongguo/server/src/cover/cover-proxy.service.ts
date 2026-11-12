@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { Inject, Injectable } from '@nestjs/common';
 import heicConvert from 'heic-convert';
 import sharp from 'sharp';
+import { COVER_PATH_PREFIX } from '@mlzwl/hongguo-shared/definitions';
 import { CONFIG, type Config } from '../config/config.js';
+import { CoverTokenCodec, MAX_COVER_TOKEN_LENGTH } from './cover-token.js';
 
 /**
  * 封面代理。
@@ -41,6 +43,14 @@ export const COVER_MAX_BYTES = 24 * 1024 * 1024;
  */
 export const COVER_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 
+/**
+ * 封面令牌编解码器的注入令牌。
+ *
+ * 用 provider 而不是让服务自己读盘：密钥加载是异步的（可能生成新文件），
+ * 而 `CoverProxyService` 的构造函数必须同步完成。
+ */
+export const COVER_TOKEN_CODEC = Symbol('COVER_TOKEN_CODEC');
+
 @Injectable()
 export class CoverProxyService {
   /**
@@ -55,15 +65,45 @@ export class CoverProxyService {
   /** 同一 URL 的并发请求只转一次。 */
   private readonly inflight = new Map<string, Promise<Buffer>>();
 
-  constructor(@Inject(CONFIG) private readonly config: Config) {}
+  constructor(
+    @Inject(CONFIG) private readonly config: Config,
+    @Inject(COVER_TOKEN_CODEC) private readonly tokens: CoverTokenCodec,
+  ) {}
 
   /**
    * 把上游封面地址改写成本服务的代理地址。
    *
+   * 返回**不透明令牌**，不是编码过的上游 URL：
+   * 上游是签名 URL，`x-signature` / `x-expires` 就在查询串里。把上游 URL 放进
+   * 浏览器可见的任何位置（路径、查询参数、localStorage）都等于把签名交给客户端，
+   * `decodeURIComponent` 一步就能还原。`encodeURIComponent` 不是脱敏。
+   *
+   * 令牌是 AES-GCM 密文，服务端可解、浏览器不可解，也不需要任何映射表，
+   * 重启后旧地址仍然有效。
+   *
    * 返回相对路径而不是绝对地址：前端可能部署在不同 origin，绝对地址会写错。
+   *
+   * 超长时返回 `undefined`，由调用方省略 `coverUrl`：
+   * 生成的令牌如果超过 `MAX_COVER_TOKEN_LENGTH`，Fastify 会在进入控制器之前就
+   * 用 `maxParamLength` 拒掉它。把这种地址发给浏览器，等于发一张必定 414 的
+   * 封面地址，卡片会一直显示破图。宁可退化成纯文字，也不发不可用的地址。
    */
-  proxyUrl(upstream: string): string {
-    return `/api/cover?u=${encodeURIComponent(upstream)}`;
+  proxyUrl(upstream: string): string | undefined {
+    const token = this.tokens.seal(upstream);
+    if (token.length > MAX_COVER_TOKEN_LENGTH) {
+      return undefined;
+    }
+    return `${COVER_PATH_PREFIX}${token}`;
+  }
+
+  /**
+   * 从路径令牌还原上游地址。
+   *
+   * 令牌不合法、被篡改或密钥不匹配时返回 `null`；调用方据此返回 400，
+   * 与「上游拉取失败」的 502 分开。
+   */
+  resolveToken(token: string): string | null {
+    return this.tokens.open(token);
   }
 
   /** 域名白名单。非白名单一律拒绝，不提供「任意 URL 代理」能力。 */

@@ -19,12 +19,27 @@ import { CoverProxyService } from '../cover/cover-proxy.service.js';
 export class CatalogMapper {
   constructor(private readonly covers: CoverProxyService) {}
 
+  /**
+   * 把上游封面地址改写成代理地址；拿不到可用的代理地址时返回空对象。
+   *
+   * `proxyUrl` 在上游地址过长时会返回 `undefined`（生成的令牌会超过 Fastify
+   * `maxParamLength`）。这里统一收成「省略 `coverUrl`」，让四个映射方法不必各写
+   * 一遍判空——写四遍最容易在新增字段时漏掉一处，漏掉那处就会发出一个 414 地址。
+   */
+  private cover(source: string | undefined): { coverUrl?: string } {
+    if (source === undefined) {
+      return {};
+    }
+    const url = this.covers.proxyUrl(source);
+    return url === undefined ? {} : { coverUrl: url };
+  }
+
   toSeriesSummary(source: SeriesSummary): SeriesSummaryDto {
     return {
       id: source.id,
       title: source.title,
       ...(source.description === undefined ? {} : { description: source.description }),
-      ...(source.cover_url === undefined ? {} : { coverUrl: this.covers.proxyUrl(source.cover_url) }),
+      ...this.cover(source.cover_url),
       ...(source.episode_count === undefined ? {} : { episodeCount: source.episode_count }),
       ...(source.author === undefined ? {} : { author: source.author }),
       ...(source.category === undefined ? {} : { category: source.category }),
@@ -39,7 +54,7 @@ export class CatalogMapper {
       position: source.position,
       seriesId: source.seriesId,
       title: source.title,
-      ...(source.coverUrl === undefined ? {} : { coverUrl: this.covers.proxyUrl(source.coverUrl) }),
+      ...this.cover(source.coverUrl),
       ...(source.episodeCount === undefined ? {} : { episodeCount: source.episodeCount }),
       ...(source.score === undefined ? {} : { score: source.score }),
       ...(source.promoted === undefined ? {} : { promoted: source.promoted }),
@@ -53,7 +68,7 @@ export class CatalogMapper {
       number: source.number,
       ...(source.title === undefined ? {} : { title: source.title }),
       playable: source.playable,
-      ...(source.cover_url === undefined ? {} : { coverUrl: this.covers.proxyUrl(source.cover_url) }),
+      ...this.cover(source.cover_url),
       ...(source.comment_count === undefined ? {} : { commentCount: source.comment_count }),
       ...(source.digg_count === undefined ? {} : { diggCount: source.digg_count }),
     };
@@ -64,7 +79,7 @@ export class CatalogMapper {
       id: source.id,
       title: source.title,
       ...(source.description === undefined ? {} : { description: source.description }),
-      ...(source.cover_url === undefined ? {} : { coverUrl: this.covers.proxyUrl(source.cover_url) }),
+      ...this.cover(source.cover_url),
       ...(source.episode_count === undefined ? {} : { episodeCount: source.episode_count }),
       episodes: episodes.map((episode) => this.toEpisode(episode)),
     };

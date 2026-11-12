@@ -25,7 +25,7 @@ export interface ResolvedPlayback {
 export class PlaybackUnavailableError extends Error {
   constructor(
     message: string,
-    readonly reason: 'no_stream' | 'not_encrypted' | 'key_unavailable',
+    readonly reason: 'no_stream' | 'not_encrypted' | 'key_unavailable' | 'definition_unavailable',
   ) {
     // 这条 message 经 `MediaController` 变成响应体回到浏览器。构造点分散，
     // 统一在这里过一道 `redact`，避免以后有人顺手把上游字符串拼进来。
@@ -100,6 +100,15 @@ export class PlaybackService {
       throw new PlaybackUnavailableError('episode has no stream URL', 'no_stream');
     }
 
+    // 显式指定档位时必须精确命中：`pickStream` 在匹配不到时会静默回退到 720p
+    // 或中间档。那会让「选了 1080p」变成「实际 720p」，而下载文件名仍写着
+    // `-1080p.mp4`。可用档位是**逐集**算的，别的集有 1080p 不代表这一集有。
+    if (preferredDefinition !== undefined && !playable.some((item) => item.definition === preferredDefinition)) {
+      throw new PlaybackUnavailableError(
+        `definition ${preferredDefinition} is not available for this episode`,
+        'definition_unavailable',
+      );
+    }
     const stream = pickStream(playable, preferredDefinition);
     if (stream === undefined) {
       throw new PlaybackUnavailableError('no matching stream', 'no_stream');

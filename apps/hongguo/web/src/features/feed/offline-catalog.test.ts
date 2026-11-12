@@ -24,7 +24,7 @@ const NOW = 1_700_000_000_000;
 /** 造一个合法快照的 JSON 文本，方便各用例只改一个字段。 */
 function rawSnapshot(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     savedAt: NOW - 1000,
     items: [{ id: '123', title: '长生' }],
     ...overrides,
@@ -41,8 +41,8 @@ describe('parseSnapshot', () => {
   });
 
   it('returns null when the version does not match', () => {
-    expect(parseSnapshot(rawSnapshot({ version: 2 }), NOW)).toBeNull();
-    expect(parseSnapshot(rawSnapshot({ version: '1' }), NOW)).toBeNull();
+    expect(parseSnapshot(rawSnapshot({ version: 3 }), NOW)).toBeNull();
+    expect(parseSnapshot(rawSnapshot({ version: '2' }), NOW)).toBeNull();
   });
 
   it('returns null when the snapshot is older than 7 days', () => {
@@ -122,10 +122,26 @@ describe('parseSnapshot', () => {
     expect(parseSnapshot(rawSnapshot({ items: [{ id: '123', title: '长生', coverUrl: 42 }] }), NOW)).toBeNull();
   });
 
+  it('drops a snapshot written by the version that leaked upstream signatures', () => {
+    // 版本 1 的存档可能带 `/api/cover?u=<上游签名 URL>`，必须整体作废。
+    expect(parseSnapshot(rawSnapshot({ version: 1 }), NOW)).toBeNull();
+  });
+
+  it('rejects a coverUrl that is not our proxy path', () => {
+    const legacy = '/api/cover?u=https%3A%2F%2Fcdn.example.com%2Fa.jpg%3Fx-signature%3D1';
+    expect(parseSnapshot(rawSnapshot({ items: [{ id: '123', title: '长生', coverUrl: legacy }] }), NOW)).toBeNull();
+    expect(
+      parseSnapshot(
+        rawSnapshot({ items: [{ id: '123', title: '长生', coverUrl: 'https://cdn.example.com/a.jpg' }] }),
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
   it('returns a parsed snapshot for valid input', () => {
     const parsed = parseSnapshot(rawSnapshot(), NOW);
     expect(parsed).toEqual({
-      version: 1,
+      version: 2,
       savedAt: NOW - 1000,
       items: [{ id: '123', title: '长生' }],
     });
@@ -133,12 +149,26 @@ describe('parseSnapshot', () => {
 });
 
 describe('toSnapshotItems', () => {
+  it('drops a coverUrl that is not our proxy path', () => {
+    // 写路径与读路径必须同规则：旧 `?u=` 地址不能先写进 version 2 再等下次读取作废。
+    const items = toSnapshotItems([
+      { id: '1', title: '旧封面', coverUrl: '/api/cover?u=https%3A%2F%2Fx%2Fx-signature%3D1' },
+      { id: '2', title: '上游直链', coverUrl: 'https://cdn.example.com/a.jpg' },
+      { id: '3', title: '正常', coverUrl: '/api/cover/AbC-9_x' },
+    ]);
+    expect(items).toEqual([
+      { id: '1', title: '旧封面' },
+      { id: '2', title: '上游直链' },
+      { id: '3', title: '正常', coverUrl: '/api/cover/AbC-9_x' },
+    ]);
+  });
+
   it('keeps only the whitelisted fields', () => {
     const upstream = [
       {
         id: '123',
         title: '长生',
-        coverUrl: '/api/cover?u=abc',
+        coverUrl: '/api/cover/abc-token',
         description: '简介',
         episodeCount: 80,
         // 下面这些都不允许进 localStorage。
@@ -152,7 +182,7 @@ describe('toSnapshotItems', () => {
       {
         id: '123',
         title: '长生',
-        coverUrl: '/api/cover?u=abc',
+        coverUrl: '/api/cover/abc-token',
         description: '简介',
         episodeCount: 80,
       },
@@ -189,7 +219,7 @@ describe('serializeSnapshot', () => {
       title: '剧'.repeat(1000),
       description: '描'.repeat(MAX_DESCRIPTION_LENGTH),
     }));
-    const snapshot: CatalogSnapshot = { version: 1, savedAt: NOW, items };
+    const snapshot: CatalogSnapshot = { version: 2, savedAt: NOW, items };
     expect(serializeSnapshot(snapshot)).toBeNull();
     // 用 UTF-8 字节数而不是 string.length 判断：中文一字 3 字节。
     expect(JSON.stringify(snapshot).length).toBeLessThan(MAX_SERIALIZED_BYTES);
@@ -197,9 +227,9 @@ describe('serializeSnapshot', () => {
 
   it('round-trips through parseSnapshot', () => {
     const snapshot: CatalogSnapshot = {
-      version: 1,
+      version: 2,
       savedAt: NOW,
-      items: [{ id: '123', title: '长生', coverUrl: '/api/cover?u=abc', description: '简介', episodeCount: 80 }],
+      items: [{ id: '123', title: '长生', coverUrl: '/api/cover/abc-token', description: '简介', episodeCount: 80 }],
     };
     const raw = serializeSnapshot(snapshot);
     expect(raw).not.toBeNull();

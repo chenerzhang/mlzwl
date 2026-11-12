@@ -3,13 +3,16 @@ import { CatalogService } from './catalog.service.js';
 import { CatalogMapper } from './catalog.mapper.js';
 import { CoverProxyService } from '../cover/cover-proxy.service.js';
 import type { HongguoService } from '../hongguo/hongguo.service.js';
+import { CoverTokenCodec } from '../cover/cover-token.js';
 
 /**
  * 随机入口的服务级契约测试（P2-5）。
  *
  * 两个必须守住的东西：
- * 1. **封面必须经 `mapper.toSeriesSummary` 改写**成 `/api/cover?u=` 代理地址。
- *    上游 CDN 直链绝不能出现在响应里——这是本项目的核心安全契约。
+ * 1. **封面必须经 `mapper.toSeriesSummary` 改写**成 `/api/cover/<不透明令牌>`。
+ *    上游 CDN 直链与签名参数绝不能出现在响应里——这是本项目的核心安全契约。
+ *    令牌化之后这个断言才真正可测：以前代理地址把原始 URL 放在 `u` 里，
+ *    响应体里必然出现上游主机名，只能退而断言「以代理前缀开头」。
  * 2. **空池必须返回 `undefined`**，由 controller 转成 404 `no_random`。
  *
  * 不碰真实上游：`HongguoService.getClient()` 被替换成返回固定榜单的桩。走的是
@@ -19,9 +22,29 @@ import type { HongguoService } from '../hongguo/hongguo.service.js';
 /** 白名单 CDN 域名，避免 `proxyUrl` 之外还触发白名单校验的意外。 */
 const CDN = 'https://p3-reading-sign.fqnovelpic.com';
 
-/** 只提供 `proxyUrl` 的 `CoverProxyService` 桩：真实实现会把封面改写成本服务路径。 */
+/**
+ * 只提供 `proxyUrl` 的 `CoverProxyService` 桩。
+ *
+ * 用真实令牌编解码器而不是写死字符串：断言才有意义——令牌必须是不可读的密文，
+ * 且能被解回原始上游地址。写死「查询串里带明文上游地址」的形态会让「不泄漏签名」
+ * 这条断言失效。
+ */
+const testCodec = CoverTokenCodec.fromKey(Buffer.alloc(32, 11));
+
 function stubCovers(): CoverProxyService {
-  return { proxyUrl: (upstream: string) => `/api/cover?u=${encodeURIComponent(upstream)}` } as CoverProxyService;
+  return { proxyUrl: (upstream: string) => `/api/cover/${testCodec.seal(upstream)}` } as CoverProxyService;
+}
+
+/** 从代理地址里取出令牌并解密，还原上游 URL；不是合法令牌时返回 null。 */
+function openCover(coverUrl: string | undefined): string | null {
+  if (coverUrl === undefined) {
+    return null;
+  }
+  const prefix = '/api/cover/';
+  if (!coverUrl.startsWith(prefix)) {
+    return null;
+  }
+  return testCodec.open(coverUrl.slice(prefix.length));
 }
 
 /** 造一个只实现 `shortRank()` 的 `HongguoService` 桩。 */
@@ -55,7 +78,7 @@ describe('CatalogService.ranking', () => {
   };
 
   it('rewrites every ranking cover through the mapper', async () => {
-    const proxyUrl = vi.fn(() => '/api/cover?u=opaque');
+    const proxyUrl = vi.fn(() => `/api/cover/${testCodec.seal(`${CDN}/ranking.jpg`)}`);
     const service = new CatalogService(
       stubHongguo(ranking),
       new CatalogMapper({ proxyUrl } as unknown as CoverProxyService),
@@ -64,16 +87,21 @@ describe('CatalogService.ranking', () => {
     const result = await service.ranking({ content: 'all', board: 'ranklist_hot_sc' });
 
     expect(proxyUrl).toHaveBeenCalledWith(`${CDN}/ranking.jpg`);
-    expect(result.entries[0]?.coverUrl).toBe('/api/cover?u=opaque');
-    // 不能断言响应体不含上游主机名：代理地址把原始 URL 放在 `u` 查询参数里，
-    // 经 URL 编码后 `fqnovelpic` 仍然会出现。真正的契约是「没有可直接访问的
-    // 上游直链」，即每个 coverUrl 都以代理前缀开头，且不以 http 开头。
+    // 令牌不可读：解不回原地址说明它只是个不透明字符串。
+    expect(result.entries[0]?.coverUrl).toMatch(/^\/api\/cover\/[A-Za-z0-9_-]+$/);
+    expect(openCover(result.entries[0]?.coverUrl)).toBe(`${CDN}/ranking.jpg`);
+
     const covers = result.entries.map((entry) => entry.coverUrl).filter((url) => url !== undefined);
     expect(covers.length).toBeGreaterThan(0);
     for (const cover of covers) {
-      expect(cover.startsWith('/api/cover?u=')).toBe(true);
+      expect(cover.startsWith('/api/cover/')).toBe(true);
       expect(cover.startsWith('http')).toBe(false);
     }
+
+    // 令牌化之后这条断言才成立：整个响应体里不能出现上游主机名或签名参数。
+    const body = JSON.stringify(result);
+    expect(body).not.toContain('fqnovelpic');
+    expect(body).not.toContain('x-signature');
   });
 
   it('keeps the upstream cursor on an empty intermediate page', async () => {
@@ -235,9 +263,10 @@ describe('CatalogService.random', () => {
     const series = await service.random();
 
     expect(series).toBeDefined();
-    // 上游 CDN 直链绝不能出现在响应里。
-    expect(series?.coverUrl).toBe(`/api/cover?u=${encodeURIComponent(`${CDN}/cover.jpg`)}`);
+    // 上游 CDN 直链绝不能出现在响应里，令牌必须能解回原始地址。
+    expect(openCover(series?.coverUrl)).toBe(`${CDN}/cover.jpg`);
     expect(JSON.stringify(series)).not.toContain(CDN);
+    expect(JSON.stringify(series)).not.toContain('fqnovelpic');
   });
 
   it('returns undefined when the ranking has no usable candidate', async () => {

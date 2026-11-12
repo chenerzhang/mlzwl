@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isRequestableDefinition } from '../definitions.js';
 
 /**
  * 对外接口的契约。前后端共享同一份 schema，前端由此推导类型，避免手写类型漂移。
@@ -9,7 +10,7 @@ export const SeriesSummarySchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string().optional(),
-  /** 封面地址；已转成本服务的 `/api/cover?u=...`，不会是上游 CDN 直链。 */
+  /** 封面地址；已转成本服务的 `/api/cover/<不透明令牌>`，不会是上游 CDN 直链。 */
   coverUrl: z.string().optional(),
   episodeCount: z.number().int().nonnegative().optional(),
   author: z.string().optional(),
@@ -109,6 +110,15 @@ export const MEDIA_ERROR_CODES = [
   'no_stream',
   'key_unavailable',
   'not_encrypted',
+  /**
+   * 请求了该集并不存在的档位。
+   *
+   * 与 `no_stream` 分开：`no_stream` 是「这集根本没有流」，而这里只是「这集
+   * 没有你要的那一档」。前端据此提示「该档位不可用」而不是「这集播不了」。
+   * 之所以必须报错：静默回退到别的档会让用户以为 1080p 下载成功，
+   * 实际拿到 720p 的文件却带着 `-1080p.mp4` 的名字。
+   */
+  'definition_unavailable',
 ] as const;
 export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
 
@@ -169,10 +179,7 @@ export type SearchQuery = z.output<typeof SearchQuerySchema>;
 
 /** 播放参数。`definition` 可选，缺省时自动挑一档。 */
 export const PlaybackQuerySchema = z.object({
-  definition: z
-    .string()
-    .regex(/^\d{3,4}p$/)
-    .optional(),
+  definition: z.string().refine(isRequestableDefinition, { message: 'unsupported definition' }).optional(),
 });
 export type PlaybackQuery = z.output<typeof PlaybackQuerySchema>;
 
@@ -183,12 +190,6 @@ export const SpriteQuerySchema = z.object({
 export type SpriteQuery = z.output<typeof SpriteQuerySchema>;
 
 /** 封面代理参数。 */
-export const CoverQuerySchema = z.object({
-  u: z.string().min(1),
-  w: z.coerce.number().int().min(16).max(2048).optional(),
-});
-export type CoverQuery = z.output<typeof CoverQuerySchema>;
-
 /** 榜单中的一部短剧；封面只允许返回本服务的代理地址。 */
 export const RankingEntrySchema = z.object({
   position: z.number().int().positive(),

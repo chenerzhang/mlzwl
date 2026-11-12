@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Episode } from '@mlzwl/hongguo-shared';
 import { EpisodeDownloadButton } from '../download/episode-download-button';
+import { isDownloadableDefinition, resolveDownloadDefinition } from '../download/download-media-url';
 import { useEpisodeDownload } from '../download/use-download';
+import { usePlayerStore } from './player-store';
 import { groupEpisodes, groupIndexOf, validateEpisodeJump } from './episode-groups';
 import { useFocusTrap } from './use-focus-trap';
 
@@ -10,6 +12,16 @@ export interface EpisodeDrawerProps {
   episodes: Episode[];
   currentId: string | undefined;
   onSelect: (episode: Episode) => void;
+  /**
+   * 该剧的**候选**清晰度档位，从低到高。
+   *
+   * 抽屉里的下载按钮与详情页下载面板用同一套规则：默认最高档，用户选过就按选择。
+   * 由调用方传入，因为抽屉本身不发播放请求。
+   *
+   * 这是「出现过至少一次」的档位，不是每一集都有：可用档位逐集计算，
+   * 某一集缺少所选档时服务端返回 400 `definition_unavailable`，前端提示换档。
+   */
+  definitions?: readonly string[];
   onClose: () => void;
 }
 
@@ -29,7 +41,14 @@ export interface EpisodeDrawerProps {
  * **跳转**：输入集数直接定位。非法输入显示提示而不是 clamp 到最近的合法值——
  * 把 105 悄悄改成 104 会让用户以为跳到了自己输入的那一集。
  */
-export function EpisodeDrawer({ open, episodes, currentId, onSelect, onClose }: EpisodeDrawerProps): React.JSX.Element {
+export function EpisodeDrawer({
+  open,
+  episodes,
+  currentId,
+  onSelect,
+  definitions,
+  onClose,
+}: EpisodeDrawerProps): React.JSX.Element {
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   /** 待滚动的集序号（1 起）。跳转时写入，滚动完成后清空。 */
@@ -37,7 +56,18 @@ export function EpisodeDrawer({ open, episodes, currentId, onSelect, onClose }: 
   const [scrollRequest, setScrollRequest] = useState(0);
   const [jump, setJump] = useState('');
   const [jumpError, setJumpError] = useState<string | null>(null);
-  const downloads = useEpisodeDownload();
+  const downloads = useEpisodeDownload(definitions ?? []);
+  const downloadDefinition = usePlayerStore((state) => state.downloadDefinition);
+  /**
+   * 抽屉里当前生效的下载档位。
+   *
+   * 与下载面板用同一套规则（用户选择 > 最高档 > 服务端默认），用来把 entry
+   * 折算到当前档位：切档后同一集要能重新下载另一档。
+   */
+  const drawerDefinition = resolveDownloadDefinition(
+    downloadDefinition,
+    (definitions ?? []).filter((item) => isDownloadableDefinition(item)),
+  );
 
   const groups = useMemo(() => groupEpisodes(episodes), [episodes]);
   /** 是否分组渲染。≤ 40 集时一次性全部铺开，不需要展开/收起。 */
@@ -182,10 +212,11 @@ export function EpisodeDrawer({ open, episodes, currentId, onSelect, onClose }: 
               第 {episode.number} 集{episode.title === undefined ? '' : ` · ${episode.title}`}
             </button>
             {episode.playable && (
-              <div className="w-36 flex-none" title={downloads.entries[episode.id]?.error}>
+              <div className="w-36 flex-none" title={downloads.entryOf(episode.id, drawerDefinition).error}>
                 <EpisodeDownloadButton
                   episodeId={episode.id}
-                  entry={downloads.entries[episode.id]}
+                  entry={downloads.entryOf(episode.id, drawerDefinition)}
+                  active={downloads.activeOf(episode.id)}
                   queued={downloads.queued.has(episode.id)}
                   onDownload={downloads.download}
                   onCancel={downloads.cancel}

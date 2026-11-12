@@ -7,6 +7,7 @@ import { AppModule } from './app.module.js';
 import { FileLoggerService } from './common/file-logger.service.js';
 import { describeListenTargets } from './common/listen-address.js';
 import { CONFIG, type Config } from './config/config.js';
+import { MAX_COVER_TOKEN_LENGTH } from './cover/cover-token.js';
 import { registerSpaFallback, registerStaticAssets } from './serve-web-dist.js';
 
 async function bootstrap(): Promise<void> {
@@ -14,7 +15,20 @@ async function bootstrap(): Promise<void> {
   // `exposeHeadRoutes: false`：Fastify 默认给每个 GET 自动挂一个 HEAD，而 HEAD
   // 会执行 GET 的 handler（触发整片下载 + 解密）。我们显式实现了轻量 HEAD，
   // 所以必须关掉自动挂载，否则路由重复注册直接启动失败。
-  const adapter = new FastifyAdapter({ trustProxy: true, bodyLimit: 1_048_576, exposeHeadRoutes: false });
+  //
+  // `maxParamLength`：Fastify 默认 100，而封面令牌是上游 URL 的 AES-GCM 密文，
+  // base64url 后轻松超过 300 字符。不抬高就会直接 414 `FST_ERR_MAX_PARAM_LENGTH`，
+  // 合法封面全部拉不到。
+  //
+  // 上限必须与 `MAX_COVER_TOKEN_LENGTH`（见 `cover-token.ts`）**同源**：前端允许
+  // 保存多长的令牌，服务端就必须能收多长，否则会出现「接口给了地址、浏览器却打不开」。
+  // 这里引用常量而不是写字面量，避免两处各改一半。
+  const adapter = new FastifyAdapter({
+    trustProxy: true,
+    bodyLimit: 1_048_576,
+    exposeHeadRoutes: false,
+    maxParamLength: MAX_COVER_TOKEN_LENGTH,
+  });
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, { bufferLogs: true });
 
   const config = app.get<Config>(CONFIG);

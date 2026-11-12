@@ -197,7 +197,7 @@ export class CatalogService {
    * 不过滤会让前端跳到 `/series/undefined`。
    *
    * 转换走 `mapper.toSeriesSummary` 而不是手工拼 DTO：封面必须由它改写成
-   * `/api/cover?u=` 白名单代理地址，**上游 CDN 直链绝不能返回给浏览器**。
+   * `/api/cover/<不透明令牌>` 白名单代理地址，**上游 CDN 直链绝不能返回给浏览器**。
    */
   private async loadRandomPool(): Promise<SeriesSummaryDto[]> {
     const client = await this.hongguo.getClient();

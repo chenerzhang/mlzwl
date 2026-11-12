@@ -1,3 +1,6 @@
+// 子路径导入的理由见 `definition-selection.ts`：走 barrel 会把 zod 打进首屏。
+import { COVER_PATH_PREFIX, MAX_COVER_TOKEN_LENGTH, isCoverProxyUrl } from '@mlzwl/hongguo-shared/definitions';
+
 /**
  * 离线目录缓存（P1-7）。
  *
@@ -13,8 +16,14 @@
 
 /** 缓存的目录快照。 */
 export interface CatalogSnapshot {
-  /** 快照格式版本。不匹配时整体丢弃。 */
-  version: 1;
+  /**
+   * 快照格式版本。不匹配时整体丢弃。
+   *
+   * 2：`coverUrl` 只接受本服务的 `/api/cover/<令牌>` 代理地址。版本 1 的存档可能
+   * 带旧格式 `/api/cover?u=<上游签名 URL>`，必须整体作废而不是继续渲染——否则
+   * 上游签名会从 `localStorage` 重新流回 DOM 与网络面板。
+   */
+  version: 2;
   /** 写入时间（毫秒）。 */
   savedAt: number;
   /** 剧集列表。最多 `MAX_ITEMS` 条。 */
@@ -26,8 +35,10 @@ export interface OfflineSeriesSummary {
   id: string;
   title: string;
   /**
-   * 封面地址。保留原样（通常是本服务的 `/api/cover?u=...` 代理地址），
-   * 不做 URL 格式校验：开发期可能是相对路径。
+   * 封面地址，必须是本服务的 `/api/cover/<令牌>` 代理地址。
+   *
+   * 不接受上游直链，也不接受旧格式 `/api/cover?u=`：两者都会把上游签名带进
+   * 页面。校验规则见 shared 的 `isCoverProxyUrl`。
    */
   coverUrl?: string | undefined;
   description?: string | undefined;
@@ -42,8 +53,17 @@ export const MAX_ITEMS = 30;
 export const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** `description` 截断长度。 */
 export const MAX_DESCRIPTION_LENGTH = 1500;
-/** `coverUrl` 截断长度。封面代理地址带上游 URL，留足余量但不允许无限长。 */
-export const MAX_COVER_URL_LENGTH = 2048;
+/**
+ * `coverUrl` 长度上限。
+ *
+ * 直接取 shared 的 `MAX_COVER_TOKEN_LENGTH` 加上路径前缀长度：这个值同时是
+ * 服务端 Fastify `maxParamLength` 的上限。**不要在这里另写字面量**——曾经
+ * 前端允许 4096、服务端只收 2048，超过的令牌浏览器稳定 414。
+ *
+ * **不允许截断**：截断后的令牌解不开，请求必然 400，得到一张永远坏掉的封面。
+ * 超长时整个 `coverUrl` 丢掉，让卡片退化成纯文字，而不是留一个坏地址。
+ */
+export const MAX_COVER_URL_LENGTH = COVER_PATH_PREFIX.length + MAX_COVER_TOKEN_LENGTH;
 
 /** 上游剧集 id 是纯数字，最长 30 位。 */
 const SERIES_ID_PATTERN = /^[0-9]{1,30}$/;
@@ -68,8 +88,14 @@ export function toSnapshotItems(items: readonly OfflineSeriesSummary[]): Offline
       continue;
     }
     const summary: OfflineSeriesSummary = { id: item.id, title: item.title };
-    if (item.coverUrl !== undefined) {
-      summary.coverUrl = item.coverUrl.slice(0, MAX_COVER_URL_LENGTH);
+    /*
+      写路径必须和读路径（`parseItem`）用同一套校验：只收代理地址。
+      只查长度是不够的——旧格式 `/api/cover?u=<上游签名 URL>` 长度也合法，
+      写进 version 2 之后要到下次读取才整份作废，期间签名一直留在 localStorage。
+      超长同样丢掉整个地址，绝不截断：截断后的令牌无法解密，只会留下坏封面。
+    */
+    if (item.coverUrl !== undefined && item.coverUrl.length <= MAX_COVER_URL_LENGTH && isCoverProxyUrl(item.coverUrl)) {
+      summary.coverUrl = item.coverUrl;
     }
     if (item.description !== undefined) {
       summary.description = item.description.slice(0, MAX_DESCRIPTION_LENGTH);
@@ -106,8 +132,8 @@ export function parseSnapshot(raw: string | null, now: number): CatalogSnapshot 
     return null;
   }
   const record = parsed as Record<string, unknown>;
-  // 版本必须严格等于 1：将来改格式时旧存档整体失效，而不是被半读半猜。
-  if (record['version'] !== 1) {
+  // 版本必须严格等于 2：旧存档（含带签名的 `coverUrl`）整体失效，而不是被半读半猜。
+  if (record['version'] !== 2) {
     return null;
   }
   const savedAt = record['savedAt'];
@@ -133,7 +159,7 @@ export function parseSnapshot(raw: string | null, now: number): CatalogSnapshot 
     }
     items.push(item);
   }
-  return { version: 1, savedAt, items };
+  return { version: 2, savedAt, items };
 }
 
 /** 校验单条摘要。任何字段不合法都返回 null。 */
@@ -155,6 +181,10 @@ function parseItem(value: unknown): OfflineSeriesSummary | null {
   const coverUrl = record['coverUrl'];
   if (coverUrl !== undefined) {
     if (typeof coverUrl !== 'string' || coverUrl.length > MAX_COVER_URL_LENGTH) {
+      return null;
+    }
+    // 只接受代理地址：上游直链和旧 `?u=` 格式都会把签名带进页面。
+    if (!isCoverProxyUrl(coverUrl)) {
       return null;
     }
     item.coverUrl = coverUrl;

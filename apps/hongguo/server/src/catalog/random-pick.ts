@@ -81,8 +81,8 @@ export function toRandomCandidates(rows: readonly RankRow[]): RankCandidate[] {
       continue;
     }
     seen.add(seriesId);
-    // `cover_url` 不是字符串时整个键丢掉，而不是转成字符串：`proxyUrl` 会对它做
-    // `encodeURIComponent`，数字会被静默变成 `/api/cover?u=123`，得到一个必定 404 的封面。
+    // `cover_url` 不是字符串时整个键丢掉，而不是转成字符串：`proxyUrl` 会把它封成
+    // 令牌，数字会被静默封成一个必定 404 的封面地址。
     const coverUrl = typeof row.cover_url === 'string' ? row.cover_url : undefined;
     candidates.push({
       seriesId,

@@ -1,4 +1,6 @@
 import type { FollowRecord, FollowState } from '@mlzwl/hongguo-shared';
+// 子路径导入：barrel 会把 zod 打进首屏（见 `definition-selection.ts`）。
+import { isCoverProxyUrl } from '@mlzwl/hongguo-shared/definitions';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createLocalStorageWriteQueue, createQueuedPersistStorage } from '../../lib/write-queue';
@@ -77,7 +79,9 @@ function sanitizeFollowRecord(raw: unknown): FollowRecord | undefined {
     confirmedEpisodes,
     checkedAt: sanitizeCount(raw['checkedAt']),
   };
-  if (typeof coverUrl === 'string' && coverUrl !== '') {
+  // 只接受本服务的代理地址：旧存档里可能还留着 `/api/cover?u=<上游签名 URL>`，
+  // 服务端删掉旧路由不会清掉它，继续用就等于把签名重新送进 DOM。
+  if (typeof coverUrl === 'string' && isCoverProxyUrl(coverUrl)) {
     record.coverUrl = coverUrl;
   }
   return record;
@@ -159,7 +163,8 @@ export const useFollowStore = create<FollowStoreState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 1,
+      /* 版本 2：水合时丢弃不符合 `/api/cover/<令牌>` 形态的 `coverUrl`。 */
+      version: 2,
       storage: createQueuedPersistStorage<FollowPersistedState>(followQueue),
       // 旧存档没有版本号（version 0），统一过一遍校验，把坏数据和越界的集数清掉。
       migrate: (persistedState) => sanitizeRecords(persistedState),

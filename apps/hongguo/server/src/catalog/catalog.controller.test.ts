@@ -21,7 +21,7 @@ import type { CatalogService } from './catalog.service.js';
  * 只构造 controller、把 service 换成桩：不启 Nest 容器，不发网络请求。
  */
 
-const SERIES: SeriesSummary = { id: 's1', title: '长生', coverUrl: '/api/cover?u=x' };
+const SERIES: SeriesSummary = { id: 's1', title: '长生', coverUrl: '/api/cover/opaque-token' };
 
 /**
  * 造一个上游错误。

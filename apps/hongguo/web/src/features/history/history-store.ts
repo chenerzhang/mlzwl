@@ -1,11 +1,59 @@
+// 子路径导入：barrel 会把 zod 打进首屏（见 `definition-selection.ts`）。
+import { isCoverProxyUrl } from '@mlzwl/hongguo-shared/definitions';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createLocalStorageWriteQueue, createQueuedPersistStorage } from '../../lib/write-queue';
+
+/**
+ * 丢掉不符合代理形态的 `coverUrl`。
+ *
+ * 只删这个字段，不删整条记录：用户仍需要「继续观看」的进度，一张封面缺失
+ * 只会让卡片退化成纯文字。
+ */
+function sanitizeCoverUrl(entry: WatchEntry): WatchEntry {
+  if (entry.coverUrl === undefined || isCoverProxyUrl(entry.coverUrl)) {
+    return entry;
+  }
+  const { coverUrl: _dropped, ...rest } = entry;
+  return rest;
+}
+
+/**
+ * 清洗整份存档：补 `completed` 默认值，并丢掉不符合代理形态的 `coverUrl`。
+ *
+ * `migrate`（版本不匹配）与 `merge`（版本匹配）都必须走它：zustand 只在版本
+ * 不匹配时调 `migrate`，把清洗只放在那里会漏掉「同版本但被污染」的存档。
+ */
+function sanitizeEntries(persisted: unknown): HistoryPersistedState {
+  if (typeof persisted !== 'object' || persisted === null) {
+    return { entries: {} };
+  }
+  const entries = (persisted as { entries?: unknown }).entries;
+  if (typeof entries !== 'object' || entries === null) {
+    return { entries: {} };
+  }
+  const migrated: Record<string, WatchEntry> = {};
+  for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
+    if (typeof value !== 'object' || value === null) {
+      continue;
+    }
+    const entry = value as WatchEntry;
+    const withFlag: WatchEntry = entry.completed === true ? entry : { ...entry, completed: false };
+    migrated[key] = sanitizeCoverUrl(withFlag);
+  }
+  return { entries: migrated };
+}
 
 /** 一条观看记录。 */
 export interface WatchEntry {
   seriesId: string;
   seriesTitle: string;
+  /**
+   * 封面代理地址。只允许 `/api/cover/<令牌>`。
+   *
+   * 早期版本把上游签名 URL 编进 `/api/cover?u=` 存进这里，服务端删掉旧路由并不会
+   * 清掉这些存档。水合时用 `isCoverProxyUrl` 过滤，带签名的旧值直接丢掉。
+   */
   coverUrl?: string;
   episodeId: string;
   episodeNumber: number;
@@ -126,29 +174,25 @@ export const useHistoryStore = create<HistoryState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 1,
+      /*
+        版本 2：水合时丢弃不符合 `/api/cover/<令牌>` 形态的 `coverUrl`。
+        旧存档里的 `?u=<上游签名 URL>` 必须清掉，否则签名会重新进入 DOM。
+      */
+      version: 2,
       storage: createQueuedPersistStorage<HistoryPersistedState>(historyQueue),
       // 旧存档没有 `completed` 字段（version 0），逐条补 `false`。
       // 这里只做「缺字段补默认」，不校验类型：写队列和 `record()` 是唯一写入路径，
       // 存档形状由本文件自己控制，校验逻辑堆在这里反而会掩盖真实 bug。
-      migrate: (persistedState) => {
-        if (typeof persistedState !== 'object' || persistedState === null) {
-          return { entries: {} };
-        }
-        const entries = (persistedState as { entries?: unknown }).entries;
-        if (typeof entries !== 'object' || entries === null) {
-          return { entries: {} };
-        }
-        const migrated: Record<string, WatchEntry> = {};
-        for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
-          if (typeof value !== 'object' || value === null) {
-            continue;
-          }
-          const entry = value as WatchEntry;
-          migrated[key] = entry.completed === true ? entry : { ...entry, completed: false };
-        }
-        return { entries: migrated };
-      },
+      migrate: (persistedState) => sanitizeEntries(persistedState),
+      /*
+        版本号相同时 zustand **不会**调 `migrate`，直接走默认浅合并。也就是说
+        version 2 的存档若被手改、被别的写入路径污染，`coverUrl` 会原样水合。
+        因此清洗必须同时挂在 `merge` 上：水合路径只有一条，能漏的只有这里。
+      */
+      merge: (persistedState, currentState) => ({
+        ...currentState,
+        ...sanitizeEntries(persistedState),
+      }),
     },
   ),
 );

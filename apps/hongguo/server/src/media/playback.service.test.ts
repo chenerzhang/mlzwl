@@ -49,6 +49,47 @@ describe('PlaybackService capture cleanup', () => {
   });
 });
 
+/**
+ * 显式指定档位时必须精确命中。
+ *
+ * 可用档位是**逐集**算的。详情页只知道「第一集有 1080p」，别的集未必有；
+ * 若服务端在匹配不到时静默回退（`pickStream` 的默认行为），用户会以为
+ * 1080p 下载成功，实际拿到 720p 却带着 `-1080p.mp4` 的名字。
+ */
+describe('PlaybackService definition matching', () => {
+  function serviceWith(streams: Stream[]): PlaybackService {
+    // 必须带 `url`：`resolve` 会先过滤掉没有地址的流，否则直接报 `no_stream`。
+    const playable = streams.map((item) => ({ ...item, url: `https://example.invalid/${item.definition}.mp4` }));
+    const result = {
+      playback: { episode_id: 'episode-1', streams: playable },
+      contentKey: { key: '0123456789abcdef0123456789abcdef', version: '1' },
+    } as unknown as PlaybackResult;
+    const hongguo = {
+      getClient: async () => ({ resolvePlayback: async () => result }),
+    } as unknown as HongguoService;
+    return new PlaybackService(hongguo, { takeKey: vi.fn(), clearKey: vi.fn() } as unknown as VideoModelCapture);
+  }
+
+  it('returns the exact stream when the definition exists', async () => {
+    const resolved = await serviceWith(LANDSCAPE).resolve('episode-1', '1080p');
+    expect(resolved.stream.definition).toBe('1080p');
+    expect(resolved.availableDefinitions).toEqual(['360p', '720p', '1080p']);
+  });
+
+  it('rejects a definition this episode does not have instead of silently downgrading', async () => {
+    const only = [stream('360p', 640, 360), stream('720p', 1280, 720)];
+    // 关键：不是返回 720p，而是明确报错。
+    await expect(serviceWith(only).resolve('episode-1', '1080p')).rejects.toMatchObject({
+      reason: 'definition_unavailable',
+    });
+  });
+
+  it('still auto-picks when no definition is requested', async () => {
+    const resolved = await serviceWith(LANDSCAPE).resolve('episode-1');
+    expect(resolved.stream.definition).toBe('720p');
+  });
+});
+
 describe('resolutionOf', () => {
   it('uses the short side for landscape streams', () => {
     expect(resolutionOf(stream('720p', 1280, 720))).toBe(720);

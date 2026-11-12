@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prefetchMedia } from './prefetch-next';
+import { pickPrefetchTarget, prefetchMedia } from './prefetch-next';
 
 /**
  * 下一集预热请求器的测试。
@@ -92,5 +92,30 @@ describe('prefetchMedia', () => {
       true,
     );
     expect(cancelled).toBe(true);
+  });
+});
+
+describe('pickPrefetchTarget', () => {
+  const base = { episodeId: 'e2', definition: '720p', streamUrl: '/api/media/e2?definition=720p' };
+  const target1080 = { episodeId: 'e2', streamUrl: '/api/media/e2?definition=1080p' };
+
+  it('never falls back to the default definition while the chosen one is still loading', () => {
+    // 记住 1080p、下一集默认 720p：目标档还没到时必须不预热。
+    // 若这里退回 base，服务端会先完整下载 720p，切集后再下载 1080p。
+    expect(pickPrefetchTarget(base, '1080p', undefined)).toBeUndefined();
+  });
+
+  it('prefetches the chosen definition once it is available', () => {
+    expect(pickPrefetchTarget(base, '1080p', target1080)).toBe(target1080);
+  });
+
+  it('prefetches the default definition when it already matches the choice', () => {
+    expect(pickPrefetchTarget(base, '720p', undefined)).toBe(base);
+    // 没有记住的档位时沿用默认档。
+    expect(pickPrefetchTarget(base, undefined, undefined)).toBe(base);
+  });
+
+  it('does nothing before the default playback response arrives', () => {
+    expect(pickPrefetchTarget(undefined, '1080p', target1080)).toBeUndefined();
   });
 });

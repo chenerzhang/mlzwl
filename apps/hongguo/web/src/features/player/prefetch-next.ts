@@ -35,3 +35,42 @@ export async function prefetchMedia(options: PrefetchOptions): Promise<boolean> 
     return false;
   }
 }
+
+/** 预热目标：`episodeId` 用于「同一集只预热一次」的去重。 */
+export interface PrefetchTarget {
+  episodeId: string;
+  streamUrl: string;
+}
+
+/** 下一集的默认档播放信息。 */
+export interface PrefetchBase extends PrefetchTarget {
+  definition?: string | undefined;
+}
+
+/**
+ * 选出预热要用的播放信息。
+ *
+ * 规则：预热必须用**用户真正会看的那一档**。拿默认档预热会白烧一倍流量——
+ * 服务端在响应前就完成整集下载 + 解密，预热默认档 720p、切集后又按记住的
+ * 1080p 再拉一遍，同一集下载两次。
+ *
+ * 因此目标档还没到（`target` 为 `undefined`）时返回 `undefined`，让调用方这一帧
+ * 不预热；**绝不退回默认档**。预热是纯优化，晚一拍没有代价。
+ *
+ * @param base 下一集的默认档播放信息。
+ * @param chosen 按 `chooseDefinition` 算出的目标档；`undefined` 表示沿用默认档。
+ * @param target 目标档的播放信息，仅在目标档与默认档不同时才会有。
+ */
+export function pickPrefetchTarget(
+  base: PrefetchBase | undefined,
+  chosen: string | undefined,
+  target: PrefetchTarget | undefined,
+): PrefetchTarget | undefined {
+  if (base === undefined) {
+    return undefined;
+  }
+  if (chosen === undefined || chosen === base.definition) {
+    return base;
+  }
+  return target;
+}

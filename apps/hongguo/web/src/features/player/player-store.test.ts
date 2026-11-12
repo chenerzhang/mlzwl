@@ -124,3 +124,87 @@ describe('usePlayerStore', () => {
     expect(usePlayerStore.getState().muted).toBe(true);
   });
 });
+
+/**
+ * 清晰度偏好的落盘与清洗。
+ *
+ * 档位来自上游，随时可能变；存档里出现脏值时必须回落到「自动」，
+ * 不能把一个不存在的档位发给服务端（那会 400 或静默返回别的档）。
+ */
+describe('definition preference', () => {
+  it('keeps a valid definition across sanitize', () => {
+    expect(sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, definition: '1080p' }).definition).toBe(
+      '1080p',
+    );
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, definition: ' 720p ' }).definition).toBe(
+      '720p',
+    );
+  });
+
+  it('drops non-strings, blanks, control characters and over-long labels', () => {
+    for (const definition of [42, null, '', '   ', 'a\u0000b', 'a'.repeat(33), {}, ['1080p']]) {
+      expect(sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, definition }).definition).toBeUndefined();
+    }
+  });
+
+  it('omits the key entirely when absent so the object stays minimal', () => {
+    // `exactOptionalPropertyTypes` 下 `definition: undefined` 不是合法形态，
+    // 必须是「键不存在」。
+    expect('definition' in sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1 })).toBe(false);
+  });
+
+  it('setDefinition stores a valid label and can clear it back to auto', () => {
+    usePlayerStore.getState().setDefinition('540p');
+    expect(usePlayerStore.getState().definition).toBe('540p');
+
+    // 传 undefined 表示「回到自动」，必须能真的删掉键。
+    usePlayerStore.getState().setDefinition(undefined);
+    expect('definition' in usePlayerStore.getState()).toBe(false);
+  });
+
+  it('setDefinition rejects an invalid label but still clears', () => {
+    usePlayerStore.getState().setDefinition('720p');
+    usePlayerStore.getState().setDefinition('');
+    expect('definition' in usePlayerStore.getState()).toBe(false);
+  });
+});
+
+/**
+ * 下载档位偏好与播放档位偏好必须彼此独立。
+ *
+ * 用户常见诉求是「在线看低档省流量、下载留最高档」，两者共用一个字段会让这个
+ * 组合无法表达。
+ */
+describe('download definition preference', () => {
+  it('persists separately from the playback definition', () => {
+    usePlayerStore.getState().setDefinition('480p');
+    usePlayerStore.getState().setDownloadDefinition('1080p');
+
+    expect(usePlayerStore.getState().definition).toBe('480p');
+    expect(usePlayerStore.getState().downloadDefinition).toBe('1080p');
+  });
+
+  it('sanitizes the download label the same way as the playback one', () => {
+    expect(sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, downloadDefinition: ' 720p ' })).toEqual({
+      volume: 1,
+      muted: false,
+      speed: 1,
+      downloadDefinition: '720p',
+    });
+    expect(
+      'downloadDefinition' in
+        sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, downloadDefinition: 'a\u0000b' }),
+    ).toBe(false);
+  });
+
+  it('can clear the download choice back to "highest available"', () => {
+    usePlayerStore.getState().setDownloadDefinition('720p');
+    expect(usePlayerStore.getState().downloadDefinition).toBe('720p');
+
+    usePlayerStore.getState().setDownloadDefinition(undefined);
+    expect('downloadDefinition' in usePlayerStore.getState()).toBe(false);
+  });
+});

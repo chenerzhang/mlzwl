@@ -1,4 +1,4 @@
-import type { DownloadEntry } from './download-state';
+import { activeEntry, entryFor, type DownloadEntries } from './download-state';
 
 /** 全选框的三态。`partial` 对应 HTML 的 `indeterminate`。 */
 export type SelectionState = 'none' | 'partial' | 'all';
@@ -62,8 +62,16 @@ export function toggleAllEpisodes(selected: ReadonlySet<string>, episodeIds: rea
 export function selectBatchTargets(
   selected: ReadonlySet<string>,
   availableIds: readonly string[],
-  entries: Record<string, DownloadEntry>,
+  entries: DownloadEntries,
   queued: ReadonlySet<string>,
+  /**
+   * 当前要下载的档位。
+   *
+   * 必须传：同一集的不同档是两份文件（`123-1080p.mp4` / `123-360p.mp4`），
+   * 已下载 1080p 不代表 360p 也下过了。不传档位时「已下载」会让用户切档后
+   * 再也提交不了这一集。
+   */
+  definition?: string,
 ): string[] {
   const available = new Set(availableIds);
   const targets: string[] = [];
@@ -74,8 +82,19 @@ export function selectBatchTargets(
     if (queued.has(episodeId)) {
       continue;
     }
-    const status = entries[episodeId]?.status;
-    if (status === 'done' || status === 'downloading') {
+    /*
+      队列按集号去重，同一集同一时刻只跑一个任务。因此「这一档空闲」不等于
+      「可以提交」：1080p 正在下载时切到 360p，360p 桶是 `idle`，但入队会被
+      `DownloadQueue.enqueue()` 静默拒绝（返回 `false`），界面却已经把选择清空了，
+      用户看到的是「点了没反应」。
+
+      所以先按集判断有没有任一档在跑，再看这一档是否已完成。
+    */
+    if (activeEntry(entries, episodeId) !== undefined) {
+      continue;
+    }
+    // 只看**这一档**的记录：别的档已完成不影响本档。
+    if (entryFor(entries, episodeId, definition).status === 'done') {
       continue;
     }
     targets.push(episodeId);

@@ -7,6 +7,8 @@ const STATUS_BY_CODE: Record<MediaErrorCode, number> = {
   // 剧集层面的确定性失败：重试也拿不到。
   no_stream: 404,
   not_encrypted: 404,
+  // 档位不存在是**调用方指定了不存在的档**，属于请求问题。
+  definition_unavailable: 400,
   // 密钥来自上游，拿不到算上游问题。
   key_unavailable: 502,
   media_timeout: 504,

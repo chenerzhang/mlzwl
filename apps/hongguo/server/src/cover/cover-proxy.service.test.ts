@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, truncate, utimes, writeFile } from '
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { COVER_PATH_PREFIX, MAX_COVER_TOKEN_LENGTH } from '@mlzwl/hongguo-shared/definitions';
 import type { Config } from '../config/config.js';
 import {
   COVER_MAX_BYTES,
@@ -13,6 +14,7 @@ import {
   isPrivateHost,
 } from './cover-proxy.service.js';
 import { CoverController } from './cover.controller.js';
+import { CoverTokenCodec } from './cover-token.js';
 import { SpriteController } from './sprite.controller.js';
 import type { SpriteService } from '../media/sprite.service.js';
 
@@ -59,6 +61,14 @@ function testConfig(dataDir: string, overrides: Partial<Config> = {}): Config {
     LOG_TO_FILE: false,
     ...overrides,
   };
+}
+
+/** 测试用的固定密钥编解码器：不落盘，避免测试互相污染 `DATA_DIR`。 */
+const testCodec = CoverTokenCodec.fromKey(Buffer.alloc(32, 7));
+
+/** 构造带令牌编解码器的服务。 */
+function makeService(config: Config): CoverProxyService {
+  return new CoverProxyService(config, testCodec);
 }
 
 /** 与 `fetchJpeg` 的键规则一致：不带 `w` 时就是 URL 的 sha256。 */
@@ -122,11 +132,12 @@ async function setAge(file: string, daysAgo: number): Promise<void> {
 describe('cover and sprite controller error responses', () => {
   it('redacts unavailable cover errors while preserving status and code', async () => {
     const covers = {
+      resolveToken: vi.fn(() => `${CDN}/image`),
       fetchJpeg: vi.fn(() => Promise.reject(new Error(SENSITIVE_MESSAGE))),
     } as unknown as CoverProxyService;
     const reply = replyStub();
 
-    await new CoverController(covers).cover({ u: `${CDN}/image` }, reply as never);
+    await new CoverController(covers).cover('token', reply as never);
 
     expect(reply.status).toBe(502);
     expect(reply.body).toMatchObject({ error: 'cover_unavailable' });
@@ -135,11 +146,12 @@ describe('cover and sprite controller error responses', () => {
 
   it('redacts rejected cover URLs while preserving status and code', async () => {
     const covers = {
+      resolveToken: vi.fn(() => `${CDN}/image`),
       fetchJpeg: vi.fn(() => Promise.reject(new CoverUrlRejectedError(SENSITIVE_MESSAGE))),
     } as unknown as CoverProxyService;
     const reply = replyStub();
 
-    await new CoverController(covers).cover({ u: `${CDN}/image` }, reply as never);
+    await new CoverController(covers).cover('token', reply as never);
 
     expect(reply.status).toBe(400);
     expect(reply.body).toMatchObject({ error: 'cover_url_rejected' });
@@ -169,7 +181,7 @@ describe('CoverProxyService cache hit', () => {
     await writeFile(file, JPEG);
     const fetchStub = stubFetch();
 
-    const { buffer } = await new CoverProxyService(testConfig(dir)).fetchJpeg(url);
+    const { buffer } = await makeService(testConfig(dir)).fetchJpeg(url);
 
     expect(buffer.equals(JPEG)).toBe(true);
     expect(fetchStub.calls()).toBe(0);
@@ -184,7 +196,7 @@ describe('CoverProxyService cache hit', () => {
     await setAge(file, 20);
     stubFetch();
 
-    await new CoverProxyService(testConfig(dir)).fetchJpeg(url);
+    await makeService(testConfig(dir)).fetchJpeg(url);
 
     const info = await stat(file);
     expect(Date.now() - info.mtimeMs).toBeLessThan(60_000);
@@ -205,7 +217,7 @@ describe('CoverProxyService eviction', () => {
     stubFetch();
 
     const written = `${CDN}/new.jpg`;
-    await new CoverProxyService(testConfig(dir, { COVER_KEEP_DAYS: 30 })).fetchJpeg(written);
+    await makeService(testConfig(dir, { COVER_KEEP_DAYS: 30 })).fetchJpeg(written);
 
     const names = await readdir(covers);
     expect(names).not.toContain('stale.jpg');
@@ -225,7 +237,7 @@ describe('CoverProxyService eviction', () => {
     }
     stubFetch();
 
-    await new CoverProxyService(testConfig(dir)).fetchJpeg(`${CDN}/overflow.jpg`);
+    await makeService(testConfig(dir)).fetchJpeg(`${CDN}/overflow.jpg`);
 
     const names = await readdir(covers);
     expect(names).toHaveLength(COVER_MAX_FILES);
@@ -248,7 +260,7 @@ describe('CoverProxyService eviction', () => {
     }
     stubFetch();
 
-    await new CoverProxyService(testConfig(dir)).fetchJpeg(`${CDN}/byte-cap.jpg`);
+    await makeService(testConfig(dir)).fetchJpeg(`${CDN}/byte-cap.jpg`);
 
     const names = await readdir(covers);
     const sizes = await Promise.all(names.map((name) => stat(join(covers, name))));
@@ -261,7 +273,7 @@ describe('CoverProxyService eviction', () => {
   it('still returns the bytes when eviction itself fails', async () => {
     const dir = await tempDir();
     stubFetch();
-    const service = new CoverProxyService(testConfig(dir));
+    const service = makeService(testConfig(dir));
     // 制造一个真实的不可删文件在测试环境不可靠（root 能删任何东西），所以直接让
     // `evict` reject：测的是 `produce()` 对清理失败的处理，不是 `evict` 自身的健壮性。
     const evict = vi.spyOn(service as unknown as { evict(dir: string): Promise<void> }, 'evict');
@@ -283,7 +295,7 @@ describe('CoverProxyService eviction', () => {
  */
 describe('CoverProxyService external URL safety', () => {
   it('rejects URLs carrying credentials', () => {
-    const service = new CoverProxyService(testConfig('/tmp/unused'));
+    const service = makeService(testConfig('/tmp/unused'));
     expect(service.isAllowed(`https://user:pass@p3-reading-sign.fqnovelpic.com/a.jpg`)).toBe(false);
     expect(service.isAllowed(`https://user@p3-reading-sign.fqnovelpic.com/a.jpg`)).toBe(false);
     expect(service.isAllowed(`${CDN}/a.jpg`)).toBe(true);
@@ -341,7 +353,7 @@ describe('CoverProxyService external URL safety', () => {
       seenRedirect = init.redirect;
       return new Response(JPEG, { status: 200, headers: { 'content-type': 'image/jpeg' } });
     });
-    const service = new CoverProxyService(testConfig(dir));
+    const service = makeService(testConfig(dir));
 
     await service.fetchJpeg(`${CDN}/no-redirect.jpg`);
 
@@ -357,7 +369,7 @@ describe('CoverProxyService external URL safety', () => {
         headers: { 'content-length': String(COVER_MAX_SOURCE_BYTES + 1), 'content-type': 'image/jpeg' },
       });
     });
-    const service = new CoverProxyService(testConfig(dir));
+    const service = makeService(testConfig(dir));
 
     await expect(service.fetchJpeg(`${CDN}/too-large.jpg`)).rejects.toThrow(/too large/);
   });
@@ -378,7 +390,7 @@ describe('CoverProxyService external URL safety', () => {
       });
       return new Response(stream, { status: 200, headers: { 'content-type': 'image/jpeg' } });
     });
-    const service = new CoverProxyService(testConfig(dir));
+    const service = makeService(testConfig(dir));
 
     await expect(service.fetchJpeg(`${CDN}/streamed-large.jpg`)).rejects.toThrow(/too large/);
   });
@@ -386,7 +398,7 @@ describe('CoverProxyService external URL safety', () => {
   it('rejects an empty body instead of caching a zero-byte jpeg', async () => {
     const dir = await tempDir();
     vi.stubGlobal('fetch', async () => new Response(null, { status: 200, headers: { 'content-type': 'image/jpeg' } }));
-    const service = new CoverProxyService(testConfig(dir));
+    const service = makeService(testConfig(dir));
 
     await expect(service.fetchJpeg(`${CDN}/empty.jpg`)).rejects.toThrow(/empty body/);
     // 关键：不能留下一个 0 字节的缓存文件，否则它会一直返回到过期。
@@ -402,8 +414,109 @@ describe('CoverProxyService external URL safety', () => {
         init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       });
     });
-    const service = new CoverProxyService(testConfig(dir, { UPSTREAM_TIMEOUT_MS: 1_000 }));
+    const service = makeService(testConfig(dir, { UPSTREAM_TIMEOUT_MS: 1_000 }));
 
     await expect(service.fetchJpeg(`${CDN}/never.jpg`)).rejects.toThrow();
   }, 10_000);
+});
+
+/**
+ * 令牌化契约。
+ *
+ * 本模块存在的唯一理由：上游是签名 URL，`x-signature` 就在查询串里，
+ * 把上游 URL 放进浏览器可见的任何位置都等于把签名交给客户端。
+ * 这些断言必须在服务层守住，而不是只靠 controller。
+ */
+describe('cover token contract', () => {
+  it('proxyUrl returns an opaque path that leaks neither host nor signature', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    const upstream = `${CDN}/novel-pic/a.heic?lk3s=64477e16&x-expires=1799667985&x-signature=SECRET%3D`;
+    const url = service.proxyUrl(upstream);
+    // 正常长度的上游地址必须能封成令牌；返回 `undefined` 说明长度校验把合法输入也拒了。
+    expect(url).toBeDefined();
+    if (url === undefined) {
+      throw new Error('proxyUrl returned undefined for a normal upstream URL');
+    }
+
+    expect(url.startsWith('/api/cover/')).toBe(true);
+    // 旧实现把 URL 编码后直接放进查询串，这两个断言会直接失败。
+    expect(url).not.toContain('?u=');
+    expect(url).not.toContain('fqnovelpic');
+    expect(url).not.toContain('x-signature');
+    expect(url).not.toContain('SECRET');
+    // 令牌是 base64url，本身不需要再编码就能进路径段。
+    const token = url.slice('/api/cover/'.length);
+    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(encodeURIComponent(token)).toBe(token);
+  });
+
+  it('resolveToken restores the exact upstream URL', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    const upstream = `${CDN}/x.heic?x-signature=abc`;
+    const url = service.proxyUrl(upstream);
+    expect(url).toBeDefined();
+    const token = (url ?? '').slice('/api/cover/'.length);
+
+    expect(service.resolveToken(token)).toBe(upstream);
+  });
+
+  it('resolveToken returns null for tampered or garbage tokens', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    const token = (service.proxyUrl(`${CDN}/y.heic`) ?? '').slice('/api/cover/'.length);
+    const raw = Buffer.from(token, 'base64url');
+    raw[raw.length - 1] = (raw[raw.length - 1] ?? 0) ^ 0xff;
+
+    expect(service.resolveToken(raw.toString('base64url'))).toBeNull();
+    expect(service.resolveToken('')).toBeNull();
+    expect(service.resolveToken('not-a-token')).toBeNull();
+  });
+
+  it('a token from another key cannot be opened', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    const foreign = CoverTokenCodec.fromKey(Buffer.alloc(32, 200));
+    const token = foreign.seal(`${CDN}/z.heic`);
+
+    expect(service.resolveToken(token)).toBeNull();
+  });
+});
+
+describe('cover token length boundary', () => {
+  it('omits the cover URL when the upstream URL would produce an oversized token', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    // 足够长、且仍是合法 URL 的上游地址：令牌会超过 `MAX_COVER_TOKEN_LENGTH`。
+    const huge = `${CDN}/${'a'.repeat(MAX_COVER_TOKEN_LENGTH)}`;
+
+    // 必须返回 `undefined`，而不是一个 Fastify 会在进入控制器前就 414 拒掉的地址。
+    expect(service.proxyUrl(huge)).toBeUndefined();
+  });
+
+  it('still returns a URL for the longest upstream URL the offline snapshot allows', () => {
+    const service = makeService(testConfig('/tmp/unused'));
+    // 离线快照按 `MAX_COVER_URL_LENGTH` 判断封面地址长度；这里验证生成端不会
+    // 在这条边界之内提前放弃，否则「快照允许保存」与「接口能生成」会不一致。
+    const longest = `${CDN}/${'a'.repeat(3072)}`;
+    const url = service.proxyUrl(longest);
+
+    expect(url).toBeDefined();
+    // 生成端与消费端同源：代理地址长度不得超过「前缀 + 令牌上限」。
+    expect((url ?? '').length).toBeLessThanOrEqual(COVER_PATH_PREFIX.length + MAX_COVER_TOKEN_LENGTH);
+  });
+});
+
+describe('cover controller token handling', () => {
+  it('returns 400 cover_token_invalid for an invalid token and never calls fetchJpeg', async () => {
+    const fetchJpeg = vi.fn();
+    const covers = {
+      resolveToken: vi.fn(() => null),
+      fetchJpeg,
+    } as unknown as CoverProxyService;
+    const reply = replyStub();
+
+    await new CoverController(covers).cover('garbage', reply as never);
+
+    expect(reply.status).toBe(400);
+    expect(reply.body).toMatchObject({ error: 'cover_token_invalid' });
+    // 令牌无效时绝不能发起上游请求。
+    expect(fetchJpeg).not.toHaveBeenCalled();
+  });
 });
