@@ -127,8 +127,7 @@ describe('toRandomCandidates', () => {
   });
 
   it('drops a non-string cover_url instead of coercing it', () => {
-    // `proxyUrl` 会 `encodeURIComponent`，数字会被静默变成 `/api/cover?u=123`，
-    // 得到一个必定 404 的封面。
+    // 数字会被静默转成字符串再封成令牌，得到一个指向不存在资源的封面。
     const dirty = [{ series_id: '1', title: '长生', cover_url: 123 }] as unknown as Parameters<
       typeof toRandomCandidates
     >[0];

@@ -603,9 +603,9 @@ apiVersion, deviceRegistered }`。**不**探测真实上游内容（避免额外
      `series_id?: string` 不代表线上真的给字符串。给数字时直接 `.trim()` 会抛
      `TypeError`，整个 `/api/random` 变成 500——而这只是一个候选行不合格。
      非字符串的 `cover_url` 也整个键丢掉，不转成字符串（否则会静默变成
-     `/api/cover?u=123`，得到一个必定 404 的封面）。
+     一个必定 404 的封面地址）。
   4. **封面必须走 `CatalogMapper.toSeriesSummary`**，让上游 CDN 直链被改写成
-     `/api/cover?u=` 白名单代理地址。这是本项目的核心安全契约，不能手工拼 DTO。
+     `/api/cover/<token>` 白名单代理地址。这是本项目的核心安全契约，不能手工拼 DTO。
   5. **空池返回 404 + `{ code: 'no_random' }`，不是 200 + `null`**：前端 `request()`
      把 2xx 响应体直接当成功值，`null` 会一路传到 `navigate('/series/null')`，
      得到一个能渲染但永远播不了的详情页，且没有任何错误提示。

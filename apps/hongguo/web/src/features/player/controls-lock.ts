@@ -11,7 +11,7 @@
  */
 
 /** 锁的来源。每个来源在同一时刻只算一次。 */
-export type LockSource = 'hover' | 'scrub' | 'long-press' | 'speed-menu' | 'volume';
+export type LockSource = 'hover' | 'scrub' | 'long-press' | 'speed-menu' | 'volume' | 'definition-menu';
 
 /** 加一个锁源，返回新的集合（不修改入参）。重复添加是幂等的。 */
 export function withLock(locks: ReadonlySet<LockSource>, source: LockSource): Set<LockSource> {

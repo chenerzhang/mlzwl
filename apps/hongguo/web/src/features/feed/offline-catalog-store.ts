@@ -66,7 +66,7 @@ export function writeCatalogSnapshot(items: readonly OfflineSeriesSummary[], now
     // 没有可展示的条目，写了也只会让下次启动显示空列表。
     return;
   }
-  const raw = serializeSnapshot({ version: 1, savedAt: now, items: snapshotItems });
+  const raw = serializeSnapshot({ version: 2, savedAt: now, items: snapshotItems });
   if (raw === null) {
     return;
   }

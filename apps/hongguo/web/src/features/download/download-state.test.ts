@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   describeDownloadFailure,
+  activeEntry,
+  entryFor,
   formatBytes,
+  initialEntry,
   parseContentLength,
   progressPercent,
+  withEntry,
+  type DownloadEntries,
   type DownloadEntry,
 } from './download-state';
 
@@ -69,5 +74,40 @@ describe('formatBytes', () => {
     expect(formatBytes(1023)).toBe('1023 B');
     expect(formatBytes(1024)).toBe('1.0 KB');
     expect(formatBytes(19_098_824)).toBe('18.2 MB');
+  });
+});
+
+describe('entryFor / withEntry', () => {
+  it('keeps one record per definition instead of overwriting the episode', () => {
+    // 1080p 与 360p 都下完后，两条记录必须同时存在。这是「按档位记账」的核心：
+    // 只按集号存一份时，后完成的档会覆盖先完成的档。
+    let entries: DownloadEntries = {};
+    entries = withEntry(entries, 'ep-1', '1080p', { status: 'done', received: 10, total: 10 });
+    entries = withEntry(entries, 'ep-1', '360p', { status: 'done', received: 5, total: 5 });
+
+    expect(entryFor(entries, 'ep-1', '1080p').status).toBe('done');
+    expect(entryFor(entries, 'ep-1', '360p').status).toBe('done');
+    // 没下过的档仍是初始状态。
+    expect(entryFor(entries, 'ep-1', '540p')).toEqual(initialEntry());
+  });
+
+  it('stores a download without a definition in its own bucket', () => {
+    const entries = withEntry({}, 'ep-1', undefined, { status: 'done', received: 1, total: 1 });
+
+    // `undefined` 档位落在 `auto` 桶里，不与任何真实档位冲突。
+    expect(entryFor(entries, 'ep-1', undefined).status).toBe('done');
+    expect(entryFor(entries, 'ep-1', '360p')).toEqual(initialEntry());
+  });
+
+  it('returns the initial entry for an unknown episode', () => {
+    expect(entryFor({}, 'ep-x', '1080p')).toEqual(initialEntry());
+  });
+
+  it('reports the running download of an episode regardless of definition', () => {
+    const entries = withEntry({}, 'ep-1', '1080p', { status: 'downloading', received: 1, total: 10 });
+
+    // 并发按集算，UI 需要「这一集在跑」而不关心是哪一档。
+    expect(activeEntry(entries, 'ep-1')?.status).toBe('downloading');
+    expect(activeEntry(entries, 'ep-2')).toBeUndefined();
   });
 });

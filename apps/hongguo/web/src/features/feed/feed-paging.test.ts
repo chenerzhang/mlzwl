@@ -11,7 +11,7 @@ function page(ids: readonly string[], cursor: string | null): SeriesPage {
 }
 
 const snapshot: CatalogSnapshot = {
-  version: 1,
+  version: 2,
   savedAt: 1,
   items: [{ id: '1', title: '短剧 1' }],
 };

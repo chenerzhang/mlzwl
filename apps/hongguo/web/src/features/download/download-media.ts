@@ -1,3 +1,4 @@
+import { buildDownloadFilename, buildDownloadUrl } from './download-media-url';
 import { parseContentLength } from './download-state';
 
 export interface DownloadProgress {
@@ -7,6 +8,13 @@ export interface DownloadProgress {
 
 export interface DownloadEpisodeOptions {
   episodeId: string;
+  /**
+   * 目标清晰度。
+   *
+   * 省略时由服务端走默认选档。带了档位就必须同时进地址与文件名：只改地址会让
+   * 不同档位互相覆盖同一个文件，只改文件名会下载到错的流。
+   */
+  definition?: string;
   signal: AbortSignal;
   onProgress: (progress: DownloadProgress) => void;
 }
@@ -14,22 +22,35 @@ export interface DownloadEpisodeOptions {
 /** 从同源媒体接口流式下载单集，避免接触或暴露任何上游地址。 */
 export async function downloadEpisode({
   episodeId,
+  definition,
   signal,
   onProgress,
 }: DownloadEpisodeOptions): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch(`/api/media/${encodeURIComponent(episodeId)}`, { signal });
+  const response = await fetch(buildDownloadUrl(episodeId, definition), { signal });
   if (!response.ok) {
     let message: string | undefined;
+    let code: string | undefined;
     try {
       const body: unknown = await response.json();
-      if (typeof body === 'object' && body !== null && 'message' in body && typeof body.message === 'string') {
-        message = body.message;
+      if (typeof body === 'object' && body !== null) {
+        if ('message' in body && typeof body.message === 'string') {
+          message = body.message;
+        }
+        if ('code' in body && typeof body.code === 'string') {
+          code = body.code;
+        }
       }
     } catch {
       // 非 JSON 错误响应交给下面的 HTTP 状态兜底。
     }
     // 读取错误体时也可能收到取消，不能把它误报成 HTTP 失败。
     signal.throwIfAborted();
+    // 档位不存在要给**用户能懂**的解释：服务端的 message 是英文诊断文本，
+    // 直接展示会变成一句看不懂的话。可用档位是逐集算的，所以「别的集有
+    // 1080p、这一集没有」是正常情况，不是 bug。
+    if (code === 'definition_unavailable') {
+      throw new Error('这一集没有所选清晰度，换一档再试');
+    }
     throw new Error(message?.trim() === '' || message === undefined ? `下载失败（HTTP ${response.status}）` : message);
   }
 
@@ -58,7 +79,7 @@ export async function downloadEpisode({
   signal.throwIfAborted();
   return {
     blob: new Blob(chunks, { type: 'video/mp4' }),
-    filename: `${episodeId}.mp4`,
+    filename: buildDownloadFilename(episodeId, definition),
   };
 }
 

@@ -208,7 +208,8 @@ apps/hongguo/server/src/
 │   └── range.ts                  206 / 416 处理
 ├── cover/                        图片
 │   ├── cover.module.ts
-│   ├── cover.controller.ts       /api/cover?u=
+│   ├── cover.controller.ts       /api/cover/:token
+│   ├── cover-token.ts            AES-256-GCM 令牌封装；密钥落在 DATA_DIR（0600）
 │   ├── cover-proxy.service.ts    HEIC/JPEG 转换、代理与磁盘缓存
 │   ├── sprite.controller.ts      /api/sprite/:episodeId
 │   └── sprite-cache.service.ts   雪碧图转换与磁盘缓存
@@ -317,9 +318,9 @@ async stream(@Param('episodeId') id: string, @Req() req: FastifyRequest, @Res() 
 | `GET` | `/api/ranking/catalog`                 | 榜单目录：分区与榜单 id/名称，缓存 5 分钟                                            |
 | `GET` | `/api/ranking?content=&board=&cursor=` | 榜单条目，游标分页；名次用上游 `position`；非法 board 映射 400 `ranking_unavailable` |
 | `GET` | `/api/series/:id`                      | 剧集详情 + 分集列表                                                                  |
-| `GET` | `/api/episodes/:id/playback`           | 返回自有 `streamUrl`、`spriteUrl`、`duration`，**不含**上游签名与密钥                |
-| `GET` | `/api/media/:episodeId`                | Range 流式播放；同时是下载入口（带 `content-length` 与 `accept-ranges: bytes`）      |
-| `GET` | `/api/cover?u=<encoded>`               | HEIC → JPEG 代理，带缓存                                                             |
+| `GET` | `/api/episodes/:id/playback?definition=` | 返回自有 `streamUrl`、`spriteUrl`、`duration`、`availableDefinitions`，**不含**上游签名与密钥 |
+| `GET` | `/api/media/:episodeId?definition=`    | Range 流式播放；同时是下载入口（带 `content-length` 与 `accept-ranges: bytes`）      |
+| `GET` | `/api/cover/<token>`                    | HEIC → JPEG 代理，带缓存；令牌为上游地址的 AES-GCM 密文                              |
 | `GET` | `/api/sprite/:episodeId?sheet=N`       | 进度条雪碧图，JPEG                                                                   |
 | `GET` | `/api/health`                          | 健康检查：`ok`、上游三态、`apiVersion`、`deviceRegistered`、`uptimeSeconds`          |
 | `GET` | `/api/diagnostics`                     | 诊断：服务端日志最后 200 行（已脱敏）+ 版本 + 运行时长                               |
@@ -327,6 +328,14 @@ async stream(@Param('episodeId') id: string, @Req() req: FastifyRequest, @Res() 
 **约束**：`/api/episodes/:id/playback` 返回的 `streamUrl` 必须指向 `/api/media/:episodeId`。浏览器永远看不到 `qznovelvod.com` 的签名 URL，也拿不到内容密钥。
 
 **下载不新增接口**：单集下载直接用 `GET /api/media/:episodeId`，不带 `definition` 时服务端自动选最佳档。客户端用 `fetch` + `body.getReader()` 流式读，按 `content-length` 算百分比，结束后拼 `Blob` 触发保存。并发上限 2，其余排队，排队项可取消。
+
+**档位规则只有一份**：`shared/src/definitions.ts` 导出 `isRequestableDefinition`（`/^\d{3,4}p$/`）。播放菜单、下载 URL、`PlaybackQuerySchema` 三处都调用它。此前三处各写一套，菜单能选 `unknown`、下载却静默忽略，服务端还会把「不存在的档」静默降级成 720p。
+
+**显式档位必须精确命中**：请求里带了 `definition` 而这一集没有该档时，`PlaybackService` 抛 `definition_unavailable`（HTTP 400），不静默降级。可用档位是**逐集**算的，别的集有 1080p 不代表这一集有；静默降级会让 `-1080p.mp4` 里装着 720p 的内容。
+
+**令牌长度只有一个来源**：`shared/src/definitions.ts` 的 `MAX_COVER_TOKEN_LENGTH = 6144`。`server/src/main.ts` 的 Fastify `maxParamLength`、web 离线快照的 `MAX_COVER_URL_LENGTH` 都从它派生。三处各写字面量已经出过两次事：先是 `maxParamLength` 用默认 100（合法令牌全部 414），后改成 2048 而前端允许 4096（长令牌仍然 414）。
+
+**web 只能 type-only 导入 shared barrel**：`@mlzwl/hongguo-shared` 的 barrel 会连带引入 zod。值导入请走 `@mlzwl/hongguo-shared/definitions` 子路径，否则首屏包从 315 kB 涨到 400 kB（实测）。
 
 **批量下载**不新增接口，也不新增队列：面板里勾选多集后逐集 `enqueue`，队列仍是先来先服务。可提交的集由 `selectBatchTargets` 过滤，跳过已下载、正在下载与排队中的集；不可下载的集（`playable === false`）不进勾选列表。失败的集会被重新提交，所以批量提交本身就是批量重试的入口。全选框三态（未选/部分/全选）的 `indeterminate` 只能通过 DOM 属性设置，React 没有对应 prop。
 

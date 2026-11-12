@@ -1,16 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SpriteMeta } from '@mlzwl/hongguo-shared';
 import { formatDuration } from '../../lib/format';
 import {
   describePlaybackError,
   isStalled,
   probePlaybackError,
-  type PlaybackErrorAction,
-  type PlaybackErrorHint,
+  toErrorState,
+  type PlayerErrorState,
 } from './playback-error';
 import { applyVolumePreference, usePlayerStore } from './player-store';
 import { ProgressBar } from './progress-bar';
 import { SpritePreview } from './sprite-preview';
+import { DefinitionMenu } from './definition-menu';
+import { shouldShowDefinitionPicker, normalizeDefinitions } from './definition-selection';
 import { SpeedMenu } from './speed-menu';
 import { VolumeControl } from './volume-control';
 import { toRanges, type TimeRange } from './buffered-ranges';
@@ -51,6 +53,21 @@ export interface PlayerProps {
    * 片长只剩 30 秒真实等待。
    */
   onProgress?: (position: number, duration: number, speed: number) => void;
+  /**
+   * 可用清晰度档位，来自 `Playback.availableDefinitions`（低→高）。
+   *
+   * 单档或空数组时不渲染选择器：只有一个选项的菜单只是噪音。
+   */
+  definitions?: readonly string[];
+  /** 当前档位，用于高亮选中项。 */
+  definition?: string;
+  /**
+   * 切换清晰度。
+   *
+   * 由路由层负责重新请求 playback 并换 `src`；播放器只上报「用户选了哪一档」
+   * 与「当前进度」，不碰签名与解密。
+   */
+  onSelectDefinition?: (definition: string) => void;
 }
 
 /** 控件自动隐藏的延迟。拖动或长按期间不隐藏。 */
@@ -85,23 +102,6 @@ const SLEEP_MINUTES: readonly number[] = [1, 15, 30, 60];
  */
 const STALL_RELOAD_MESSAGE = '播放停滞，正在自动重新加载';
 const STALL_MESSAGE = '播放停滞';
-
-/** 播放错误覆盖层的内容。`action` 决定显示哪个按钮。 */
-interface PlayerErrorState {
-  message: string;
-  action: Exclude<PlaybackErrorAction, 'switch-definition'>;
-}
-
-/**
- * 把纯逻辑层的 hint 转成组件状态。
- *
- * `switch-definition` 在这里降级成 `none`：当前播放器没有清晰度切换 UI（切档要回到
- * 播放信息查询、换 `src`、重新下载），为一个错误提示新造一套切换控件不划算。
- * 文案本身已经写着「建议换一档清晰度」，用户可以从选集/重进页面自行换档。
- */
-function toErrorState(hint: PlaybackErrorHint): PlayerErrorState {
-  return { message: hint.message, action: hint.action === 'switch-definition' ? 'none' : hint.action };
-}
 
 /**
  * 容器内是否还有处于 `:focus-visible` 的元素。
@@ -152,6 +152,9 @@ export function Player({
   canPrev = false,
   canNext = false,
   onProgress,
+  definitions,
+  definition,
+  onSelectDefinition,
 }: PlayerProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -176,6 +179,18 @@ export function Player({
   const [volume, setVolume] = useState(Math.min(Math.max(storedVolume, 0), 1));
   /** 倍速菜单是否展开。展开期间不自动隐藏控件，否则菜单会跟着消失。 */
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  /** 清晰度菜单是否展开。理由同倍速菜单。 */
+  const [definitionMenuOpen, setDefinitionMenuOpen] = useState(false);
+  /** 清晰度触发按钮。菜单要靠它区分「点自己」与「点外部」。 */
+  const definitionButtonRef = useRef<HTMLButtonElement>(null);
+  /**
+   * 清洗后的可用档位。
+   *
+   * 用 `useMemo` 而不是每次渲染新建数组：`useEffect` 与菜单都以它为依赖，
+   * 新数组会让依赖每帧都变。
+   */
+  const availableDefinitions = useMemo(() => normalizeDefinitions(definitions), [definitions]);
+  const showDefinitionPicker = shouldShowDefinitionPicker(availableDefinitions) && onSelectDefinition !== undefined;
   const [showControls, setShowControls] = useState(true);
   const [error, setError] = useState<PlayerErrorState | null>(null);
   /** 拖动中的预览位置；`null` 表示没在拖。 */
@@ -453,8 +468,8 @@ export function Player({
    */
   const explainFailure = useCallback(async () => {
     const code = await probePlaybackError(src);
-    setError(toErrorState(describePlaybackError(code)));
-  }, [src]);
+    setError(toErrorState(describePlaybackError(code), showDefinitionPicker));
+  }, [src, showDefinitionPicker]);
 
   /**
    * 停滞检测：每 `STALL_POLL_MS` 采一次，20 秒没有进度就提示并**自动重载一次**。
@@ -825,6 +840,25 @@ export function Player({
               重试
             </button>
           )}
+          {error.action === 'switch-definition' && (
+            <button
+              type="button"
+              onClick={() => {
+                // 关掉错误覆盖层再开菜单：否则覆盖层盖住菜单，点了看不到任何变化。
+                setError(null);
+                // 必须同时把底栏显示出来。控件可能已经自动隐藏（错误往往在播放
+                // 停滞之后才出现），只开菜单会得到一个 opacity-0 + pointer-events-none
+                // 的不可见菜单，用户点了等于没反应。
+                setShowControls(true);
+                setDefinitionMenuOpen(true);
+                setLock('definition-menu', false);
+                clearHideTimer();
+              }}
+              className="rounded-full bg-surface-raised px-5 py-2"
+            >
+              换一档清晰度
+            </button>
+          )}
         </div>
       )}
 
@@ -1077,6 +1111,52 @@ export function Player({
                 }
               }}
             />
+
+            {/*
+              清晰度：只在真有多档时显示。
+              单档时显示「只有一项」的菜单只是噪音，所以由 showDefinitionPicker 把关。
+            */}
+            {showDefinitionPicker && (
+              <div className="relative">
+                <button
+                  ref={definitionButtonRef}
+                  type="button"
+                  onClick={() => {
+                    setDefinitionMenuOpen((open) => {
+                      const next = !open;
+                      setLock('definition-menu', !next);
+                      if (next) {
+                        clearHideTimer();
+                      } else {
+                        scheduleHide();
+                      }
+                      return next;
+                    });
+                  }}
+                  aria-haspopup="menu"
+                  aria-expanded={definitionMenuOpen}
+                  aria-label={`清晰度 ${definition ?? '自动'}`}
+                  className="flex h-11 items-center rounded-full px-4 text-xs tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
+                >
+                  {definition === undefined ? '清晰度' : definition === 'unknown' ? '清晰度' : definition}
+                </button>
+                {definitionMenuOpen && (
+                  <DefinitionMenu
+                    available={availableDefinitions}
+                    value={definition}
+                    anchor={definitionButtonRef}
+                    onSelect={(next) => {
+                      onSelectDefinition?.(next);
+                    }}
+                    onClose={() => {
+                      setDefinitionMenuOpen(false);
+                      setLock('definition-menu', true);
+                      scheduleHide();
+                    }}
+                  />
+                )}
+              </div>
+            )}
 
             {/* 倍速：点开列表选，不再循环点击。 */}
             <div className="relative">

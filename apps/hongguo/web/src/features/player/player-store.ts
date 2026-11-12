@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createLocalStorageWriteQueue, createQueuedPersistStorage } from '../../lib/write-queue';
+import { isValidDefinitionLabel } from './definition-selection';
 
 /** 允许的倍速白名单。`<video>.playbackRate` 只接受这几个值。 */
 export const SPEED_VALUES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -10,6 +11,22 @@ export interface PlayerPreferences {
   volume: number;
   muted: boolean;
   speed: number;
+  /**
+   * 上次选择的清晰度标签（例如 `1080p`）。
+   *
+   * `undefined` 表示没有偏好，让服务端自动挑档。换集时优先用它，
+   * 但它不存在于新一集的可用档位时必须回退，不能硬发。
+   */
+  definition?: string;
+  /**
+   * 下载专用清晰度。
+   *
+   * 与播放档位**分开存**：用户常常想「在线看低档省流量、下载留最高档」，
+   * 绑在一起会让他每次下载都要手动改回来。
+   *
+   * `undefined` 表示「没选过」，下载时取可用档位里的最高档。
+   */
+  downloadDefinition?: string;
 }
 
 const DEFAULT_PREFERENCES: PlayerPreferences = { volume: 1, muted: false, speed: 1 };
@@ -36,6 +53,8 @@ interface PlayerState extends PlayerPreferences {
   setVolume: (volume: number) => void;
   setMuted: (muted: boolean) => void;
   setSpeed: (speed: number) => void;
+  setDefinition: (definition: string | undefined) => void;
+  setDownloadDefinition: (definition: string | undefined) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,11 +94,34 @@ export function sanitizePlayerPreferences(raw: unknown): PlayerPreferences {
   if (!isRecord(raw)) {
     return { ...DEFAULT_PREFERENCES };
   }
-  return {
+  const result: PlayerPreferences = {
     volume: sanitizeVolume(raw['volume']),
     muted: typeof raw['muted'] === 'boolean' ? raw['muted'] : DEFAULT_PREFERENCES.muted,
     speed: sanitizeSpeed(raw['speed']),
   };
+  const definition = sanitizeDefinition(raw['definition']);
+  if (definition !== undefined) {
+    result.definition = definition;
+  }
+  const downloadDefinition = sanitizeDefinition(raw['downloadDefinition']);
+  if (downloadDefinition !== undefined) {
+    result.downloadDefinition = downloadDefinition;
+  }
+  return result;
+}
+
+/**
+ * 清晰度标签的合法性判定。
+ *
+ * 只要求「非空字符串且不含控制字符」。不写死分辨率白名单：上游随时可能加档，
+ * 写死会让新档位静默消失。长度上限 32 与 `definition-selection` 保持一致。
+ */
+export function sanitizeDefinition(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const label = raw.trim();
+  return isValidDefinitionLabel(label) ? label : undefined;
 }
 
 /** 音量、倍速的合法性判定，`set*` 与 `sanitize*` 共用同一份规则。 */
@@ -123,6 +165,33 @@ export const usePlayerStore = create<PlayerState>()(
           return;
         }
         set({ speed });
+      },
+      setDownloadDefinition: (definition) => {
+        const label = sanitizeDefinition(definition);
+        if (label === undefined) {
+          set((state) => {
+            const { downloadDefinition: _removed, ...rest } = state;
+            return rest as PlayerState;
+          }, true);
+          return;
+        }
+        set({ downloadDefinition: label });
+      },
+      setDefinition: (definition) => {
+        const label = sanitizeDefinition(definition);
+        // `undefined` 是合法输入：它表示「回到自动」，必须能清掉旧偏好。
+        // `exactOptionalPropertyTypes` 下不能写 `{ definition: undefined }`，
+        // 用函数式 set 显式删除键。
+        if (label === undefined) {
+          // 必须用 `replace: true`：zustand 默认**合并**，返回一个不含
+          // `definition` 的对象不会删掉旧值，只会保留它。
+          set((state) => {
+            const { definition: _removed, ...rest } = state;
+            return rest as PlayerState;
+          }, true);
+          return;
+        }
+        set({ definition: label });
       },
     }),
     {

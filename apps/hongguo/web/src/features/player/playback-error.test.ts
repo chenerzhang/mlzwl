@@ -6,6 +6,7 @@ import {
   probePlaybackError,
   PROBE_FAILED,
   STALL_TIMEOUT_MS,
+  toErrorState,
 } from './playback-error';
 
 /**
@@ -162,5 +163,29 @@ describe('isStalled', () => {
   it('honours a custom timeout', () => {
     expect(isStalled({ ...base, now: 500, timeoutMs: 500 })).toBe(true);
     expect(isStalled({ ...base, now: 499, timeoutMs: 500 })).toBe(false);
+  });
+});
+
+describe('toErrorState', () => {
+  it('keeps the switch-definition action when more than one definition exists', () => {
+    const state = toErrorState({ message: '解密失败', action: 'switch-definition' }, true);
+    expect(state).toEqual({ message: '解密失败', action: 'switch-definition' });
+  });
+
+  it('downgrades switch-definition to none when there is only one definition', () => {
+    // 单档时点开一个只有一项的菜单等于骗用户点一次，必须退化成纯文案。
+    const state = toErrorState({ message: '解密失败', action: 'switch-definition' }, false);
+    expect(state).toEqual({ message: '解密失败', action: 'none' });
+  });
+
+  it('leaves retry untouched regardless of the definition count', () => {
+    expect(toErrorState({ message: '超时', action: 'retry' }, false).action).toBe('retry');
+    expect(toErrorState({ message: '超时', action: 'retry' }, true).action).toBe('retry');
+  });
+
+  it('maps a definition_unavailable error to the switch action', () => {
+    // 该集没有所选档位时，换一档就能继续看，所以必须给可执行动作。
+    const hint = describePlaybackError('definition_unavailable', 400);
+    expect(toErrorState(hint, true).action).toBe('switch-definition');
   });
 });

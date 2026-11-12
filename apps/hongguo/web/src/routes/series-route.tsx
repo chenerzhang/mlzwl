@@ -10,6 +10,9 @@ import { FOLLOW_STATE_LABELS, hasUpdates, newEpisodes, nextFollowState } from '.
 import { resumeTarget } from '../features/player/resume-target';
 import { DownloadPanel } from '../features/download/download-panel';
 import { useEpisodeDownload } from '../features/download/use-download';
+import type { DefinitionReadiness } from '../features/download/download-media-url';
+import { usePlayerStore } from '../features/player/player-store';
+import { readDefinitions } from '../features/player/definition-selection';
 import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 
 /**
@@ -33,7 +36,13 @@ export function SeriesRoute(): React.JSX.Element {
   /** 分集倒序。104 集时正序要点很多次才能看到最新集，倒序是真实需求。 */
   const [descending, setDescending] = useState(false);
   const [downloadPanelOpen, setDownloadPanelOpen] = useState(false);
-  const downloads = useEpisodeDownload();
+  /**
+   * 用户为下载选的档位；`undefined` 表示「跟随最高档」。
+   *
+   * 与播放档位分开存：想「在线看低档省流量、下载留最高档」是常见需求。
+   */
+  const downloadDefinition = usePlayerStore((state) => state.downloadDefinition);
+  const setDownloadDefinition = usePlayerStore((state) => state.setDownloadDefinition);
 
   const query = useQuery({
     queryKey: queryKeys.series(seriesId),
@@ -42,6 +51,51 @@ export function SeriesRoute(): React.JSX.Element {
   });
 
   const detail = query.data;
+
+  /**
+   * 下载面板的**候选**档位。
+   *
+   * 详情响应里没有清晰度信息，只有播放响应才有，所以面板打开时为第一集可播放的
+   * 分集查一次播放信息。
+   *
+   * 注意：`availableDefinitions` 是**逐集**算的，不同集未必有同一套档位。
+   * 这里只查了**第一集可播放的分集**，所以拿到的是「这一集有哪几档」，**不是**
+   * 整部剧的并集：若第一集只有 360p/720p、后面的集有 1080p，面板里就选不到 1080p。
+   * 这是刻意的取舍——逐集拉档位要多发 N 次播放请求，而档位用于渲染选择器，
+   * 真正的校验在服务端：请求某一集不存在的档位会返回 400
+   * `definition_unavailable`，不会静默降级成别的档。
+   *
+   * `enabled` 挂在面板打开上：不打开面板就不发这个请求。
+   */
+  const firstPlayableEpisodeId = useMemo(
+    () => (detail?.episodes ?? []).find((episode) => episode.playable)?.id,
+    [detail],
+  );
+  const definitionsQuery = useQuery({
+    queryKey: queryKeys.playback(firstPlayableEpisodeId ?? ''),
+    queryFn: () => api.playback(firstPlayableEpisodeId ?? ''),
+    enabled: downloadPanelOpen && firstPlayableEpisodeId !== undefined,
+    // 档位几乎不变，没必要反复拉；失败也不影响下载（会退回服务端默认档）。
+    staleTime: 10 * 60 * 1000,
+    retry: false,
+  });
+  const downloadDefinitions = useMemo(
+    () => (definitionsQuery.data === undefined ? [] : readDefinitions(definitionsQuery.data).available),
+    [definitionsQuery.data],
+  );
+  /**
+   * 档位信息的就绪状态。
+   *
+   * 未就绪时不允许提交下载：`downloadDefinitions` 为空会让请求不带 `definition`，
+   * 服务端按默认档（实测 720p）返回，与界面承诺的「默认最高档」不符。
+   */
+  const definitionsReadiness: DefinitionReadiness = definitionsQuery.isError
+    ? 'error'
+    : definitionsQuery.data === undefined
+      ? 'pending'
+      : 'ready';
+
+  const downloads = useEpisodeDownload(downloadDefinitions);
 
   // 拉回详情后把上游集数推进追更记录的高水位（P1-9）。
   // 上游偶尔不返回 `episode_count`，那时用分集列表长度兑底——两者都拿不到就不推。
@@ -334,11 +388,19 @@ export function SeriesRoute(): React.JSX.Element {
         open={downloadPanelOpen}
         episodes={episodes}
         entries={downloads.entries}
+        activeOf={downloads.activeOf}
         queued={downloads.queued}
         onDownload={downloads.download}
         onDownloadMany={downloads.downloadMany}
         onCancel={downloads.cancel}
         onRetry={downloads.retry}
+        definitions={downloadDefinitions}
+        definitionsReadiness={definitionsReadiness}
+        onRetryDefinitions={() => {
+          void definitionsQuery.refetch();
+        }}
+        {...(downloadDefinition === undefined ? {} : { definition: downloadDefinition })}
+        onSelectDefinition={setDownloadDefinition}
         onClose={() => setDownloadPanelOpen(false)}
       />
     </div>

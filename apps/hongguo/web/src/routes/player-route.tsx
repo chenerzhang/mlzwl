@@ -5,9 +5,17 @@ import { api } from '../lib/api-client';
 import { queryKeys } from '../lib/query-keys';
 import { EpisodeDrawer } from '../features/player/episode-drawer';
 import { Player } from '../features/player/player';
-import { prefetchMedia } from '../features/player/prefetch-next';
+import { pickPrefetchTarget, prefetchMedia } from '../features/player/prefetch-next';
 import { shouldPrefetch } from '../features/player/prefetch-policy';
 import { resolveInitialTime, type FrozenInitialTime } from '../features/player/resume-initial-time';
+import {
+  chooseDefinition,
+  isSwitchStateForEpisode,
+  readDefinitions,
+  resumeTimeAfterSwitch,
+  shouldRequestBeforePlayback,
+} from '../features/player/definition-selection';
+import { usePlayerStore } from '../features/player/player-store';
 import { useHistoryStore } from '../features/history/history-store';
 import { useFollowStore } from '../features/follow/follow-store';
 
@@ -26,6 +34,48 @@ export function PlayerRoute(): React.JSX.Element {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const record = useHistoryStore((state) => state.record);
+  /** 用户上次选的档位；`undefined` 表示让它自动挑。 */
+  const preferredDefinition = usePlayerStore((state) => state.definition);
+  const setDefinition = usePlayerStore((state) => state.setDefinition);
+  /**
+   * 本次播放实际请求的档位，**带它所属的集号**。
+   *
+   * 用 state 而不是直接读 store：切档是一次显式动作，需要触发新请求；
+   * 而 store 里存的是「偏好」，两者在回退场景下会不一致（记住 4k、实际请求 540p）。
+   *
+   * 为什么必须带 `episodeId`：换集时 React 会先用**旧 state** 渲染一次，之后
+   * effect 才把它清掉。若只存裸档位，这一帧会用上一集的档位发请求，甚至把
+   * 上一集的进度当成新集的起始位置。带上集号后，「属于别的集」的状态在读的时候
+   * 就被判定为无效，不依赖 effect 的时序。
+   */
+  const [definitionRequest, setDefinitionRequest] = useState<{ episodeId: string; definition: string } | null>(null);
+  /**
+   * 切档前冻结的播放位置，同样带集号。
+   *
+   * 切档会换 `src`，`<video>` 重新加载会从 0 开始。这里在切换动作发生时记下
+   * 当前进度，新 `src` 就绪后用 `initialTime` 恢复。
+   */
+  const [switchResume, setSwitchResume] = useState<{ episodeId: string; time: number } | null>(null);
+  /**
+   * 换集时清掉切档状态。
+   *
+   * 光靠「按集号匹配」不够：A 集切档后去 B 集、再回到 A 集时，`switchResume`
+   * 里仍是上次 A 集的旧位置，会把播放器从中间拽回去，盖掉真正的观看历史。
+   * 所以换集时必须真的清空。两个机制一起用：
+   * 1. 按集号匹配 → 换集那一帧（effect 还没跑）读到的旧值直接判无效；
+   * 2. 本 effect → 换集后彻底丢弃，回来时不会复活。
+   */
+  useEffect(() => {
+    setDefinitionRequest(null);
+    setSwitchResume(null);
+  }, [episodeId]);
+  /**
+   * 最近一次进度回调的位置，按集号记账。
+   *
+   * 换集后新一集第一次 `onProgress` 到来前，这里仍是上一集的数值；带集号比较
+   * 才能避免把上一集的位置用到新集上。
+   */
+  const progressRef = useRef<{ episodeId: string; position: number } | null>(null);
   const entry = useHistoryStore((state) => (seriesId === '' ? undefined : state.entries[seriesId]));
   const confirmFollow = useFollowStore((state) => state.confirm);
   const syncFollowEpisodes = useFollowStore((state) => state.syncEpisodes);
@@ -50,9 +100,20 @@ export function PlayerRoute(): React.JSX.Element {
     enabled: seriesId !== '',
   });
 
+  /**
+   * 当前集生效的请求档位。
+   *
+   * 只认「集号匹配」的那一条：换集那一帧旧 state 还在，直接读会拿上一集的档位。
+   */
+  const requestedDefinition = isSwitchStateForEpisode(definitionRequest, episodeId)
+    ? definitionRequest.definition
+    : undefined;
+  /** 当前集生效的切档续播位置；同样只认集号匹配的那一条。 */
+  const resumeTime = isSwitchStateForEpisode(switchResume, episodeId) ? switchResume.time : undefined;
+
   const playbackQuery = useQuery({
-    queryKey: queryKeys.playback(episodeId ?? ''),
-    queryFn: () => api.playback(episodeId ?? ''),
+    queryKey: queryKeys.playback(episodeId ?? '', requestedDefinition),
+    queryFn: () => api.playback(episodeId ?? '', requestedDefinition),
     enabled: episodeId !== undefined && episodeId !== '',
   });
 
@@ -82,12 +143,52 @@ export function PlayerRoute(): React.JSX.Element {
 
   // 预取下一集，让切集不用等 8MB 下载解密。
   const nextEpisode = episodes[currentIndex + 1];
+  /**
+   * 下一集的**默认档**播放信息。
+   *
+   * 只用来读 `availableDefinitions`：不拿它的 `streamUrl` 去预热。原因见下面
+   * `nextDefinition` 的说明——预热的必须是用户真正会看的那一档。
+   */
   const nextPlaybackQuery = useQuery({
     queryKey: queryKeys.playback(nextEpisode?.id ?? ''),
     queryFn: () => api.playback(nextEpisode?.id ?? ''),
     enabled: nextEpisode !== undefined,
     staleTime: 5 * 60 * 1000,
   });
+  /**
+   * 下一集预热应该用的档位。
+   *
+   * 与当前集同一套规则（`chooseDefinition`）：记住的档位优先，否则沿用默认档。
+   * 不这样做会重新引入「同一集下载两档整集视频」：片尾按默认档预热 720p，
+   * 切集后又要按记住的 1080p 重新拉一遍，白烧一倍流量。
+   */
+  const nextDefinition = useMemo(() => {
+    const data = nextPlaybackQuery.data;
+    if (data === undefined) {
+      return undefined;
+    }
+    const nextAvailable = readDefinitions(data).available;
+    return chooseDefinition(preferredDefinition, nextAvailable, data.definition).requested;
+  }, [nextPlaybackQuery.data, preferredDefinition]);
+  /**
+   * 下一集**目标档**的播放信息。
+   *
+   * 只有目标档与默认档不同时才发这个请求；相同时直接复用默认响应，省一次往返。
+   */
+  const nextTargetPlaybackQuery = useQuery({
+    queryKey: queryKeys.playback(nextEpisode?.id ?? '', nextDefinition),
+    queryFn: () => api.playback(nextEpisode?.id ?? '', nextDefinition),
+    enabled:
+      nextEpisode !== undefined &&
+      nextDefinition !== undefined &&
+      nextDefinition !== nextPlaybackQuery.data?.definition,
+    staleTime: 5 * 60 * 1000,
+  });
+  /** 预热用的播放信息：目标档就绪则用目标档，否则等它（不退回默认档）。 */
+  const nextPrefetchPlayback = useMemo(
+    () => pickPrefetchTarget(nextPlaybackQuery.data, nextDefinition, nextTargetPlaybackQuery.data),
+    [nextPlaybackQuery.data, nextDefinition, nextTargetPlaybackQuery.data],
+  );
 
   /**
    * 下一集预热的运行态。
@@ -150,6 +251,8 @@ export function PlayerRoute(): React.JSX.Element {
       if (episodeId === undefined) {
         return;
       }
+      // 切档要用：记录最近一次进度（带集号），切档时作为新 src 的起始位置。
+      progressRef.current = { episodeId, position };
       if (duration > 0 && seriesId !== '') {
         lastProgressRef.current = { position, duration };
         record({
@@ -169,7 +272,8 @@ export function PlayerRoute(): React.JSX.Element {
       if (!shouldPrefetch({ position, duration, speed })) {
         return;
       }
-      const target = nextPlaybackQuery.data;
+      // 必须等**目标档**的播放信息就绪：拿默认档的 `streamUrl` 预热会让切集后再下一遍。
+      const target = nextPrefetchPlayback;
       if (target === undefined) {
         return;
       }
@@ -195,7 +299,7 @@ export function PlayerRoute(): React.JSX.Element {
         }
       });
     },
-    [record, confirmCurrentEpisode, seriesId, seriesQuery.data, episodeId, currentEpisode, nextPlaybackQuery.data],
+    [record, confirmCurrentEpisode, seriesId, seriesQuery.data, episodeId, currentEpisode, nextPrefetchPlayback],
   );
 
   /**
@@ -224,6 +328,74 @@ export function PlayerRoute(): React.JSX.Element {
   }, [record, confirmCurrentEpisode, seriesId, seriesQuery.data, episodeId, currentEpisode, goTo]);
 
   const playback = playbackQuery.data;
+  const definitions = useMemo(
+    () => (playback === undefined ? { current: undefined, available: [] } : readDefinitions(playback)),
+    [playback],
+  );
+
+  /**
+   * 首次进入某一集时，按「记住的档位 > 服务端当前档 > 自动」决定请求哪一档。
+   *
+   * **必须在 effect 里跑而不是在渲染期算**：`setDefinitionRequest` 会改变
+   * `queryKey`，渲染期调用 setState 是 React 禁止的。
+   *
+   * 与 `shouldRequestBeforePlayback` 的分工：那个纯函数决定「这一帧能不能挂载
+   * 播放器」，本 effect 负责真正把档位写进 state。两者用的是同一个
+   * `chooseDefinition`，不会分叉。
+   */
+  useEffect(() => {
+    if (playback === undefined || episodeId === undefined || requestedDefinition !== undefined) {
+      return;
+    }
+    const choice = chooseDefinition(preferredDefinition, definitions.available, definitions.current);
+    // 只在真的需要换档时才设 state：`undefined` 表示「就用当前这次请求的结果」。
+    if (choice.requested !== undefined && choice.requested !== definitions.current) {
+      setDefinitionRequest({ episodeId, definition: choice.requested });
+    }
+  }, [playback, episodeId, requestedDefinition, preferredDefinition, definitions]);
+
+  /**
+   * 需要二次选档时先不挂载播放器。
+   *
+   * 否则浏览器会立刻去拉默认档整集媒体（服务端在响应前 `await` 完整下载 + 解密），
+   * 紧接着切档又拉一次目标档——同一集双倍上游流量、磁盘缓存与等待。
+   *
+   * 这是**渲染期**的同步判断，不依赖 effect 的提交时机：effect 要等这一帧提交后
+   * 才跑，而 `<video src>` 的请求在这一帧就已经发出去了。
+   */
+  const awaitingDefinition =
+    playback !== undefined &&
+    shouldRequestBeforePlayback(
+      preferredDefinition,
+      definitions.available,
+      definitions.current,
+      requestedDefinition !== undefined,
+    );
+
+  /**
+   * 切换清晰度。
+   *
+   * 三件事必须同时成立：
+   * 1. 记住用户选择（写 store，下次换集优先用它）；
+   * 2. 冻结当前进度，让新 src 从同一位置继续；
+   * 3. 触发新请求（改 `requestedDefinition`，`queryKey` 会跟着变）。
+   *
+   * 不碰签名、不碰解密：只是换一个 `/api/episodes/:id/playback?definition=` 请求。
+   */
+  const handleSelectDefinition = useCallback(
+    (next: string) => {
+      if (episodeId === undefined) {
+        return;
+      }
+      setDefinition(next);
+      // 只在这一集真的有过进度回调时才取位置：否则 `progressRef` 里可能还是别的集的数。
+      const position = progressRef.current?.episodeId === episodeId ? progressRef.current.position : 0;
+      const resume = resumeTimeAfterSwitch(position, lastProgressRef.current.duration);
+      setSwitchResume(resume === undefined ? null : { episodeId, time: resume });
+      setDefinitionRequest({ episodeId, definition: next });
+    },
+    [episodeId, setDefinition],
+  );
 
   if (episodeId === undefined) {
     return <div className="p-6 text-sm text-text-secondary">缺少分集参数</div>;
@@ -250,7 +422,13 @@ export function PlayerRoute(): React.JSX.Element {
         </div>
       )}
 
-      {playback !== undefined && (
+      {playback !== undefined && awaitingDefinition && (
+        <div className="flex h-full items-center justify-center text-sm text-text-secondary">
+          正在切换到记住的清晰度…
+        </div>
+      )}
+
+      {playback !== undefined && !awaitingDefinition && (
         <Player
           key={playback.episodeId}
           src={playback.streamUrl}
@@ -271,9 +449,15 @@ export function PlayerRoute(): React.JSX.Element {
                   sheetUrls: spriteQuery.data.sheetUrls,
                 },
               })}
-          {...(frozenInitialTime?.episodeId === playback.episodeId && frozenInitialTime.initialTime !== undefined
-            ? { initialTime: frozenInitialTime.initialTime }
-            : {})}
+          {...(resumeTime !== undefined
+            ? // 切档后优先用切换时冻结的进度：用户看的是同一集，必须接着播。
+              { initialTime: resumeTime }
+            : frozenInitialTime?.episodeId === playback.episodeId && frozenInitialTime.initialTime !== undefined
+              ? { initialTime: frozenInitialTime.initialTime }
+              : {})}
+          {...(definitions.available.length === 0 ? {} : { definitions: definitions.available })}
+          {...(definitions.current === undefined ? {} : { definition: definitions.current })}
+          onSelectDefinition={handleSelectDefinition}
           onProgress={handleProgress}
           onEnded={handleEnded}
           onNextEpisode={() => goTo(1)}
@@ -288,6 +472,7 @@ export function PlayerRoute(): React.JSX.Element {
         open={drawerOpen}
         episodes={episodes}
         currentId={episodeId}
+        definitions={definitions.available}
         onClose={() => setDrawerOpen(false)}
         onSelect={(episode) => {
           setDrawerOpen(false);

@@ -38,6 +38,8 @@ const HINTS: Record<MediaErrorCode, PlaybackErrorHint> = {
   media_upstream_5xx: { message: '上游服务异常', action: 'retry' },
   decrypt_failed: { message: '解密失败，建议换一档清晰度', action: 'switch-definition' },
   no_stream: { message: '该集没有可播放的地址', action: 'none' },
+  // 指定的档位这一集没有：换一档就能继续看，所以给换档动作。
+  definition_unavailable: { message: '这一集没有所选清晰度，换一档试试', action: 'switch-definition' },
   key_unavailable: { message: '暂时拿不到播放密钥', action: 'retry' },
   not_encrypted: { message: '该集的加密格式不受支持', action: 'none' },
 };
@@ -77,6 +79,29 @@ export function describePlaybackError(code: string | undefined, status?: number)
     return { message: '该集不存在', action: 'none' };
   }
   return { message: CODEC_MESSAGE, action: 'none' };
+}
+
+/** 组件直接消费的错误状态。 */
+export interface PlayerErrorState {
+  message: string;
+  action: PlaybackErrorAction;
+}
+
+/**
+ * 把 hint 转成组件状态，并按「是否真的有多档」收敛动作。
+ *
+ * `switch-definition` 原样保留：现在有真实的清晰度选择器，换档是可执行动作。
+ * 但**只有确实存在多档时**才保留——单档时显示「换一档清晰度」按钮会点开一个
+ * 只有一项的菜单，等于骗用户点了一次。
+ *
+ * 放在这个纯逻辑模块而不是组件文件里，是为了能在 node 环境下直接测：
+ * `player.tsx` 依赖 `document`，测试跑不起来。
+ */
+export function toErrorState(hint: PlaybackErrorHint, canSwitch: boolean): PlayerErrorState {
+  if (hint.action === 'switch-definition' && !canSwitch) {
+    return { message: hint.message, action: 'none' };
+  }
+  return { message: hint.message, action: hint.action };
 }
 
 export interface StallState {
