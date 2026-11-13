@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { CheckIcon } from '../../components/icons';
 import { useFocusTrap } from './use-focus-trap';
 
 /**
@@ -92,18 +93,7 @@ export function SpeedMenu({ value, onSelect, onClose }: SpeedMenuProps): React.J
             } hover:bg-on-scrim/15`}
           >
             <span>{speed === 1 ? '正常' : `${speed}×`}</span>
-            {active && (
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden
-                className="h-3.5 w-3.5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2.5}
-              >
-                <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
+            {active && <CheckIcon className="h-3.5 w-3.5" />}
           </button>
         );
       })}

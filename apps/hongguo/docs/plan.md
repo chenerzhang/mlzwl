@@ -364,9 +364,17 @@
 - **做法**：
   1. 画幅模式三档，映射到 `object-fit: contain / cover / fill`。默认 `contain`。
      竖屏视频在横屏容器里默认用 `contain`，两侧留黑而不是裁切。
-  2. 睡眠定时器：按分钟用 `performance.now()` 计算 deadline（不受系统时钟调整影响）；
-     按集数在 `ended` 时递减。
-- **验证**：设置 1 分钟睡眠，播放中等待，到点暂停；切到后台再回来，剩余时间仍正确。
+  2. ~~睡眠定时器：按分钟用 `performance.now()` 计算 deadline（不受系统时钟调整影响）；
+     按集数在 `ended` 时递减。~~ **已按用户要求移除，不实现。**
+     理由是睡眠定时器对短剧场景收益低：单集 2–3 分钟，用户看完就走，
+     不需要"播完自动停"；而它要维护 deadline、后台唤醒、跨集递减三套状态，
+     与「不做复杂状态机」的取舍冲突。当前代码已无 `SLEEP_MINUTES`、
+     `sleepDeadline`、`sleepRemainingSeconds` 及对应 UI。
+- **验证**：画幅模式三档切换后 `object-fit` 分别为 `contain` / `cover` / `fill`。
+  播放器不再出现"1/15/30/60 分"按钮。
+- **未做**：画幅模式不持久化。`player.tsx` 用 `useState<FrameMode>('contain')`
+  初始化，刷新或切集重新挂载都会回到 `contain`。这是有意取舍：画幅是「这一集
+  这个视频」的临时适配，不该跨剧沿用。
 
 ### P1-16 buffered / seekable 区间合并
 

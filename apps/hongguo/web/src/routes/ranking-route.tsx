@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { HeaderTextButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
+import { ArrowLeftIcon } from '../components/icons';
+import { HOME_PATH } from '../features/navigation/back-target';
+import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 import { RankingCard, RankingCardSkeleton } from '../features/ranking/ranking-card';
 import {
   boardsOf,
@@ -96,14 +98,14 @@ export function RankingRoute(): React.JSX.Element {
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
       <PageHeader
         left={
-          <HeaderTextButton
+          <HeaderButton
             label="返回"
             onClick={() => {
-              void navigate(-1);
+              void navigate(HOME_PATH, { replace: true });
             }}
           >
-            返回
-          </HeaderTextButton>
+            <ArrowLeftIcon />
+          </HeaderButton>
         }
         title="热度榜"
       />

@@ -20,23 +20,3 @@ export function objectFitFor(mode: FrameMode): 'contain' | 'cover' | 'fill' {
       return 'fill';
   }
 }
-
-/**
- * 睡眠定时器的 deadline（毫秒，单调时钟）。
- *
- * 用 `performance.now()` 而不是 `Date.now()`：系统时钟被 NTP 或用户手改时，
- * `Date.now()` 会跳变，定时器可能提前或永远不到点。
- */
-export function sleepDeadlineMinutes(minutes: number, now: number): number {
-  return now + minutes * 60_000;
-}
-
-/** 剩余毫秒。已过点返回 0，不返回负数。 */
-export function remainingMs(deadline: number, now: number): number {
-  return Math.max(deadline - now, 0);
-}
-
-/** 是否已到点。 */
-export function isExpired(deadline: number, now: number): boolean {
-  return now >= deadline;
-}

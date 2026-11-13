@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SpriteMeta } from '@mlzwl/hongguo-shared';
+import {
+  ArrowLeftIcon,
+  FullscreenEnterIcon,
+  FullscreenExitIcon,
+  NextIcon,
+  PlayIcon,
+  PrevIcon,
+} from '../../components/icons';
 import { formatDuration } from '../../lib/format';
 import {
   describePlaybackError,
@@ -18,7 +26,7 @@ import { VolumeControl } from './volume-control';
 import { toRanges, type TimeRange } from './buffered-ranges';
 import { judgePointerMotion, type ScreenPoint } from './pointer-motion';
 import { isLocked, withLock, withoutLock, type LockSource } from './controls-lock';
-import { isExpired, objectFitFor, remainingMs, sleepDeadlineMinutes, type FrameMode } from './frame-mode';
+import { objectFitFor, type FrameMode } from './frame-mode';
 import { bindingFor, handleShortcut, normalizeKey, type ShortcutContext } from './shortcuts';
 import { enterIosNativeFullscreen, useFullscreen } from './use-fullscreen';
 import { useGestures } from './use-gestures';
@@ -26,6 +34,8 @@ import { useGestures } from './use-gestures';
 export interface PlayerProps {
   /** 视频地址，指向本服务的 `/api/media/:episodeId`。 */
   src: string;
+  /** 返回显式目标路由。 */
+  onBack: () => void;
   poster?: string;
   /** 起始播放位置（秒），用于续播。 */
   initialTime?: number;
@@ -91,8 +101,40 @@ const FRAME_MODES: readonly { mode: FrameMode; label: string }[] = [
   { mode: 'fill', label: '拉伸' },
 ];
 
-/** 睡眠定时器档位（分钟）。关闭不在列表里：已设置时按钮会变成倒计时兼取消。 */
-const SLEEP_MINUTES: readonly number[] = [1, 15, 30, 60];
+/**
+ * 非标准但移动端浏览器需要的 video 属性。
+ *
+ * 为什么这些属性不在 React 的类型里：它们是浏览器内核私有扩展（腾讯 X5
+ * 内核、旧 WebKit），不属于 HTML 规范。React 19 会把未知属性原样透传到
+ * DOM，但 TypeScript 会报错，所以在这里局部声明而不是用 `any` 绕过。
+ *
+ * 三个键都是**必填**且值锁成字面量：X5 与旧 WebKit 是拿字符串比较的，
+ * 空字符串不被识别，写成可选 `string` 就挡不住以后改成 `''`。
+ */
+type MobileVideoAttributes = {
+  'x5-video-player-type': 'h5';
+  'x5-playsinline': 'true';
+  'webkit-playsinline': 'true';
+};
+
+/**
+ * 防御小米 / Redmi 浏览器的视频助手接管原生控件。
+ *
+ * 三条属性各自的作用：
+ * - `x5-video-player-type="h5"`：禁用腾讯 X5 内核的原生播放器，用 H5 播放器。
+ * - `x5-playsinline="true"`：X5 内核的内联播放开关。**值必须是 `"true"`**，
+ *   空字符串不被识别（X5 是拿字符串比较的，不是看属性是否存在）。
+ * - `webkit-playsinline="true"`：旧 WebKit 的内联播放开关，同理需要字符串值。
+ *
+ * 不保证一定能阻止接管：小米浏览器自带的「视频助手」是应用层功能，可能
+ * 不看这些属性。最终行为需要用户真机验证，本项目不做保证。
+ * 这些属性不改变 CENC / Range 契约，也不影响桌面端（未知属性被忽略）。
+ */
+const mobileVideoAttrs = {
+  'x5-video-player-type': 'h5',
+  'x5-playsinline': 'true',
+  'webkit-playsinline': 'true',
+} as const satisfies MobileVideoAttributes;
 
 /**
  * 停滞分支写的两条文案。
@@ -140,6 +182,7 @@ function hasVisibleFocus(container: HTMLElement | null): boolean {
  */
 export function Player({
   src,
+  onBack,
   poster,
   initialTime,
   sprite,
@@ -166,10 +209,6 @@ export function Player({
   const [bufferedRanges, setBufferedRanges] = useState<readonly TimeRange[]>([]);
   /** 画幅模式。默认 `contain`：竖屏视频在横屏容器里留黑，不裁掉人物。 */
   const [frameMode, setFrameMode] = useState<FrameMode>('contain');
-  /** 睡眠定时器的 deadline（`performance.now()` 毫秒）。`null` 表示未设置。 */
-  const [sleepDeadline, setSleepDeadline] = useState<number | null>(null);
-  /** 睡眠定时器剩余秒数，只用于按钮上的显示。 */
-  const [sleepRemainingSeconds, setSleepRemainingSeconds] = useState(0);
   // 初始偏好取存档值：否则控件显示与实际媒体属性不一致。
   const storedSpeed = usePlayerStore((state) => state.speed);
   const storedMuted = usePlayerStore((state) => state.muted);
@@ -763,33 +802,6 @@ export function Player({
     };
   }, [togglePlay, seekBy, setVolumeTo, setMutedTo, volume, muted, revealControls, toggleFullscreen]);
 
-  /**
-   * 睡眠定时器。
-   *
-   * 时间基准是 `performance.now()`（单调时钟）：`Date.now()` 会被 NTP 校时和用户
-   * 手改系统时间影响，设了 30 分钟定时器后系统时间往前跳就会立刻到点。
-   * 每秒轮询一次而不是用 `setTimeout(deadline - now)`：浏览器在后台会节流定时器，
-   * 一次性定时器会拖得更晚才触发；每秒重算剩余时间至少能在回到前台时立刻发现自己
-   * 已过点。
-   */
-  useEffect(() => {
-    if (sleepDeadline === null) {
-      setSleepRemainingSeconds(0);
-      return;
-    }
-    const tick = (): void => {
-      const now = performance.now();
-      setSleepRemainingSeconds(Math.ceil(remainingMs(sleepDeadline, now) / 1000));
-      if (isExpired(sleepDeadline, now)) {
-        videoRef.current?.pause();
-        setSleepDeadline(null);
-      }
-    };
-    tick();
-    const timer = setInterval(tick, 1_000);
-    return () => clearInterval(timer);
-  }, [sleepDeadline]);
-
   return (
     <div
       ref={containerRef}
@@ -801,6 +813,9 @@ export function Player({
         src={src}
         poster={poster}
         playsInline
+        disablePictureInPicture
+        controlsList="nodownload nofullscreen noremoteplayback"
+        {...mobileVideoAttrs}
         muted={muted}
         className="h-full w-full"
         style={{ objectFit: objectFitFor(frameMode) }}
@@ -882,13 +897,11 @@ export function Player({
           */}
           <button
             type="button"
-            onClick={() => window.history.back()}
+            onClick={onBack}
             aria-label="返回"
             className="-ml-2 flex h-11 w-11 flex-none items-center justify-center rounded-full text-on-scrim transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20"
           >
-            <svg viewBox="0 0 24 24" aria-hidden className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <ArrowLeftIcon size="lg" />
           </button>
           {/*
             标题与集数放在**同一行**。之前是上下两行，返回按钮只有 44px 高，
@@ -920,9 +933,7 @@ export function Player({
           aria-label="播放"
           className="absolute left-1/2 top-1/2 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-scrim/45"
         >
-          <svg viewBox="0 0 24 24" className="h-8 w-8 fill-white">
-            <path d="M8 5v14l11-7z" />
-          </svg>
+          <PlayIcon className="h-8 w-8 fill-white" />
         </button>
       )}
 
@@ -941,16 +952,7 @@ export function Player({
               aria-label="上一集"
               className="absolute left-3 top-1/2 hidden h-11 -translate-y-1/2 items-center gap-1 rounded-full bg-scrim/75 px-3.5 text-xs text-on-scrim transition-colors hover:bg-scrim/90 lg:flex"
             >
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <PrevIcon size="sm" />
               上一集
             </button>
           )}
@@ -964,16 +966,7 @@ export function Player({
               className="absolute right-3 top-1/2 hidden h-11 -translate-y-1/2 items-center gap-1 rounded-full bg-scrim/75 px-3.5 text-xs text-on-scrim transition-colors hover:bg-scrim/90 lg:flex"
             >
               下一集
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden
-                className="h-4 w-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <NextIcon size="sm" />
             </button>
           )}
         </>
@@ -994,13 +987,7 @@ export function Player({
           scheduleHide();
         }}
       >
-        {/*
-          第二排：画幅模式与睡眠定时器。
-
-          为什么不放进下面那一排：那一排已经有音量、倍速、选集、全屏，再加上
-          3 档画幅 + 4 个定时器档位，在 375px 宽的手机上会溢出或者把按钮压得
-          只剩图标。这两组都是低频开关，单独一排 `flex-wrap` 更稳。
-        */}
+        {/* 画幅模式是低频开关，单独一排避免挤压主控件。 */}
         <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 pb-1">
           {/*
             画幅模式：竖屏视频在横屏容器里默认 `contain`（两侧留黑不裁切），
@@ -1024,41 +1011,6 @@ export function Player({
                 {label}
               </button>
             ))}
-          </div>
-
-          {/*
-            睡眠定时器。已设置时只显示一个带剩余时间的取消按钮：再摆一排分钟数
-            会让人分不清当前生效的是哪一个。
-          */}
-          <div className="flex items-center" role="group" aria-label="睡眠定时器">
-            {sleepDeadline === null ? (
-              SLEEP_MINUTES.map((minutes) => (
-                <button
-                  key={minutes}
-                  type="button"
-                  onClick={() => {
-                    setSleepDeadline(sleepDeadlineMinutes(minutes, performance.now()));
-                    revealControls();
-                  }}
-                  aria-label={`${minutes} 分钟后暂停`}
-                  className="h-8 rounded-full px-2.5 text-[11px] tabular-nums text-on-scrim-muted transition-colors hover:bg-on-scrim/15"
-                >
-                  {minutes} 分
-                </button>
-              ))
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setSleepDeadline(null);
-                  revealControls();
-                }}
-                aria-label="关闭睡眠定时器"
-                className="h-8 rounded-full px-2.5 text-[11px] tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
-              >
-                睡眠 {formatDuration(sleepRemainingSeconds)} · 取消
-              </button>
-            )}
           </div>
         </div>
 
@@ -1216,31 +1168,7 @@ export function Player({
               aria-pressed={fullscreen.active}
               className="flex h-11 w-11 flex-none items-center justify-center rounded-full text-on-scrim transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20"
             >
-              {fullscreen.active ? (
-                /* 四角向内：退出全屏 */
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ) : (
-                /* 四角向外：进入全屏 */
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path d="M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              )}
+              {fullscreen.active ? <FullscreenExitIcon /> : <FullscreenEnterIcon />}
             </button>
           </div>
           <p className="text-[11px] text-on-scrim-muted">双击暂停 · 长按倍速</p>

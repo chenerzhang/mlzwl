@@ -4,7 +4,9 @@ import { useHistoryStore } from '../features/history/history-store';
 import { exportDiagnostics } from '../features/diagnostics/export-diagnostics';
 import { api } from '../lib/api-client';
 import { snapshot } from '../lib/client-events';
-import { HeaderTextButton, PageHeader, SHELL_WIDTH, type PageHeaderAction } from '../components/page-header';
+import { ArrowLeftIcon, CloseIcon, DownloadIcon, TrashIcon } from '../components/icons';
+import { HOME_PATH } from '../features/navigation/back-target';
+import { HeaderButton, PageHeader, SHELL_WIDTH, type PageHeaderAction } from '../components/page-header';
 
 /** 导出结果提示的展示时长：5 秒后自动收起。 */
 const EXPORT_MESSAGE_MS = 5_000;
@@ -98,26 +100,14 @@ export function HistoryRoute(): React.JSX.Element {
       label: '清空',
       onClick: clear,
       // 垃圾桶：清空是破坏性操作，图标要能一眼看出后果。
-      icon: (
-        <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
-          <path d="M4 7h16" strokeLinecap="round" />
-          <path d="M9.5 7V5.2A1.2 1.2 0 0110.7 4h2.6a1.2 1.2 0 011.2 1.2V7" strokeLinecap="round" />
-          <path d="M6.2 7l.85 11.6A1.9 1.9 0 008.94 20.5h6.12a1.9 1.9 0 001.89-1.9L17.8 7" strokeLinecap="round" />
-        </svg>
-      ),
+      icon: <TrashIcon />,
     });
   }
   headerActions.push({
     label: '导出诊断',
     disabled: exportState === 'pending',
     // 向下箭头入托盘：与「清空」区分开，同时表达「取出信息」。
-    icon: (
-      <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
-        <path d="M12 3.5v10" strokeLinecap="round" />
-        <path d="M8.2 10.2L12 14l3.8-3.8" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M4.5 16.5v2.2A1.8 1.8 0 006.3 20.5h11.4a1.8 1.8 0 001.8-1.8v-2.2" strokeLinecap="round" />
-      </svg>
-    ),
+    icon: <DownloadIcon />,
     onClick: () => {
       void handleExport();
     },
@@ -127,14 +117,14 @@ export function HistoryRoute(): React.JSX.Element {
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
       <PageHeader
         left={
-          <HeaderTextButton
+          <HeaderButton
             label="返回"
             onClick={() => {
-              void navigate(-1);
+              void navigate(HOME_PATH, { replace: true });
             }}
           >
-            返回
-          </HeaderTextButton>
+            <ArrowLeftIcon />
+          </HeaderButton>
         }
         title="观看历史"
         actions={headerActions}
@@ -204,16 +194,7 @@ export function HistoryRoute(): React.JSX.Element {
                 aria-label="删除记录"
                 className="flex w-11 flex-none items-center justify-center self-stretch text-text-tertiary transition-colors hover:text-text-primary"
               >
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
+                <CloseIcon size="sm" />
               </button>
             </li>
           );

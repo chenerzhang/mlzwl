@@ -5,8 +5,20 @@ import { api } from '../lib/api-client';
 import { queryKeys } from '../lib/query-keys';
 import { randomFailureMessage } from '../lib/random-entry';
 import { readCatalogSnapshot, writeCatalogSnapshot } from '../features/feed/offline-catalog-store';
-import { buildFeedQueryOptions, shouldFallBackToSnapshot } from '../features/feed/feed-paging';
+import {
+  buildFeedQueryOptions,
+  canAdvanceFeedPage,
+  canStartFeedFill,
+  FEED_FILL_COOLDOWN_MS,
+  nextVisibleCount,
+  shouldFallBackToSnapshot,
+  shouldFillFeed,
+  targetFeedCount,
+  visibleFeedItems,
+} from '../features/feed/feed-paging';
+import { HeartIcon, HistoryIcon, SearchIcon, SparkleIcon, TrendUpIcon } from '../components/icons';
 import { useInfiniteScroll } from '../lib/use-infinite-scroll';
+import { useWideViewport } from '../lib/use-wide-viewport';
 import { useGridColumns } from '../lib/use-grid-columns';
 import { SeriesCard, SeriesCardSkeleton } from '../components/series-card';
 import { PageHeader, SHELL_WIDTH, type PageHeaderAction } from '../components/page-header';
@@ -16,9 +28,16 @@ import { PageHeader, SHELL_WIDTH, type PageHeaderAction } from '../components/pa
  *
  * 滚动到底自动加载下一页，不再需要「加载更多」按钮。响应式：手机 2 列，
  * 平板 3–4 列，桌面 6 列。
+ *
+ * **分页量按条数而不是按页**。上游 `discover` 单次只返回 4–7 条（实测首页 7 条、
+ * 后续每页 6 条），且没有 `pageSize` 参数。若直接渲染「已加载条数」，序列会是
+ * 7 → 13 → 19，永远落不到 18。所以渲染量由 `visibleCount` 控制：首屏 18（PC）
+ * 或 12（移动），用户每滚到底再加一档，后台只负责把数据拉够 `visibleCount`。
  */
 export function FeedRoute(): React.JSX.Element {
   const navigate = useNavigate();
+  const isWideViewport = useWideViewport();
+  const targetCount = targetFeedCount(isWideViewport);
 
   /**
    * 离线目录快照只在挂载时读一次（P1-7）。
@@ -71,7 +90,7 @@ export function FeedRoute(): React.JSX.Element {
     queryFn: ({ pageParam }) => api.feed(pageParam),
     initialPageParam: undefined as string | undefined,
     ...snapshotQueryOptions,
-    // 首屏 12 个，预取下一页让滚动不卡。
+    // 首屏只请求并渲染上游第一页；哨兵进入视口后才连续补到当前视口目标。
     staleTime: 60_000,
   });
 
@@ -130,11 +149,106 @@ export function FeedRoute(): React.JSX.Element {
     return merged;
   }, [query.data, fallbackItems]);
 
+  /**
+   * 目标渲染条数。首屏一档，用户每滚到底再加一档。
+   *
+   * 视口变化时按「用户有没有手动翻过页」分两种：
+   * - 还在第一页：直接跟随新目标。桌面拉窄到手机宽度时应该变回 12 条，
+   *   否则窗口从 1440 拖到 390 会留下一个 18 条的手机首屏。
+   * - 已经翻过页：保留现有值，不把用户已经看到的内容重新藏起来。
+   */
+  const [visibleCount, setVisibleCount] = useState<number>(targetCount);
+  const previousTarget = useRef(targetCount);
+  useEffect(() => {
+    const oldTarget = previousTarget.current;
+    previousTarget.current = targetCount;
+    setVisibleCount((current) => (current <= oldTarget ? targetCount : current));
+  }, [targetCount]);
+
+  /** 真正渲染的条目。数据可能多于 `visibleCount`（补页会越过目标），这里截断。 */
+  const visibleItems = visibleFeedItems(items, visibleCount);
+
+  /**
+   * 补页的唯一网络请求所有者。
+   *
+   * **为什么必须只有一个所有者**：之前哨兵回调与补页 effect 都能调
+   * `fetchNextPage`，而 700ms 冷却只包住了哨兵那条。两条路径同时看到旧的
+   * `isFetchingNextPage === false` 时会各发一次请求；TanStack Query v5 的
+   * `cancelRefetch` 默认 `true`，重复调用会重跑 `queryFn` 并丢弃前一次结果。
+   *
+   * 现在的分工：
+   * - 哨兵**只**负责增大 `visibleCount`，不发网络请求；
+   * - 这个 effect 是唯一的请求发出点，带自己的冷却；
+   * - `cancelRefetch: false` 作为并发保险：即使某次调度仍重叠，也不会取消
+   *   已在飞行的请求。
+   *
+   * 用 `setTimeout` 而不是「到点直接跳过」：冷却期间如果不安排重查，哨兵又
+   * 已离开视口，补页就再也不会发生，首屏会停在 7 条。
+   */
+  /** 冷却到期后唤醒补页 effect 的计数器。 */
+  const [fillTick, setFillTick] = useState(0);
+  const lastFilledAt = useRef(0);
+  const needsFill = shouldFillFeed(items.length, visibleCount, query.hasNextPage);
+  /**
+   * 依赖里必须放 `items.length`，不能只放 `needsFill`。
+   *
+   * `needsFill` 是布尔值：10 条 → 13 条时它一直是 `true`，值没变，effect 不会
+   * 重跑，补页就停在 10 条。这是实测踩到的（只发了 2 次请求就停）。
+   * `query.isFetchingNextPage` 也必须在依赖里，它 `true → false` 的翻转是
+   * 请求完成的信号，用来唤醒下一次判定。
+   */
+  useEffect(() => {
+    if (query.isError) {
+      return undefined;
+    }
+    const now = Date.now();
+    const canStart = canStartFeedFill(
+      items.length,
+      visibleCount,
+      query.hasNextPage,
+      query.isFetchingNextPage,
+      now,
+      lastFilledAt.current,
+    );
+    if (!canStart) {
+      // 冷却中或正在请求：冷却才需要安排重查；正在请求时由 isFetchingNextPage
+      // 翻转来唤醒，不需要额外 timer。
+      if (query.isFetchingNextPage || !needsFill) {
+        return undefined;
+      }
+      const wait = FEED_FILL_COOLDOWN_MS - (now - lastFilledAt.current);
+      const timer = setTimeout(() => setFillTick((value) => value + 1), wait);
+      return () => clearTimeout(timer);
+    }
+    lastFilledAt.current = now;
+    void query.fetchNextPage({ cancelRefetch: false });
+    return undefined;
+  }, [
+    needsFill,
+    items.length,
+    visibleCount,
+    query.hasNextPage,
+    query.isFetchingNextPage,
+    query.isError,
+    query.fetchNextPage,
+    fillTick,
+  ]);
+
   const sentinelRef = useInfiniteScroll({
     hasNextPage: query.hasNextPage,
     isFetchingNextPage: query.isFetchingNextPage,
+    /**
+     * 哨兵进入视口时翻一档。**不发网络请求**，只扩大可见条数；数据不够时由
+     * 上面的 effect 补。
+     *
+     * 只有当前页已经渲染满（`items.length >= visibleCount`）才翻页；否则这次
+     * 进入只是在等补页，翻页会让首屏一次跳两档。
+     */
     fetchNextPage: () => {
-      void query.fetchNextPage();
+      if (!canAdvanceFeedPage(items.length, visibleCount)) {
+        return;
+      }
+      setVisibleCount((current) => nextVisibleCount(current, targetCount));
     },
     enabled: !query.isError,
   });
@@ -143,7 +257,7 @@ export function FeedRoute(): React.JSX.Element {
   const columns = useGridColumns(gridRef, 2);
   /** 骨架格只补当前行的剩余格位，让骨架永远不溢出到下一行。 */
   const placeholderCount =
-    query.isPending || query.isFetchingNextPage ? (columns - (items.length % columns)) % columns || columns : 0;
+    query.isPending || query.isFetchingNextPage ? (columns - (visibleItems.length % columns)) % columns || columns : 0;
 
   return (
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
@@ -158,22 +272,8 @@ export function FeedRoute(): React.JSX.Element {
               onClick: () => {
                 void handleRandom();
               },
-              // 骰子比「打乱箭头」更直接地表达「随便来一部」。
-              icon: (
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
-                  <circle cx="8.5" cy="8.5" r="1.1" fill="currentColor" stroke="none" />
-                  <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" />
-                  <circle cx="15.5" cy="15.5" r="1.1" fill="currentColor" stroke="none" />
-                </svg>
-              ),
+              // 星光比「打乱箭头」更直接地表达「随便来一部」。
+              icon: <SparkleIcon />,
             },
             {
               label: '我的收藏',
@@ -181,22 +281,7 @@ export function FeedRoute(): React.JSX.Element {
               onClick: () => {
                 void navigate('/favorites');
               },
-              icon: (
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <path
-                    d="M12 20.5l-1.3-1.18C5.4 14.5 2 11.42 2 7.65A4.15 4.15 0 016.2 3.5 4.6 4.6 0 0112 7.25a4.6 4.6 0 015.8-3.75A4.15 4.15 0 0122 7.65c0 3.77-3.4 6.85-8.7 11.67L12 20.5z"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              ),
+              icon: <HeartIcon />,
             },
             {
               label: '热度榜',
@@ -204,20 +289,8 @@ export function FeedRoute(): React.JSX.Element {
               onClick: () => {
                 void navigate('/ranking');
               },
-              // 折线和前三根柱同时表达「排行」，桌面端只留图标以守住 640px 最窄平铺宽度。
-              icon: (
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <path d="M5 20v-6h3v6M10.5 20V9h3v11M16 20V4h3v16" strokeLinecap="round" />
-                  <path d="M4 20h16" strokeLinecap="round" />
-                </svg>
-              ),
+              // 上升折线直接表达「排行」，桌面端只留图标以守住 640px 最窄平铺宽度。
+              icon: <TrendUpIcon />,
             },
             {
               label: '历史',
@@ -225,20 +298,7 @@ export function FeedRoute(): React.JSX.Element {
               onClick: () => {
                 void navigate('/history');
               },
-              icon: (
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <path d="M4 5v5h5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M5.5 9.5A7.5 7.5 0 112 14" strokeLinecap="round" />
-                  <path d="M12 8v4l2.5 1.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              ),
+              icon: <HistoryIcon />,
             },
             {
               label: '搜索',
@@ -246,19 +306,7 @@ export function FeedRoute(): React.JSX.Element {
               onClick: () => {
                 void navigate('/search');
               },
-              icon: (
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <circle cx="11" cy="11" r="7" />
-                  <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
-                </svg>
-              ),
+              icon: <SearchIcon />,
             },
           ] satisfies readonly PageHeaderAction[]
         }
@@ -302,7 +350,7 @@ export function FeedRoute(): React.JSX.Element {
           aria-busy={query.isPending || query.isFetchingNextPage}
           className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6"
         >
-          {items.map((series) => (
+          {visibleItems.map((series) => (
             <SeriesCard
               key={series.id}
               series={series}

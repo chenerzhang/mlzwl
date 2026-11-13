@@ -450,3 +450,48 @@ pnpm -r build       web 329.94 kB JS / 101.98 kB gzip
 5. **搜索页无历史关键词**。需要额外的本地存储与 UI，本轮未做。
 6. **未在真机 iOS/Android 上验证**。`pointerType`、安全区、`dvh` 三个特性
    都只在 Chromium 里验证过。
+
+---
+
+## 10. 移动端 video 属性防御（2026-11）
+
+小米 / Redmi 浏览器会在播放 `<video>` 时弹出自家的「视频助手」浮层，接管
+手势与全屏。这是浏览器应用层功能，Web 侧没有可靠的关闭开关。本轮只加标准
+属性与内核私有属性做尽力而为的防御，**不保证能解决**，需要真机验证。
+
+### 已加的属性
+
+| 属性 | 值 | 作用 |
+| --- | --- | --- |
+| `disablePictureInPicture` | （布尔） | 关闭画中画，避免 PiP 窗口被系统接管 |
+| `controlsList` | `nodownload nofullscreen noremoteplayback` | 约束 UA 原生控件的下载/全屏/远程播放入口 |
+| `x5-video-player-type` | `h5` | 腾讯 X5 内核改用 H5 播放器，不用原生播放器 |
+| `x5-playsinline` | `true` | X5 内联播放开关 |
+| `webkit-playsinline` | `true` | 旧 WebKit 内联播放开关 |
+
+值都要按字符串比较，空字符串不被识别：`x5-video-player-type` 必须是 `"h5"`，
+`x5-playsinline` 与 `webkit-playsinline` 必须是 `"true"`。
+
+`controlsList` 在当前实现里基本冗余：`<video>` 没有 `controls` 属性，全屏是对
+容器调 `requestFullscreen`。保留它是因为某些浏览器会强制显示原生控件，那时
+这些 token 仍然生效。它不构成安全边界。
+
+以上属性不改变 CENC 原地解密与 Range 契约。桌面端会忽略未知属性。
+
+### 真机验证步骤
+
+1. 手机与电脑连同一个 Wi-Fi。电脑上启动服务：`pnpm hongguo:build && node apps/hongguo/server/dist/main.js`。
+2. 查电脑局域网 IP：`ipconfig getifaddr en0`（macOS）。
+3. 手机浏览器打开 `http://<IP>:9133/`，进入任意剧集，点「开始观看」。
+4. 观察三件事：
+   - 播放开始后，屏幕是否弹出小米/Redmi 的「视频助手」浮层。
+   - 在视频上左右滑动，是否被系统手势劫持（比如变成系统音量/亮度）。
+   - 点自研全屏按钮，是否进入容器全屏而不是系统播放器。
+5. 如果仍被接管，说明该浏览器的接管逻辑不看这些属性。此时可尝试的下一步是
+   在浏览器设置里关闭「视频助手」，或换用 Chrome / Edge。Web 侧没有更多手段。
+6. 桌面 Chrome 打开同一地址，确认播放、全屏、切集、下载都正常，属性不影响
+   桌面行为。
+
+### 结果记录
+
+待真机验证后补充。**当前状态：未在真机验证，不声称已修复。**

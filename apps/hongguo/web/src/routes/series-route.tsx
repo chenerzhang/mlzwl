@@ -13,6 +13,8 @@ import { useEpisodeDownload } from '../features/download/use-download';
 import type { DefinitionReadiness } from '../features/download/download-media-url';
 import { usePlayerStore } from '../features/player/player-store';
 import { readDefinitions } from '../features/player/definition-selection';
+import { ArrowLeftIcon, CaretDownIcon, DownloadIcon, HeartIcon, PlayIcon } from '../components/icons';
+import { HOME_PATH } from '../features/navigation/back-target';
 import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 
 /**
@@ -149,12 +151,10 @@ export function SeriesRoute(): React.JSX.Element {
           <HeaderButton
             label="返回"
             onClick={() => {
-              void navigate(-1);
+              void navigate(HOME_PATH, { replace: true });
             }}
           >
-            <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-              <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <ArrowLeftIcon />
           </HeaderButton>
         }
         title={detail?.title}
@@ -226,14 +226,7 @@ export function SeriesRoute(): React.JSX.Element {
                         }}
                         className="flex h-11 min-w-0 flex-1 items-center justify-center gap-0.5 overflow-hidden rounded-full bg-accent px-1 text-xs font-medium text-on-accent transition-[filter] hover:brightness-110 active:brightness-95 sm:gap-1.5 sm:px-5 sm:text-sm"
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          aria-hidden
-                          className="h-3.5 w-3.5 flex-none sm:h-4 sm:w-4"
-                          fill="currentColor"
-                        >
-                          <path d="M8 5v14l11-7z" />
-                        </svg>
+                        <PlayIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                         {/*
                           文案单独包一层并截断：`min-w-0` 只允许按钮盒子缩小，不会裁掉
                           `whitespace-nowrap` 的文字；集号到四位数时文字会越过按钮边界盖住
@@ -284,14 +277,7 @@ export function SeriesRoute(): React.JSX.Element {
                           : 'bg-surface-raised text-text-primary'
                       }`}
                     >
-                      <svg
-                        viewBox="0 0 24 24"
-                        aria-hidden
-                        className="h-3.5 w-3.5 flex-none sm:h-4 sm:w-4"
-                        fill="currentColor"
-                      >
-                        <path d="M12 21l-1.9-1.7C4.6 14.1 2 11.8 2 8.9 2 6.6 3.8 5 6 5c1.3 0 2.5.6 3.4 1.6L12 9l2.6-2.4C15.5 5.6 16.7 5 18 5c2.2 0 4 1.6 4 3.9 0 2.9-2.6 5.2-8.1 10.4z" />
-                      </svg>
+                      <HeartIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                       {followRecord === undefined ? '追更' : FOLLOW_STATE_LABELS[followRecord.state]}
                     </button>
                   </div>
@@ -308,16 +294,7 @@ export function SeriesRoute(): React.JSX.Element {
                     onClick={() => setDownloadPanelOpen(true)}
                     className="flex h-11 items-center gap-1 rounded-md px-3 text-xs text-text-tertiary transition-colors hover:text-text-primary"
                   >
-                    <svg
-                      viewBox="0 0 24 24"
-                      aria-hidden
-                      className="h-3.5 w-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path d="M12 3v12m0 0l-4-4m4 4l4-4M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                    <DownloadIcon className="h-3.5 w-3.5" />
                     下载
                   </button>
                   <button
@@ -326,18 +303,11 @@ export function SeriesRoute(): React.JSX.Element {
                     className="flex h-11 items-center gap-1 rounded-md px-3 text-xs text-text-tertiary transition-colors hover:text-text-primary"
                   >
                     {descending ? '倒序' : '正序'}
-                    <svg
-                      viewBox="0 0 24 24"
-                      aria-hidden
+                    <CaretDownIcon
                       className={`h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none ${
                         descending ? 'rotate-180' : ''
                       }`}
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth={2.5}
-                    >
-                      <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                    />
                   </button>
                 </div>
               </div>

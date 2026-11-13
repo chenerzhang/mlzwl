@@ -2,7 +2,9 @@ import { useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { FollowRecord, FollowState } from '@mlzwl/hongguo-shared';
 import { useNavigate } from 'react-router';
-import { HeaderTextButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
+import { ArrowLeftIcon } from '../components/icons';
+import { HOME_PATH } from '../features/navigation/back-target';
+import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 import { favoritesSummary, favoritesTabs, resolveInitialTab } from '../features/follow/favorites-view';
 import { newEpisodes } from '../features/follow/follow-model';
 import { useFollowStore } from '../features/follow/follow-store';
@@ -53,14 +55,14 @@ export function FavoritesRoute(): React.JSX.Element {
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
       <PageHeader
         left={
-          <HeaderTextButton
+          <HeaderButton
             label="返回"
             onClick={() => {
-              void navigate(-1);
+              void navigate(HOME_PATH, { replace: true });
             }}
           >
-            返回
-          </HeaderTextButton>
+            <ArrowLeftIcon />
+          </HeaderButton>
         }
         title="我的收藏"
       />

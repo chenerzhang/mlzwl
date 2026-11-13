@@ -6,6 +6,8 @@ import { queryKeys } from '../lib/query-keys';
 import { useInfiniteScroll } from '../lib/use-infinite-scroll';
 import { useGridColumns } from '../lib/use-grid-columns';
 import { createSuggestController, type SuggestController } from '../lib/debounced-suggest';
+import { ArrowLeftIcon, SearchIcon } from '../components/icons';
+import { HOME_PATH } from '../features/navigation/back-target';
 import { SeriesCard, SeriesCardSkeleton } from '../components/series-card';
 import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 import { useSearchHistoryStore } from '../features/search/search-history-store';
@@ -213,19 +215,10 @@ export function SearchRoute(): React.JSX.Element {
             <HeaderButton
               label="返回"
               onClick={() => {
-                void navigate(-1);
+                void navigate(HOME_PATH, { replace: true });
               }}
             >
-              <svg
-                viewBox="0 0 24 24"
-                aria-hidden
-                className="h-5 w-5"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <ArrowLeftIcon />
             </HeaderButton>
             {/*
               搜索页不用居中标题，返回按钮与输入框同行，顶栏只占一行。
@@ -244,17 +237,10 @@ export function SearchRoute(): React.JSX.Element {
               className="flex min-w-0 max-w-xl flex-1 items-center gap-2"
             >
               <div className="relative min-w-0 flex-1">
-                <svg
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                  className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={2}
-                >
-                  <circle cx="11" cy="11" r="7" />
-                  <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
-                </svg>
+                <SearchIcon
+                  size="sm"
+                  className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-tertiary"
+                />
                 <input
                   value={input}
                   onChange={(event) => handleInputChange(event.target.value)}
@@ -336,18 +322,7 @@ export function SearchRoute(): React.JSX.Element {
         */}
         {(showEmpty || showNoResult) && (
           <div className="mx-auto flex max-w-md flex-col items-center px-4 pt-20 text-center sm:pt-28">
-            <svg
-              viewBox="0 0 24 24"
-              aria-hidden
-              className="h-8 w-8 text-text-tertiary"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <circle cx="11" cy="11" r="7" />
-              {showNoResult && <path d="M8.5 8.5l5 5M13.5 8.5l-5 5" strokeLinecap="round" />}
-              <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
-            </svg>
+            <SearchIcon size="lg" className="text-text-tertiary" />
             <h2 className="mt-6 text-base font-medium tracking-tight text-text-primary">
               {showNoResult ? `没有找到「${keyword}」` : '搜一部想看的短剧'}
             </h2>
