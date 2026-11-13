@@ -37,7 +37,13 @@ export function shouldFillFeed(loadedCount: number, visibleCount: number, hasNex
  * 2. 上一页数据还没给满（首屏 7 条、目标 18 条）→ 只补齐，不翻页。
  * 没有这个区分，首屏一挂载就会直接跳到两页。
  */
-export function canAdvanceFeedPage(loadedCount: number, visibleCount: number): boolean {
+export function canAdvanceFeedPage(loadedCount: number, visibleCount: number, hasScrolled: boolean): boolean {
+  // 用户没滚动过就不能翻页。哨兵可见有两种可能：用户到底了，或首屏内容不足
+  // 一屏导致哨兵从一开始就在视口内。只有前者该翻页。实测 1440×2400 视口下
+  // 缺这道门槛会从 18 条一路补到 54 条、11 次请求。
+  if (!hasScrolled) {
+    return false;
+  }
   return loadedCount >= visibleCount;
 }
 

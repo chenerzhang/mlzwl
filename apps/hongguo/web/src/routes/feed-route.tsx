@@ -19,6 +19,7 @@ import {
 import { HeartIcon, HistoryIcon, SearchIcon, SparkleIcon, TrendUpIcon } from '../components/icons';
 import { useInfiniteScroll } from '../lib/use-infinite-scroll';
 import { useWideViewport } from '../lib/use-wide-viewport';
+import { useScrollIntent } from '../lib/use-scroll-intent';
 import { useGridColumns } from '../lib/use-grid-columns';
 import { SeriesCard, SeriesCardSkeleton } from '../components/series-card';
 import { PageHeader, SHELL_WIDTH, type PageHeaderAction } from '../components/page-header';
@@ -234,6 +235,9 @@ export function FeedRoute(): React.JSX.Element {
     fillTick,
   ]);
 
+  /** 用户是否有未消费的向下滚动意图；首屏自动补页不受它影响，翻页受它约束。 */
+  const scrollIntent = useScrollIntent();
+
   const sentinelRef = useInfiniteScroll({
     hasNextPage: query.hasNextPage,
     isFetchingNextPage: query.isFetchingNextPage,
@@ -245,12 +249,18 @@ export function FeedRoute(): React.JSX.Element {
      * 进入只是在等补页，翻页会让首屏一次跳两档。
      */
     fetchNextPage: () => {
-      if (!canAdvanceFeedPage(items.length, visibleCount)) {
+      if (!canAdvanceFeedPage(items.length, visibleCount, scrollIntent.pending)) {
         return;
       }
       setVisibleCount((current) => nextVisibleCount(current, targetCount));
+      // 消费意图：一次滚动只换一档。不消费会让后续每次请求结束、每次冷却
+      // 重试都再次放行，一次滚动把 visibleCount 从 18 推到 36、54。
+      scrollIntent.consume();
     },
-    enabled: !query.isError,
+    // `enabled` 同时承担两件事：出错时停用，以及把滚动意图合进依赖数组。
+    // 后者是必需的——超高视口下哨兵常驻视口、observer 不再回调，只有意图翻转
+    // 能唤醒判定；否则用户滚动后也不会翻页。
+    enabled: !query.isError && scrollIntent.pending,
   });
 
   const gridRef = useRef<HTMLDivElement>(null);
