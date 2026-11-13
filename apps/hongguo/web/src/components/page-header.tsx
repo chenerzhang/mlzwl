@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useFocusTrap } from '../features/player/use-focus-trap';
 import { useThemeStore } from '../features/theme/theme-store';
 import { useResolvedTheme } from '../features/theme/use-theme-effect';
+import { MoonIcon, MoreIcon, SunIcon } from './icons';
 import { buildMenuItems } from './page-header-actions';
 
 /**
@@ -193,9 +194,7 @@ function MoreActionsMenu({ actions, showThemeToggle }: MoreActionsMenuProps): Re
         }}
         className="flex h-11 w-11 items-center justify-center rounded-full text-text-primary transition-colors hover:bg-surface-overlay active:bg-surface-overlay"
       >
-        <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
-          <path d="M5 7h14M5 12h14M5 17h14" strokeLinecap="round" />
-        </svg>
+        <MoreIcon />
       </button>
       {open && (
         <HeaderActionsPopover actions={actions} showThemeToggle={showThemeToggle} onClose={() => setOpen(false)} />
@@ -323,21 +322,7 @@ function ThemeToggle(): React.JSX.Element {
 }
 
 function ThemeIcon({ resolved }: { resolved: 'dark' | 'light' }): React.JSX.Element {
-  return resolved === 'dark' ? (
-    /* 太阳：点它变亮 */
-    <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
-      <circle cx="12" cy="12" r="4" />
-      <path
-        d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
-        strokeLinecap="round"
-      />
-    </svg>
-  ) : (
-    /* 月亮：点它变暗 */
-    <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
-      <path d="M21 12.8A8.5 8.5 0 1111.2 3a7 7 0 009.8 9.8z" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return resolved === 'dark' ? <SunIcon /> : <MoonIcon />;
 }
 
 /** 顶栏图标按钮。命中区域 44×44，满足触摸目标要求。 */

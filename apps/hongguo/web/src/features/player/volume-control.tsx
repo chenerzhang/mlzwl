@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { MuteIcon, VolumeIcon } from '../../components/icons';
 import { useFocusTrap } from './use-focus-trap';
 
 export interface VolumeControlProps {
@@ -115,20 +116,8 @@ export function VolumeControl({
         aria-label={label}
         className="flex h-11 w-11 flex-none items-center justify-center rounded-full text-on-scrim transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20"
       >
-        <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2}>
-          {/* 喇叭主体 */}
-          <path d="M4 9v6h4l5 4V5L8 9H4z" strokeLinecap="round" strokeLinejoin="round" />
-          {level === 0 ? (
-            /* 静音：一个叉 */
-            <path d="M17 9l4 6M21 9l-4 6" strokeLinecap="round" />
-          ) : (
-            /* 有声：两道弧线，音量低时只画一道 */
-            <>
-              <path d="M16.5 8.5a5 5 0 010 7" strokeLinecap="round" />
-              {level > 0.5 && <path d="M19 6a8.5 8.5 0 010 12" strokeLinecap="round" />}
-            </>
-          )}
-        </svg>
+        {/* 旧手绘图标靠弧线数量表达音量高低，但这只是装饰：滑块已经显示具体值。 */}
+        {level === 0 ? <MuteIcon /> : <VolumeIcon />}
       </button>
 
       {/*

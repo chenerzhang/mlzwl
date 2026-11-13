@@ -16,6 +16,7 @@ import {
   shouldRequestBeforePlayback,
 } from '../features/player/definition-selection';
 import { usePlayerStore } from '../features/player/player-store';
+import { playerBackTarget } from '../features/navigation/back-target';
 import { useHistoryStore } from '../features/history/history-store';
 import { useFollowStore } from '../features/follow/follow-store';
 
@@ -432,6 +433,9 @@ export function PlayerRoute(): React.JSX.Element {
         <Player
           key={playback.episodeId}
           src={playback.streamUrl}
+          onBack={() => {
+            void navigate(playerBackTarget(seriesId), { replace: true });
+          }}
           {...(seriesQuery.data?.title === undefined ? {} : { title: seriesQuery.data.title })}
           {...(currentEpisode === undefined ? {} : { episodeLabel: `第 ${currentEpisode.number} 集` })}
           {...(spriteQuery.data === undefined
@@ -476,7 +480,10 @@ export function PlayerRoute(): React.JSX.Element {
         onClose={() => setDrawerOpen(false)}
         onSelect={(episode) => {
           setDrawerOpen(false);
-          void navigate(`/watch/${episode.id}?series=${seriesId}`);
+          // 播放器内部换集也走 replace：否则 `/series/S → /watch/E1 → /watch/E2`
+          // 之后点返回只会把 E2 换成 `/series/S`，栈里还留着 E1，浏览器后退
+          // 又回到已看过的上一集。
+          void navigate(`/watch/${episode.id}?series=${seriesId}`, { replace: true });
         }}
       />
     </div>
