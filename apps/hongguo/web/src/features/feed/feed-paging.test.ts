@@ -59,9 +59,15 @@ describe('feed target paging', () => {
 
   it('advances a page only after the current page is full', () => {
     // 首屏 7 条、目标 18 条时不能翻页，否则一次挂载就跳两页。
-    expect(canAdvanceFeedPage(7, 18)).toBe(false);
-    expect(canAdvanceFeedPage(18, 18)).toBe(true);
-    expect(canAdvanceFeedPage(21, 18)).toBe(true);
+    expect(canAdvanceFeedPage(7, 18, true)).toBe(false);
+    expect(canAdvanceFeedPage(18, 18, true)).toBe(true);
+    expect(canAdvanceFeedPage(21, 18, true)).toBe(true);
+  });
+
+  it('does not advance before the user has scrolled', () => {
+    // 回归点：视口比内容高时哨兵常驻视口，没有这道门槛会一路补到几十条。
+    expect(canAdvanceFeedPage(18, 18, false)).toBe(false);
+    expect(canAdvanceFeedPage(54, 18, false)).toBe(false);
   });
 
   it('adds one target worth of items per page turn', () => {

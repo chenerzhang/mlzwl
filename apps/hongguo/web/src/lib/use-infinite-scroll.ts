@@ -15,7 +15,13 @@ export interface InfiniteScrollOptions {
    * 200px 既能提前取，又能在内容撑满屏幕后自然停下。
    */
   rootMargin?: number;
-  /** 是否启用。用于搜索页「还没输入关键词」等场景。 */
+  /**
+   * 是否启用。
+   *
+   * 除了搜索页「还没输入关键词」这类场景，也承担「外部状态唤醒判定」的职责：
+   * 判定 effect 依赖 `enabled`，所以调用方把影响判定结果的外部状态合进这个
+   * 布尔值，状态翻转时就能唤醒一次判定。不要另加 `recheckKey` 之类的通道。
+   */
   enabled?: boolean;
 }
 
