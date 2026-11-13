@@ -1,55 +1,28 @@
-import { useRef, useState } from 'react';
-import type { KeyboardEvent } from 'react';
-import type { FollowRecord, FollowState } from '@mlzwl/hongguo-shared';
+import type { FollowRecord } from '@mlzwl/hongguo-shared';
 import { useNavigate } from 'react-router';
-import { ArrowLeftIcon } from '../components/icons';
+import { ArrowLeftIcon, BellIcon } from '../components/icons';
 import { HOME_PATH } from '../features/navigation/back-target';
 import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
-import { favoritesSummary, favoritesTabs, resolveInitialTab } from '../features/follow/favorites-view';
+import { favoriteEntries, favoritesSummary } from '../features/follow/favorites-view';
 import { newEpisodes } from '../features/follow/follow-model';
 import { useFollowStore } from '../features/follow/follow-store';
 
-const TAB_CLASS =
-  'relative flex h-11 flex-1 items-center justify-center whitespace-nowrap px-2 text-[13px] transition-colors after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full';
-
-/** 我的收藏。三个状态用固定 tab 呈现，空组也保留自己的空状态。 */
+/**
+ * 我的收藏。
+ *
+ * 只有一列，没有「在看 / 想看 / 看完」三个 tab。收藏就是收藏：一个二元标记，
+ * 一个列表。之前的三个 tab 来自旧的三态追更模型，那个模型既要点 4 次才能取消，
+ * 分组本身也不参与任何功能。
+ *
+ * 追更但不收藏的剧**不出现在这里**——那是「更新提醒」，不是「我的收藏」。
+ */
 export function FavoritesRoute(): React.JSX.Element {
   const navigate = useNavigate();
   const recordsById = useFollowStore((state) => state.records);
-  const unfollow = useFollowStore((state) => state.unfollow);
+  const removeFavorite = useFollowStore((state) => state.removeFavorite);
   const records = Object.values(recordsById);
-  const tabs = favoritesTabs(records);
+  const entries = favoriteEntries(records);
   const summary = favoritesSummary(records);
-  const [activeState, setActiveState] = useState<FollowState>(() => resolveInitialTab(tabs));
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const activeTab = tabs.find((tab) => tab.state === activeState) ?? tabs[0]!;
-
-  const selectAndFocusTab = (index: number): void => {
-    const tab = tabs[index];
-    if (tab === undefined) {
-      return;
-    }
-    setActiveState(tab.state);
-    tabRefs.current[index]?.focus();
-  };
-
-  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number): void => {
-    let nextIndex: number | undefined;
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-      nextIndex = (index - 1 + tabs.length) % tabs.length;
-    } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-      nextIndex = (index + 1) % tabs.length;
-    } else if (event.key === 'Home') {
-      nextIndex = 0;
-    } else if (event.key === 'End') {
-      nextIndex = tabs.length - 1;
-    }
-    if (nextIndex === undefined) {
-      return;
-    }
-    event.preventDefault();
-    selectAndFocusTab(nextIndex);
-  };
 
   return (
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
@@ -68,64 +41,27 @@ export function FavoritesRoute(): React.JSX.Element {
       />
 
       <div className="px-3 pt-4 sm:px-5">
-        <p className="text-[13px] tabular-nums text-text-secondary">
-          共 {summary.total} 部{summary.withUpdates > 0 && <>，{summary.withUpdates} 部有更新</>}
-        </p>
-
-        <div role="tablist" aria-label="收藏状态" className="mt-3 flex border-b border-border-subtle">
-          {tabs.map((tab, index) => {
-            const selected = tab.state === activeTab.state;
-            const tabId = `favorites-tab-${tab.state}`;
-            const panelId = `favorites-panel-${tab.state}`;
-            return (
-              <button
-                key={tab.state}
-                ref={(element) => {
-                  tabRefs.current[index] = element;
-                }}
-                id={tabId}
-                type="button"
-                role="tab"
-                aria-selected={selected}
-                aria-controls={panelId}
-                tabIndex={selected ? 0 : -1}
-                onClick={() => setActiveState(tab.state)}
-                onKeyDown={(event) => handleTabKeyDown(event, index)}
-                className={`${TAB_CLASS} ${
-                  selected
-                    ? 'font-medium text-text-primary after:bg-accent'
-                    : 'text-text-secondary after:bg-transparent hover:text-text-primary'
-                }`}
-              >
-                {tab.title} <span className="ml-1 tabular-nums text-text-tertiary">{tab.records.length}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <section
-          id={`favorites-panel-${activeTab.state}`}
-          role="tabpanel"
-          aria-labelledby={`favorites-tab-${activeTab.state}`}
-          tabIndex={0}
-        >
-          {activeTab.records.length === 0 ? (
-            <p className="py-12 text-center text-[13px] text-text-tertiary">{activeTab.emptyHint}</p>
-          ) : (
+        {entries.length === 0 ? (
+          <p className="py-16 text-center text-[13px] text-text-tertiary">还没有收藏的短剧</p>
+        ) : (
+          <>
+            <p className="text-[13px] tabular-nums text-text-secondary">
+              共 {summary.total} 部{summary.withUpdates > 0 && <>，{summary.withUpdates} 部有更新</>}
+            </p>
             <ul className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {activeTab.records.map((record) => (
+              {entries.map((entry) => (
                 <FavoriteCard
-                  key={record.seriesId}
-                  record={record}
+                  key={entry.record.seriesId}
+                  record={entry.record}
                   onSelect={() => {
-                    void navigate(`/series/${record.seriesId}`);
+                    void navigate(`/series/${entry.record.seriesId}`);
                   }}
-                  onRemove={() => unfollow(record.seriesId)}
+                  onRemove={() => removeFavorite(entry.record.seriesId)}
                 />
               ))}
             </ul>
-          )}
-        </section>
+          </>
+        )}
       </div>
     </div>
   );
@@ -139,7 +75,8 @@ interface FavoriteCardProps {
 
 /** 横向专用卡片给取消按钮保留独立命中区，避免在可点击卡片里嵌套按钮。 */
 function FavoriteCard({ record, onSelect, onRemove }: FavoriteCardProps): React.JSX.Element {
-  const updates = newEpisodes(record);
+  // 只有追更中的剧才显示更新数。只收藏不追更时不打扰用户。
+  const updates = record.following ? newEpisodes(record) : 0;
 
   return (
     <li className="group flex gap-3 overflow-hidden rounded-lg bg-surface-raised transition-colors hover:bg-surface-overlay">
@@ -161,6 +98,12 @@ function FavoriteCard({ record, onSelect, onRemove }: FavoriteCardProps): React.
           <p className="truncate text-[13px] font-medium tracking-tight text-text-primary">{record.seriesTitle}</p>
           <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px] tabular-nums text-text-tertiary">
             <span>{record.knownEpisodes} 集</span>
+            {record.following && (
+              <span className="flex items-center gap-0.5">
+                <BellIcon size="sm" className="h-3 w-3" />
+                追更中
+              </span>
+            )}
             {updates > 0 && <span className="font-medium text-accent-soft">更新 {updates} 集</span>}
           </div>
         </div>

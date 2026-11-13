@@ -16,10 +16,11 @@
 **原始项目**：https://github.com/phosphor-icons/core
 
 **原始图标名**：每个导出的图标在 `icons.tsx` 中的注释标注了对应的 Phosphor
-图标名（如 `arrow-left`、`clock-counter-clockwise`、`heart`、`trend-up`、
-`magnifying-glass`、`sparkle`、`dots-three`、`sun`、`moon`、`play`、`pause`、
-`speaker-high`、`speaker-slash`、`arrows-out`、`arrows-in`、`caret-left`、
-`caret-right`、`x`、`download-simple`、`caret-down`、`check`、`trash`）。
+图标名（如 `arrow-left`、`clock-counter-clockwise`、`heart`、`heart-fill`、
+`bell`、`bell-fill`、`trend-up`、`magnifying-glass`、`sparkle`、`dots-three`、
+`sun`、`moon`、`play`、`pause`、`speaker-high`、`speaker-slash`、`arrows-out`、
+`arrows-in`、`caret-left`、`caret-right`、`x`、`download-simple`、`caret-down`、
+`check`、`trash`）。
 
 **许可**：MIT
 

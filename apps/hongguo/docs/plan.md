@@ -276,19 +276,29 @@
 - **验证**：断网后刷新首页，仍能显示上次的 9 部剧；篡改 localStorage 里的 `id`
   为 `abc` 后刷新，缓存被丢弃且不报错。
 
-### P1-8 追更状态机
+### P1-8 收藏与追更（两个独立开关）
 
-- **来源**：`guoapp/lib/follow_state.dart`。三态 `planned/watching/watched`、
-  手动标记已看、`newEpisodes` 与 `newSeasons` 分别计算。**【源码】**
-- **现状**：无收藏功能（全仓无 favorite 相关代码）。
-- **差距**：这是最大的功能缺口。用户无法标记"想看""在看""看完"。
-- **做法**：
-  1. `shared` 增加 `FollowStateSchema`：`state`、`knownEpisodes`（上游已知集数）、
-     `confirmedEpisodes`（用户已确认看到的集数）、`updatedAt`。
-  2. 前端 store 持久化，键 `dsh-hongguo.follow.v1`。
-  3. `newEpisodes = knownEpisodes - confirmedEpisodes`，下限 0。
-  4. 剧集详情页与首页卡片显示"更新 N 集"角标。
-- **验证**：收藏一部 104 集的剧，把 `confirmedEpisodes` 设为 100，重新拉取详情后角标显示 4。
+- **来源**：`guoapp/lib/follow_state.dart` 的三态 `planned/watching/watched`。**【源码】**
+- **已实现并修正**：最初照搬了上游的三态，用一个按钮轮转
+  「未收藏 → 想看 → 在看 → 看完 → 取消」。实测发现两个问题：
+  1. **取消收藏要点 4 次**，中间还会经过用户没表达过的状态；
+  2. 三态只驱动按钮文案与收藏页分组 tab，**不参与任何功能**（不驱动角标、
+     不驱动续播、不驱动离线缓存）。
+
+  用户反馈直接指出「收藏/取消收藏就好了」，最终拆成两个独立布尔量：
+  - `favorite`：我记住了这部剧。二元开关，取消收藏点 1 次。
+  - `following`：它更新时告诉我。二元开关，独立控制「更新 N 集」角标。
+
+  两者可以同时为真、可以只开一个。**都为假时整条记录删除**，不留空卡片。
+- **数据契约**：`FollowRecordSchema` 的 `favorite: boolean` 与 `following: boolean`，
+  取代旧的 `state: z.enum(FOLLOW_STATES)`。
+- **持久化**：键 `dsh-hongguo.follow.v1`，`version: 3`。旧的三态存档（含 `state`
+  字段、无 `favorite` / `following`）在校验时被丢弃，**不做迁移**——已确认
+  「不考虑向后兼容，老数据可直接清除」。
+- **收藏页**：单一列表，只列 `favorite === true` 的记录。追更但未收藏的剧不进
+  收藏页（那是「更新提醒」，不是「我的收藏」）。旧的三个 tab 已删除。
+- **验证**：`follow-model.test.ts` 覆盖两个开关互不干扰、`isBlankRecord` 边界；
+  `favorites-view.test.ts` 覆盖只收藏不追更不产生角标、追更未收藏不进列表。
 
 ### P1-9 收藏更新数用高水位，不用差值
 
@@ -951,7 +961,7 @@ gzip 89.92 kB`，红线 355 kB。
 26. 首页无限滚动失效（回归）
 27. 详情页操作区改单行平铺
 28. 单集下载（详情页下载面板 + 播放页选集抽屉）
-29. 收藏页改三 tab
+29. ~~收藏页改三 tab~~（已被两个独立开关方案取代，见 P1-8）
 
 理由：前三项是用户实测发现的问题，第四项是同类页面的结构统一。
 
@@ -998,12 +1008,13 @@ gzip 89.92 kB`，红线 355 kB。
 - 详情页下载入口是选集标题行的「下载」按钮打开面板，**不在每个选集格子里塞下载按钮**：
   外层格子本身是 `<button>`，嵌套按钮是非法 HTML。播放页抽屉里集选择按钮与
   下载按钮是兄弟节点（`flex` 行），同样不嵌套。
-- 收藏页三 tab 用 `role="tablist"`/`tab"`/`tabpanel` + `aria-selected` /
-  `aria-controls` / `aria-labelledby`，同时只渲染当前 panel。`resolveInitialTab`
-  用 `useState` 惰性初始化，只在首次挂载算一次，因此用户手动切到空 tab 后
-  不会被强行拉回非空 tab。取消最后一条收藏后停留在当前 tab 并显示空状态。
-- tab 顺序固定 `watching → planned → watched`，默认选第一个非空 tab；全空时选第一个。
-  键盘支持 Left/Right/Up/Down/Home/End，均移动焦点并 `preventDefault`。
+- 收藏页三 tab 的实现已被废弃：三态模型整体改为 `favorite` / `following` 两个
+  独立布尔量，收藏页只剩单一列表，不再有 `tablist` / `tabpanel` /
+  `resolveInitialTab`。详见 P1-8。原设计保留在此仅作历史记录：
+  ~~用 `role="tablist"` / `tab` / `tabpanel` + `aria-selected` / `aria-controls` /
+  `aria-labelledby`，同时只渲染当前 panel；`resolveInitialTab` 用 `useState`
+  惰性初始化；tab 顺序固定 `watching → planned → watched`，默认选第一个非空 tab；
+  键盘支持 Left/Right/Up/Down/Home/End。~~
 
 **第九批（下载面板修版与批量下载，已完成）**
 

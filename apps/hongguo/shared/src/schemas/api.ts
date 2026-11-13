@@ -131,28 +131,47 @@ export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];
 export const ApiErrorBodySchema = z.object({ code: z.string(), message: z.string() });
 export type ApiErrorBody = z.infer<typeof ApiErrorBodySchema>;
 
-/** 追更三态。 */
-export const FOLLOW_STATES = ['planned', 'watching', 'watched'] as const;
-export type FollowState = (typeof FOLLOW_STATES)[number];
-
 /**
- * 一条追更记录。
+ * 一条「我的收藏」记录。
+ *
+ * 收藏与追更是**两个独立的布尔标记**，不是一个按钮轮转出来的多态：
+ * 收藏回答「我记住了这部剧」，追更回答「它更新时提醒我」。
+ * 两者可以同时为真、可以只开一个；都为假时整条记录删除，不留在存档里。
+ *
+ * 历史背景：早期版本用 `state: 'planned' | 'watching' | 'watched'` 三态，
+ * 单个按钮轮转「未收藏 → 想看 → 在看 → 看完 → 取消」。这有两个问题：
+ * 1. 取消收藏要点 4 次，中间还会经过用户没表达过的状态；
+ * 2. 三态只驱动按钮文案与分组 tab，不参与任何功能。
+ * 因此改为两个独立布尔量。旧存档（含 `state` 字段）直接丢弃，不做迁移。
  *
  * **仅作文档契约。web 侧禁止值导入此 schema，会把 zod 打进浏览器包（实测 +89 kB）；
  * 需要校验时手写。**
  */
-export const FollowRecordSchema = z.object({
-  seriesId: z.string().min(1),
-  seriesTitle: z.string().min(1),
-  coverUrl: z.string().optional(),
-  state: z.enum(FOLLOW_STATES),
-  /** 上游最近一次报告的已知集数。 */
-  knownEpisodes: z.number().int().nonnegative(),
-  /** 用户已确认看到的集数。**只增不减**，除非用户显式重置。 */
-  confirmedEpisodes: z.number().int().nonnegative(),
-  /** 最后一次更新这些数字的时间。用于防时钟回拨误判。 */
-  checkedAt: z.number().int().nonnegative(),
-});
+export const FollowRecordSchema = z
+  .object({
+    seriesId: z.string().min(1),
+    seriesTitle: z.string().min(1),
+    coverUrl: z.string().optional(),
+    /** 是否已收藏。 */
+    favorite: z.boolean(),
+    /** 是否追更。只有追更中的剧才显示「更新 N 集」角标。 */
+    following: z.boolean(),
+    /** 上游最近一次报告的已知集数。 */
+    knownEpisodes: z.number().int().nonnegative(),
+    /** 用户已确认看到的集数。**只增不减**，除非用户显式重置。 */
+    confirmedEpisodes: z.number().int().nonnegative(),
+    /** 最后一次更新这些数字的时间。用于防时钟回拨误判。 */
+    checkedAt: z.number().int().nonnegative(),
+  })
+  // 两条不变量：web 侧的手写校验（`follow-store.ts` 的 `sanitizeFollowRecord`）
+  // 已经这么做，schema 必须与它一致，否则这份「文档契约」会验证通过一份
+  // web 实际会丢弃的记录。
+  .refine((record) => record.favorite || record.following, {
+    message: '两个标记都为假的记录不应落盘',
+  })
+  .refine((record) => record.confirmedEpisodes <= record.knownEpisodes, {
+    message: 'confirmedEpisodes 不得超过 knownEpisodes',
+  });
 export type FollowRecord = z.infer<typeof FollowRecordSchema>;
 
 /** 分页游标参数。 */

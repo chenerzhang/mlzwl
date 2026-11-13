@@ -6,14 +6,14 @@ import { queryKeys } from '../lib/query-keys';
 import { formatCount, shouldShowCount } from '../lib/format';
 import { useHistoryStore } from '../features/history/history-store';
 import { useFollowStore } from '../features/follow/follow-store';
-import { FOLLOW_STATE_LABELS, hasUpdates, newEpisodes, nextFollowState } from '../features/follow/follow-model';
+import { followFlags, hasUpdates, newEpisodes } from '../features/follow/follow-model';
 import { resumeTarget } from '../features/player/resume-target';
 import { DownloadPanel } from '../features/download/download-panel';
 import { useEpisodeDownload } from '../features/download/use-download';
 import type { DefinitionReadiness } from '../features/download/download-media-url';
 import { usePlayerStore } from '../features/player/player-store';
 import { readDefinitions } from '../features/player/definition-selection';
-import { ArrowLeftIcon, CaretDownIcon, DownloadIcon, HeartIcon, PlayIcon } from '../components/icons';
+import { ArrowLeftIcon, BellIcon, CaretDownIcon, DownloadIcon, HeartIcon, PlayIcon } from '../components/icons';
 import { HOME_PATH } from '../features/navigation/back-target';
 import { HeaderButton, PageHeader, SHELL_WIDTH } from '../components/page-header';
 
@@ -31,9 +31,10 @@ export function SeriesRoute(): React.JSX.Element {
   const seriesId = id ?? '';
   const history = useHistoryStore((state) => state.entries[seriesId]);
   const followRecord = useFollowStore((state) => state.records[seriesId]);
-  const follow = useFollowStore((state) => state.follow);
-  const unfollow = useFollowStore((state) => state.unfollow);
-  const setFollowState = useFollowStore((state) => state.setState);
+  const addFavorite = useFollowStore((state) => state.addFavorite);
+  const removeFavorite = useFollowStore((state) => state.removeFavorite);
+  const startFollowing = useFollowStore((state) => state.startFollowing);
+  const stopFollowing = useFollowStore((state) => state.stopFollowing);
   const syncEpisodes = useFollowStore((state) => state.syncEpisodes);
   /** 分集倒序。104 集时正序要点很多次才能看到最新集，倒序是真实需求。 */
   const [descending, setDescending] = useState(false);
@@ -143,6 +144,7 @@ export function SeriesRoute(): React.JSX.Element {
   /** 没看过这部剧时不预选任何集，避免第 1 集无端显示成「当前集」。 */
   const currentEpisodeId = hasKnownEpisode ? target?.id : undefined;
   const followUpdates = followRecord !== undefined && hasUpdates(followRecord) ? newEpisodes(followRecord) : 0;
+  const { favorite, following } = followFlags(followRecord);
 
   return (
     <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
@@ -239,46 +241,68 @@ export function SeriesRoute(): React.JSX.Element {
                     )}
 
                     {/*
-                      追更按钮（P1-8）。用单个按钮循环三态，不做下拉：三态只有三个值，
-                      下拉多一次点击且要自己实现弹层。循环顺序「未收藏 → 想看 → 在看 →
-                      看完 → 取消」，当前态直接写在按钮上，点一下就是下一态。
+                      收藏与追更拆成两个独立按钮（P1-8）。
+
+                      之前是一个按钮轮转「未收藏 → 想看 → 在看 → 看完 → 取消」，
+                      取消收藏要点 4 次，中间还会经过用户没表达过的状态。一个按钮
+                      只该干一件事：收藏就是收藏，追更就是追更。
+
+                      图标也不同（heart / bell），不靠颜色区分，用户不用读文字
+                      就能分清两个开关。
                     */}
                     <button
                       type="button"
-                      aria-label={
-                        followRecord === undefined
-                          ? '加入追更'
-                          : `追更状态：${FOLLOW_STATE_LABELS[followRecord.state]}，点击切换`
-                      }
+                      aria-label={favorite ? `取消收藏：${detail.title}` : `收藏：${detail.title}`}
+                      aria-pressed={favorite}
                       onClick={() => {
-                        const next = nextFollowState(followRecord?.state);
-                        if (next === undefined) {
-                          unfollow(seriesId);
+                        if (favorite) {
+                          removeFavorite(seriesId);
                           return;
                         }
-                        if (followRecord === undefined) {
-                          const knownEpisodes = upstreamEpisodes ?? 0;
-                          follow({
-                            seriesId: detail.id,
-                            seriesTitle: detail.title,
-                            ...(detail.coverUrl === undefined ? {} : { coverUrl: detail.coverUrl }),
-                            state: next,
-                            knownEpisodes,
-                            // 已经看过这部就看过一半了，不能让角标一上来就报「更新 104 集」。
-                            confirmedEpisodes: Math.min(knownEpisodes, history?.episodeNumber ?? 0),
-                          });
-                          return;
-                        }
-                        setFollowState(seriesId, next);
+                        addFavorite({
+                          seriesId: detail.id,
+                          seriesTitle: detail.title,
+                          ...(detail.coverUrl === undefined ? {} : { coverUrl: detail.coverUrl }),
+                          knownEpisodes: upstreamEpisodes ?? 0,
+                          // 已经看过这部就看过一半了，不能让角标一上来就报「更新 104 集」。
+                          seenEpisodes: history?.episodeNumber ?? 0,
+                        });
                       }}
                       className={`flex h-11 flex-none items-center gap-0.5 whitespace-nowrap rounded-full px-2 text-xs transition-colors sm:gap-1.5 sm:px-4 sm:text-sm ${
-                        followRecord === undefined
-                          ? 'text-text-secondary ring-1 ring-border hover:text-text-primary'
-                          : 'bg-surface-raised text-text-primary'
+                        favorite
+                          ? 'bg-surface-raised text-accent-soft'
+                          : 'text-text-secondary ring-1 ring-border hover:text-text-primary'
                       }`}
                     >
-                      <HeartIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                      {followRecord === undefined ? '追更' : FOLLOW_STATE_LABELS[followRecord.state]}
+                      <HeartIcon filled={favorite} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      {favorite ? '已收藏' : '收藏'}
+                    </button>
+
+                    <button
+                      type="button"
+                      aria-label={following ? `取消追更：${detail.title}` : `追更：${detail.title}`}
+                      aria-pressed={following}
+                      onClick={() => {
+                        if (following) {
+                          stopFollowing(seriesId);
+                          return;
+                        }
+                        startFollowing({
+                          seriesId: detail.id,
+                          seriesTitle: detail.title,
+                          ...(detail.coverUrl === undefined ? {} : { coverUrl: detail.coverUrl }),
+                          knownEpisodes: upstreamEpisodes ?? 0,
+                          seenEpisodes: history?.episodeNumber ?? 0,
+                        });
+                      }}
+                      className={`flex h-11 flex-none items-center gap-0.5 whitespace-nowrap rounded-full px-2 text-xs transition-colors sm:gap-1.5 sm:px-4 sm:text-sm ${
+                        following
+                          ? 'bg-surface-raised text-accent-soft'
+                          : 'text-text-secondary ring-1 ring-border hover:text-text-primary'
+                      }`}
+                    >
+                      <BellIcon filled={following} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      {following ? '追更中' : '追更'}
                     </button>
                   </div>
                 </div>

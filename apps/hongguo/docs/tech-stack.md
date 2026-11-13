@@ -466,7 +466,7 @@ useInfiniteQuery({
 // 客户端状态：Zustand
 usePlayerStore; // 当前剧集、当前集、音量、倍速、静音
 useHistoryStore; // 播放进度（持久化到 localStorage）
-useFollowStore; // 追更三态与集数高水位（持久化到 localStorage）
+useFollowStore; // 收藏/追更两个独立开关 + 集数高水位（持久化到 localStorage）
 ```
 
 首页分页判定全部集中在 `features/feed/feed-paging.ts`，不散在路由里：
