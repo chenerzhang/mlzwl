@@ -29,7 +29,9 @@ export interface SeriesCardProps {
 export function SeriesCard({ series, onSelect }: SeriesCardProps): React.JSX.Element {
   // 只订阅本剧那一条记录：`records[id]` 的引用在别的剧变动时不变，不会连带重渲染。
   const follow = useFollowStore((state) => state.records[series.id]);
-  const updates = follow === undefined ? 0 : newEpisodes(follow);
+  // 角标只在**追更中**显示。只收藏不追更的剧不该弹「更新 N 集」——
+  // 「我记住了这部剧」不等于「它更新时告诉我」。
+  const updates = follow !== undefined && follow.following ? newEpisodes(follow) : 0;
 
   return (
     <button
