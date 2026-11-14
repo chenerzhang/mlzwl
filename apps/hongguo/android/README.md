@@ -197,9 +197,9 @@ curl -s http://127.0.0.1:9333/json/list
 248 MB）会撞体积上限，整个端点 502，面板报「清晰度获取失败」——而移动端 web
 同一集能正常列出 5 档。拆开后 `/playback` 实测 194 ms 返回 5 档，与 web 一致。
 
-## 壳必须自己实现的四件事
+## 壳必须自己实现的五件事
 
-这四项在移动端浏览器上由浏览器提供，Android WebView 不提供。缺任何一项都会表现为
+这五项在移动端浏览器上由浏览器提供，Android WebView 不提供。缺任何一项都会表现为
 「页面功能坏了」，但根因在宿主：
 
 | 能力 | 缺了会怎样 | 实现 |
@@ -208,6 +208,7 @@ curl -s http://127.0.0.1:9333/json/list
 | 横屏锁 | 全屏后仍竖屏，16:9 视频上下大黑边 | `requestedOrientation = SCREEN_ORIENTATION_SENSOR_LANDSCAPE` |
 | 下载落盘 | `<a download href="blob:">` 点了没反应，文件不落盘 | 接管 `HTMLAnchorElement.prototype.click` + 分块桥接 + MediaStore |
 | 非 `fetch` 的媒体请求 | `background-image` 拿到 `FileNotFoundException`；`<video src="/api/media/...">` 永远停在 `readyState 0` | `shouldInterceptRequest` 拦 `/api/cover` 与 `/api/sprite-sheet`；适配层拦 `HTMLMediaElement.src` 换成 blob URL |
+| 安全区 | 标题与控件被状态栏压住 | `window.setDecorFitsSystemWindows(false)`，让页面的 `env(safe-area-inset-*)` 生效 |
 
 `screen.orientation.lock()` 在 WebView 里直接抛
 `NotSupportedError: ... is not available on this device`，所以横屏必须由宿主设置。
@@ -217,6 +218,19 @@ curl -s http://127.0.0.1:9333/json/list
 
 `background-image` 与 `<img src>` 都不经过 `window.fetch`，只能由
 `shouldInterceptRequest` 接管。`/api/cover` 与 `/api/sprite-sheet` 都走这条路。
+
+### 为什么安全区必须由宿主开
+
+`targetSdk = 36`。Android 15（API 35）起，`targetSdk >= 35` 的应用**强制
+edge-to-edge**：窗口默认铺满整屏，绘制到状态栏后面。
+
+页面已经写了 `viewport-fit=cover` 与 `padding-top: env(safe-area-inset-top)`
+（`web/src/styles/index.css:177`），这是移动端 Chrome 的正确写法。但 WebView
+只有在宿主调过 `setDecorFitsSystemWindows(false)` 时才向页面报告安全区，
+否则一律报 **0**——于是那个 padding 在壳里等于没写。
+
+不要在原生侧写死一个状态栏高度：那样会与页面的 `env(safe-area-inset-*)`
+叠加成双倍留白，而且横屏时状态栏高度不同。
 
 逐项功能走查结果见 [`docs/feature-parity.md`](docs/feature-parity.md)。
 
@@ -247,6 +261,7 @@ OkHttp 是原生 HTTP 客户端，不受同源策略约束，所以签名请求�
 5. **下载要经过 JS 内存**：受 CENC 解密只在 JS 侧的限制，下载比播放多一次完整字节拷贝。1080p 单集约 9 MB，实测下载 + 落盘约 2 秒。
 6. **全屏提示只在首次出现**：系统会弹一次「Viewing full screen / To exit, swipe down」，这是 Android 的系统级提示，不是本应用的 UI。
 7. **播放页会同时缓存两份视频**：`player-route.tsx` 会预取下一集，所以缓存目录里最多同时有当前集和下一集。淘汰只在文件没被读取时才生效，所以峰值占用大约是两集之和（1080p 最多约 30 MB）。
+8. **同一集的并发请求串行化**：`VideoProxyHandler` 用一把 per-URL 锁。8 路并发打同一集时，只有 1 次真实下载，另外 7 次等锁后命中缓存。代价是并发请求同一集时最慢那一路要等第一路下完；收益是不会出现「两路同时写同一个文件」。
 
 ## 本工程不是 npm 包
 

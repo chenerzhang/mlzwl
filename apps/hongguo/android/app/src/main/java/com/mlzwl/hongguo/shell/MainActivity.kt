@@ -56,6 +56,37 @@ class MainActivity : AppCompatActivity() {
         )
         setContentView(root)
 
+        /*
+         * 把状态栏与导航栏的尺寸交给页面自己排版。
+         *
+         * ## 不处理会怎样
+         *
+         * `targetSdk = 36`。Android 15（API 35）起，`targetSdk >= 35` 的应用
+         * 强制 edge-to-edge：窗口默认铺满整屏，**绘制到状态栏后面**。
+         * 实测（1080x2400 / 420dpi）：`header` 的 `getBoundingClientRect().top`
+         * 为 0，标题被状态栏压住。
+         *
+         * ## 为什么不能只靠页面
+         *
+         * 页面已经写了 `viewport-fit=cover` 和 `padding-top: env(safe-area-inset-top)`
+         * （`web/src/styles/index.css:177`），这是移动端 Chrome 的正确写法。
+         * 但实测 `env(safe-area-inset-top)` 返回 **0**：WebView 只有在宿主
+         * 明确声明「内容延伸到系统栏」时才向页面报告安全区，否则一律报 0。
+         * 所以这个 padding 在壳里等于没写。
+         *
+         * ## 做法
+         *
+         * `setDecorFitsSystemWindows(false)` 让 WebView 拿到真实安全区，
+         * 页面自己的 `env(safe-area-inset-*)` 就能生效。这样不用在原生侧写死
+         * 一个状态栏高度，也不用改 `web/src`（本轮约束禁止改）。
+         *
+         * 全屏时 `enterImmersive()` 会隐藏系统栏，安全区自动变 0，页面铺满——
+         * 不需要额外分支。
+         */
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        }
+
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true          // WASM 侧用 localStorage 存设备档案
