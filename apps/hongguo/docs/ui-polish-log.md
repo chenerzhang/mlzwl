@@ -53,7 +53,7 @@ pointerdowns:[["VIDEO", ""], ["BUTTON", "选集"]]
 
 ### 2.3 修复
 
-`apps/web/src/features/player/use-gestures.ts` 两处改动：
+`web/src/features/player/use-gestures.ts` 两处改动：
 
 1. **按在交互控件上直接让路**。新增 `isInteractive()`：从 `target` 逐层
    上溯到手势容器，命中 `button, a, input, select, textarea,
@@ -110,7 +110,7 @@ pointerdowns:[["VIDEO", ""], ["BUTTON", "选集"]]
 
 ### 3.2 修复
 
-新建 `apps/web/src/components/page-header.tsx`，四个路由统一使用。
+新建 `web/src/components/page-header.tsx`，四个路由统一使用。
 设计依据是 `ui-ux-pro-max` 的 Sticky Navigation 条目：
 
 > **Do:** Add padding-top to body equal to nav height
@@ -248,7 +248,7 @@ setDrag(seconds)                                        // 就永远不执行
 
 ### 5.3 头部统一
 
-新建 `components/page-header.tsx`，四个路由共用。组件注释里写清了三条
+新建 `web/src/components/page-header.tsx`，四个路由共用。组件注释里写清了三条
 约束（sticky 占位、`pt-safe` 放内部、半透明背景）。
 
 | 页面 | 改前 | 改后 |
@@ -423,19 +423,19 @@ pnpm -r build       web 329.94 kB JS / 101.98 kB gzip
 
 新增：
 
-- `apps/web/src/components/page-header.tsx`
+- `web/src/components/page-header.tsx`
 - `docs/ui-polish-log.md`
 
 修改：
 
-- `apps/web/src/features/player/use-gestures.ts`（按钮失效根因修复）
-- `apps/web/src/features/player/progress-bar.tsx`（hover 预览 + 触摸预览修复）
-- `apps/web/src/features/player/player.tsx`（控件尺寸与图标）
-- `apps/web/src/routes/{feed,search,series,history}-route.tsx`（统一顶栏与重设计）
-- `apps/web/src/components/series-card.tsx`（层级与动效）
-- `apps/web/src/styles/index.css`（配色对比度、焦点环、reduced-motion）
+- `web/src/features/player/use-gestures.ts`（按钮失效根因修复）
+- `web/src/features/player/progress-bar.tsx`（hover 预览 + 触摸预览修复）
+- `web/src/features/player/player.tsx`（控件尺寸与图标）
+- `web/src/routes/{feed,search,series,history}-route.tsx`（统一顶栏与重设计）
+- `web/src/components/series-card.tsx`（层级与动效）
+- `web/src/styles/index.css`（配色对比度、焦点环、reduced-motion）
 
-未动：`packages/shared/src/{spade,mp4,cenc,bytes}.ts`、`apps/server/src/media/*`。
+未动：`shared/src/{spade,mp4,cenc,bytes}.ts`、`server/src/media/*`。
 
 ---
 

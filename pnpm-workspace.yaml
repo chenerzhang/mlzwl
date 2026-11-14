@@ -1,6 +1,8 @@
 packages:
   - 'apps/*'
   - 'apps/hongguo/*'
+  # Android 子包是 Gradle/Kotlin 项目，不是 npm 包。排除它，避免 pnpm 扫描时报错。
+  - '!apps/hongguo/android'
 
 allowBuilds:
   better-sqlite3: true

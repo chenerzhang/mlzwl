@@ -1,14 +1,14 @@
 # 红果短剧 Web 版：逆向工程结论
 
-本文是 `/Users/bytedance/code/github/hongguo` 项目的技术底稿。目标是把 DSH 插件 `dsh-hongguo` 重做成一个**独立的 Web 应用**（不是插件）。本文只记录已经过实测验证的事实，以及可复现的实现路径。
+本文是 `apps/hongguo` 包的技术底稿。目标是把 DSH 插件 `dsh-hongguo` 重做成一个**独立的 Web 应用**（不是插件）。本文只记录已经过实测验证的事实，以及可复现的实现路径。
 
-- 上游插件：`upstream/`（`dsh-hongguo` v1.2.1）
+- 上游插件：`dsh-hongguo` v1.2.1（外部插件，未随本仓库导入；下文提到它的文件时只写文件名）
 - 上游 SDK：`openhongguo@0.1.0`（Go 客户端 + WASM 构建）
-- Go 源码：`/tmp/ohgsrc`（`github.com/beilunyang/openhongguo`，20996 行）
-- 探针脚本与样本：`/tmp/probe`
+- Go 源码参考：`github.com/beilunyang/openhongguo` 在 sha `42b73f20`，20996 行。本文引用它时只写仓库内路径，取法见第 10.1 节
+- 探针脚本与样本：不随仓库保存，需自行按第 10.4 节生成
 - 本文档配套代码：`docs/reference/*.mjs`
 
-> **可复现性说明。** `/tmp` 下的路径是临时工作区，重启后可能消失。文档里引用它们是为了说明「结论是怎么测出来的」，不是要求读者依赖这些路径。要重新验证，按第 10 节的步骤从 npm 和 GitHub 重新拉取即可。所有关键算法都已固化成 `docs/reference/` 下的可执行文件，不依赖 `/tmp`。
+> **可复现性说明。** 本文不依赖任何固定绝对路径。所有关键算法都已固化成 `docs/reference/` 下的可执行文件；引用上游 Go 源码时只给出仓库名与仓库内路径，需要时按第 10.1 节从 GitHub 按固定 sha 拉取。
 
 ---
 
@@ -29,7 +29,7 @@
 
 ## 2. 上游插件做了什么
 
-`upstream/` 分成两半：
+`dsh-hongguo` v1.2.1 分成两半：
 
 **Host 半（`index.js`，1240 行，Node）**
 1. 引入 `openhongguo`（WASM 版 Go SDK），维护匿名设备档案。
@@ -107,7 +107,7 @@ store_region, store_region_src, created_at, device
 
 ### 3.4 请求签名
 
-一次请求要带 6 个签名头（`/tmp/ohgsrc/internal/protocol/sign/request.go`）：
+一次请求要带 6 个签名头（`github.com/beilunyang/openhongguo` 的 `internal/protocol/sign/request.go`，sha `42b73f20`）：
 
 | 头 | 算法 |
 | --- | --- |
@@ -168,7 +168,7 @@ header = base64(result)
 - 用 `medusaAESKey` / `medusaAESIV` 做 AES-CBC
 - 最终 base64
 
-参考实现：`/tmp/ohgsrc/internal/protocol/sign/medusa.go`（205 行）+ `sm3.go`（91 行）+ `aes.go`（211 行）。`sign_test.go` 里有一组**完整期望值**，可作为移植时的对照测试：
+参考实现：`github.com/beilunyang/openhongguo` 的 `internal/protocol/sign/` 下的 `medusa.go`（205 行）+ `sm3.go`（91 行）+ `aes.go`（211 行）。`sign_test.go` 里有一组**完整期望值**，可作为移植时的对照测试：
 
 ```
 gorgon("iid=7100…&_rticket=1700000000123", body, 1700000000, 0x1234)
@@ -516,7 +516,7 @@ profile persisted: yes (605 bytes)
 
 ## 6. 备用片源（hghub）
 
-`upstream/sdk/hghub/` 是一个独立实现，不复用 openhongguo。它的价值是：当红果接口不可用时还有第二条路。
+`dsh-hongguo` 内置的 hghub SDK 是一个独立实现，不复用 openhongguo。它的价值是：当红果接口不可用时还有第二条路。
 
 - 封面加密：AES-128-CBC，key `f5d965df75336270`，IV `97b60394abc2fbe1`。
 - 播放：标准 HLS + AES-128（`#EXT-X-KEY`），不需要 CENC。
@@ -653,13 +653,25 @@ Web 版沿用同名键，用户从插件迁过来时进度不丢。
 
 想从头验证本文任一结论，按下面顺序做。
 
-### 10.1 准备 SDK
+### 10.1 准备 SDK 与 Go 源码
+
+先在任意目录装 SDK：
 
 ```bash
-mkdir -p /tmp/ohg && cd /tmp/ohg
 npm pack openhongguo@0.1.0 && tar xzf openhongguo-0.1.0.tgz
-cd /tmp/probe && npm i /tmp/ohg/package
+npm i ./package
 ```
+
+Go 源码用于核对第 3.4 节的签名算法与验收向量。npm 包只发布 WASM，不含 Go 源码，
+需要从上游仓库按固定 sha 单独克隆：
+
+```bash
+git clone https://github.com/beilunyang/openhongguo.git
+cd openhongguo && git checkout 42b73f201309423f012d483bfc0ce579dcc0937c
+git rev-parse HEAD   # 应输出 42b73f201309423f012d483bfc0ce579dcc0937c
+```
+
+下文提到上游源码时，路径都是该仓库内的相对路径，例如 `internal/drm/spade.go`。
 
 ### 10.2 验证接口可用
 
@@ -714,6 +726,9 @@ console.log('match', mine.key === play.contentKey.key)
 ### 10.4 验证 CENC 解密（Node，离线）
 
 ```bash
+# 在任意空目录下执行，样本只落在本地
+mkdir -p ./hongguo-probe && cd ./hongguo-probe
+
 # 先下载一集加密样本和它的密钥，再用 inplace 解密
 node -e "
 import('openhongguo').then(async (m) => {
@@ -724,13 +739,13 @@ import('openhongguo').then(async (m) => {
   const play = await c.resolvePlayback(eps.items[0].id)
   const s = play.playback.streams.at(-1)
   const buf = Buffer.from(await (await fetch(s.url)).arrayBuffer())
-  fs.writeFileSync('/tmp/probe/enc.mp4', buf)
-  fs.writeFileSync('/tmp/probe/fx.json', JSON.stringify({ key: play.contentKey.key, definition: s.definition }))
+  fs.writeFileSync('enc.mp4', buf)
+  fs.writeFileSync('fx.json', JSON.stringify({ key: play.contentKey.key, definition: s.definition }))
   console.log('saved', s.definition, buf.length)
 })"
 
-node docs/reference/cenc-decrypt-inplace.mjs /tmp/probe/enc.mp4 $(node -p "require('/tmp/probe/fx.json').key") /tmp/probe/plain.mp4
-ffprobe -v error -show_entries stream=codec_name,width,height -of default=nw=1 /tmp/probe/plain.mp4
+node <仓库根>/docs/reference/cenc-decrypt-inplace.mjs enc.mp4 $(node -p "require('./fx.json').key") plain.mp4
+ffprobe -v error -show_entries stream=codec_name,width,height -of default=nw=1 plain.mp4
 ```
 
 期望：`ffprobe` 输出 `codec_name=hevc` 与正确分辨率，`ffmpeg -v error -i plain.mp4 -f null -` 无报错。
@@ -738,13 +753,13 @@ ffprobe -v error -show_entries stream=codec_name,width,height -of default=nw=1 /
 ### 10.5 验证浏览器全链路
 
 ```bash
-# 页面 8899，转发器 8902
+# 页面 8899，转发器 8902。在仓库根执行
 node docs/reference/proxy.mjs 8902 &
-python3 -m http.server 8899 -d /tmp/probe &
+python3 -m http.server 8899 -d docs/reference &
 
-# 把 wasm 与 wasm_exec.js 放进 /tmp/probe（从 /tmp/ohg/package/dist 取）
-cp /tmp/ohg/package/dist/openhongguo.wasm /tmp/probe/
-cp $(dirname $(node -p "require.resolve('openhongguo')"))/wasm_exec.js /tmp/probe/ 2>/dev/null || true
+# 把 wasm 与 wasm_exec.js 放进 docs/reference（从 SDK 包内取，用完删掉）
+cp $(dirname $(node -p "require.resolve('openhongguo')"))/dist/openhongguo.wasm docs/reference/
+cp $(dirname $(node -p "require.resolve('openhongguo')"))/wasm_exec.js docs/reference/ 2>/dev/null || true
 
 # 打开 http://127.0.0.1:8899/wasm-full.html
 ```
@@ -761,6 +776,6 @@ cp $(dirname $(node -p "require.resolve('openhongguo')"))/wasm_exec.js /tmp/prob
 | `docs/reference/cenc-decrypt-inplace.mjs` | 原地改写精简版（命令行） | ✅ 已入库 |
 | `docs/reference/proxy.mjs` | 同源转发器（含 `cookies` 解析） | ✅ 已入库 |
 | `docs/reference/wasm-full.html` | 浏览器内 WASM 全链路验证页 | ✅ 已入库 |
-| `/tmp/probe/enc*.mp4` | 加密样本（需自行下载） | ⚠️ 临时 |
-| `/tmp/ohgsrc/internal/protocol/sign/sign_test.go` | 签名算法验收向量 | ⚠️ 临时 |
-| `/tmp/ohgsrc/internal/drm/spade.go` | spade_a 参考实现 | ⚠️ 临时 |
+| 本地加密样本 | 按 10.4 自行生成 | ⚠️ 不随仓库保存 |
+| 上游 `internal/protocol/sign/sign_test.go` | 签名算法验收向量 | ⚠️ 见上游仓库，按 10.1 克隆 |
+| 上游 `internal/drm/spade.go` | spade_a 参考实现 | ⚠️ 见上游仓库，按 10.1 克隆 |

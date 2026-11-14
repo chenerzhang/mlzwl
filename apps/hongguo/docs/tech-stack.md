@@ -49,7 +49,7 @@
 | Lint      | ESLint            | 10.14.0   | flat config                         |
 | Lint 插件 | typescript-eslint | 8.72.1    | type-aware                          |
 | 格式化    | Prettier          | 3.9.10    | 行宽 120                            |
-| Git 钩子  | lefthook          | 最新      | 见 6.3                              |
+| Git 钩子  | 不使用             | —         | 无 lefthook / husky，不阻断提交      |
 | 单元测试  | Vitest            | 5.1.0     |                                     |
 | 端到端    | Playwright        | 1.65.0    |                                     |
 
@@ -238,7 +238,7 @@ coverCache    urlHash, file, contentType, bytes, createdAt
 ### 4.3 Zod 校验 Pipe
 
 ```ts
-// apps/server/src/common/zod-validation.pipe.ts
+// server/src/common/zod-validation.pipe.ts
 import { BadRequestException, type ArgumentMetadata, type PipeTransform } from '@nestjs/common';
 import type { z } from 'zod';
 
@@ -469,7 +469,7 @@ useHistoryStore; // 播放进度（持久化到 localStorage）
 useFollowStore; // 收藏/追更两个独立开关 + 集数高水位（持久化到 localStorage）
 ```
 
-首页分页判定全部集中在 `features/feed/feed-paging.ts`，不散在路由里：
+首页分页判定全部集中在 `web/src/features/feed/feed-paging.ts`，不散在路由里：
 
 - `nextFeedCursor(last, all)`：末页 `cursor === null` 或页数达 40 就停；去重时
   跳过 `cursor === null` 的页（那是离线快照，不是网络分页历史）；整页没有新 id 也停。
@@ -484,7 +484,7 @@ useFollowStore; // 收藏/追更两个独立开关 + 集数高水位（持久化
 `aria-controls`、`aria-labelledby` 成对存在，DOM 里同时只有一个 panel。
 tab 上带数量；默认选第一个非空 tab，全空时选第一个；键盘支持
 Left/Right/Up/Down/Home/End。取消收藏后停留当前 tab，变空时在 panel 内显示空状态。
-分组、tab 映射与默认选中逻辑在 `features/follow/favorites-view.ts`（纯逻辑）。
+分组、tab 映射与默认选中逻辑在 `web/src/features/follow/favorites-view.ts`（纯逻辑）。
 
 localStorage 键沿用上游，便于迁移：
 
@@ -498,18 +498,19 @@ hongguo.theme.v1
 dsh-hongguo
 ```
 
-`dsh-hongguo.catalog.v1` 是首页第一页的离线快照（P1-7）：最多 30 条、序列化后
+`dsh-hongguo.catalog.v1` 是首页第一页的离线快照：最多 30 条、序列化后
 不超过 200 KB、7 天过期、不含播放地址。读取时逐字段校验，任何一条不合法就整体丢弃。
+常量见 `web/src/features/feed/offline-catalog.ts` 的 `MAX_ITEMS` / `MAX_SERIALIZED_BYTES` / `MAX_AGE_MS`。
 
-`dsh-hongguo.search-history.v1` 是搜索历史（P1-4）：最多 20 条、单条 80 字符、
-最新在前，重复词提到最前。
+`dsh-hongguo.search-history.v1` 是搜索历史：最多 20 条、单条 80 字符、
+最新在前，重复词提到最前。常量见 `web/src/features/search/search-history-store.ts` 的 `MAX_HISTORY_ITEMS`。
 
 `hongguo.theme.v1` 是主题偏好（`light` / `dark` / `system`），与上游键名一致。
 
 ### 5.5 目录
 
 ```
-apps/web/src/
+apps/hongguo/web/src/
 ├── main.tsx
 ├── app.tsx
 ├── routes/
@@ -525,38 +526,68 @@ apps/web/src/
 │   │   ├── offline-catalog.ts        离线目录快照的校验与序列化（纯逻辑）
 │   │   ├── offline-catalog-store.ts  localStorage 读写
 │   │   └── feed-paging.ts            首页分页游标、快照查询配置、失败回退判定（纯逻辑）
-│   ├── download/                     单集下载
+│   ├── download/                     单集与批量下载
 │   │   ├── download-state.ts         状态机、进度与字节格式化、失败文案（纯逻辑）
 │   │   ├── download-queue.ts         并发闸门与排队（纯逻辑）
 │   │   ├── download-selection.ts     批量勾选、全选三态、可提交集过滤（纯逻辑）
 │   │   ├── download-media.ts         流式拉取 + 触发保存
+│   │   ├── download-media-url.ts     媒体 URL 构造（纯逻辑）
 │   │   ├── use-download.ts           进度、排队、取消、重试
 │   │   ├── download-panel.tsx        详情页下载面板
 │   │   └── episode-download-button.tsx 单集下载按钮（状态即按钮文案）
 │   ├── search/
 │   ├── series/
-│   ├── diagnostics/                   导出诊断（P1-19）
-│   │   └── export-diagnostics.ts      收集 + 序列化 + 写剪贴板（依赖全注入）
+│   ├── navigation/                   返回目标计算（纯逻辑）
+│   ├── theme/                        主题偏好
+│   ├── diagnostics/                  导出诊断（收集 + 序列化 + 写剪贴板）
+│   │   └── export-diagnostics.ts     依赖全注入，便于测试
 │   ├── player/
-│   │   ├── player.tsx
-│   │   ├── player-controls.tsx
-│   │   ├── sprite-preview.tsx
-│   │   ├── resume-target.ts          续播目标计算（已看完 → 下一集）
+│   │   ├── player.tsx                播放器主组件
+│   │   ├── progress-bar.tsx          进度条（按合并后的缓冲区间分段绘制）
+│   │   ├── volume-control.tsx        音量滑块
+│   │   ├── speed-menu.tsx            倍速菜单
+│   │   ├── definition-menu.tsx       清晰度菜单
+│   │   ├── episode-drawer.tsx        选集抽屉
+│   │   ├── sprite-preview.tsx        拖动时的雪碧图预览
+│   │   ├── buffered-ranges.ts        buffered / seekable 区间合并（纯逻辑）
+│   │   ├── frame-mode.ts             画幅三档到 object-fit 的映射（纯逻辑）
+│   │   ├── playback-error.ts         服务端错误码到文案与动作的映射（纯逻辑）
+│   │   ├── prefetch-policy.ts        下一集预热时机判定（纯逻辑）
+│   │   ├── prefetch-next.ts          预热请求触发
+│   │   ├── definition-selection.ts   清晰度选择与持久化（纯逻辑）
+│   │   ├── episode-groups.ts         选集分组（纯逻辑）
+│   │   ├── resume-target.ts           续播目标计算（已看完 → 下一集）
+│   │   ├── resume-initial-time.ts    首帧定位（纯逻辑）
+│   │   ├── shortcuts.ts              键位表与按键规范化（纯逻辑）
 │   │   ├── pointer-motion.ts         指针移动去重判定（纯逻辑）
 │   │   ├── controls-lock.ts          控件隐藏锁的来源集合（纯逻辑）
-│   │   └── use-gestures.ts
+│   │   ├── player-store.ts           播放器偏好持久化
+│   │   ├── use-focus-trap.ts         对话框焦点陷阱
+│   │   ├── use-fullscreen.ts         全屏
+│   │   └── use-gestures.ts           单击/双击/长按/上滑手势
 │   ├── history/
-│   ├── follow/            追更状态机（follow-model.ts 纯逻辑 + follow-store.ts 持久化）
-│   │   └── favorites-view.ts        收藏分组、tab 映射与默认选中、汇总（纯逻辑）
+│   ├── follow/            收藏与追更两个独立开关
+│   │   ├── follow-model.ts           状态机（纯逻辑）
+│   │   ├── follow-store.ts           持久化
+│   │   └── favorites-view.ts        收藏列表分组与汇总（纯逻辑）
 │   └── ranking/           热度榜
-│       └── ranking-view.ts          分区/榜单选择、名次与分值展示、分页合并（纯逻辑）
-├── components/            通用组件
+│       ├── ranking-view.ts          分区/榜单选择、名次与分值展示、分页合并（纯逻辑）
+│       └── ranking-card.tsx         榜单专用卡片
+├── components/            通用组件（含内联 Phosphor 图标）
 ├── lib/
 │   ├── api-client.ts
 │   ├── client-events.ts              前端事件环形缓冲（200 条）
 │   ├── diagnostics-report.ts         诊断包装配与形状校验（纯逻辑）
+│   ├── debounced-suggest.ts          联想输入的防抖与取消（纯逻辑）
+│   ├── write-queue.ts                串行持久化队列（纯逻辑）
+│   ├── random-entry.ts               随机入口（纯逻辑）
 │   ├── query-keys.ts
+│   ├── use-grid-columns.ts
+│   ├── use-infinite-scroll.ts
+│   ├── use-scroll-intent.ts
+│   ├── use-wide-viewport.ts
 │   └── format.ts
+├── assets/
 └── styles/
     └── index.css
 ```
@@ -568,29 +599,30 @@ apps/web/src/
 ### 6.1 monorepo
 
 ```
-hongguo/
+apps/hongguo/
 ├── AGENTS.md
+├── README.md
+├── THIRD_PARTY_NOTICES.md
 ├── docs/
-├── upstream/              只读参考
-├── apps/
-│   ├── server/
-│   └── web/
-├── packages/
-│   └── shared/
-├── pnpm-workspace.yaml
-├── tsconfig.base.json
-├── eslint.config.js
-├── .prettierrc
-└── lefthook.yml
+├── design-system/         设计基准（MASTER.md）
+├── scripts/               仓库内脚本（如 ui-audit）
+├── shared/                @mlzwl/hongguo-shared
+├── server/                @mlzwl/hongguo-server
+├── web/                   @mlzwl/hongguo-web
+├── eslint.config.js       子包 ESLint（额外启用 curly）
+└── tsconfig.base.json     子包 TS 严格项
 ```
+
+本包是仓库根 pnpm workspace 的三个成员（`pnpm-workspace.yaml` 的 `apps/hongguo/*`）。
+根目录还有共享的 ESLint、Prettier、TypeScript 配置与 `pnpm hongguo:*` 脚本。
 
 依赖方向（单向，不允许反向）：
 
 ```
-apps/web  ──►  packages/shared  ◄──  apps/server
+apps/hongguo/web  ──►  shared  ◄──  apps/hongguo/server
 ```
 
-`apps/web` 不得 import `apps/server`，也不得直接 import `openhongguo`。
+`web` 不得 import `server`，也不得直接 import `openhongguo`。
 
 ### 6.2 tsconfig
 
@@ -625,7 +657,7 @@ apps/web  ──►  packages/shared  ◄──  apps/server
 }
 ```
 
-`apps/server/tsconfig.json` 追加：
+`server/tsconfig.json` 追加：
 
 ```jsonc
 {
@@ -657,7 +689,7 @@ const s: string = obj.a; // ❌ TS2322: Type 'string | undefined' is not assigna
 收敛方式（禁止 `!`）：
 
 ```ts
-// apps/server/src/common/bytes.ts
+// shared/src/bytes.ts
 export function at(buf: Uint8Array, i: number): number {
   const v = buf[i];
   if (v === undefined) throw new RangeError(`byte ${i} out of range (len ${buf.length})`);
@@ -697,53 +729,41 @@ export default tseslint.config(
 
 `no-floating-promises` 实测有效：Nest 的 `bootstrap()` 不加 `void` 会报错。
 
-`.prettierrc`：
+`.prettierrc.json`（仓库根）：
 
 ```json
-{ "semi": false, "singleQuote": true, "printWidth": 120, "trailingComma": "all" }
+{ "semi": true, "singleQuote": true, "printWidth": 120, "trailingComma": "all" }
 ```
 
-`lefthook.yml`：
+注意 `semi` 是 `true`。本包原仓库用 `semi: false`，迁入时已全部重格式化。
 
-```yaml
-pre-commit:
-  parallel: true
-  commands:
-    format:
-      glob: '*.{ts,tsx,css,md,json}'
-      run: pnpm prettier --write {staged_files}
-      stage_fixed: true
-    lint:
-      glob: '*.{ts,tsx}'
-      run: pnpm eslint --fix {staged_files}
-
-pre-push:
-  commands:
-    typecheck:
-      run: pnpm -r typecheck
-    test:
-      run: pnpm -r test
-```
+**没有 Git 钩子。** 仓库不用 lefthook、husky 或其他 hook 管理器，
+`core.hooksPath` 也未指向仓库内目录。格式与 lint 检查靠手动或 CI 执行，
+不阻断提交。
 
 ### 6.4 脚本
 
-根 `package.json`：
+仓库根 `package.json` 与本包相关的脚本（本包是 monorepo 的一个成员，根脚本还含其他 app）：
 
 ```json
 {
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint",
-    "format": "pnpm prettier --write .",
-    "test": "pnpm -r test",
-    "e2e": "playwright test"
+    "hongguo:dev": "pnpm -r --filter './apps/hongguo/*' --parallel dev",
+    "hongguo:build": "pnpm -r --filter './apps/hongguo/*' build",
+    "hongguo:typecheck": "pnpm -r --filter './apps/hongguo/*' typecheck",
+    "hongguo:lint": "pnpm -r --filter './apps/hongguo/*' lint",
+    "hongguo:test": "pnpm -r --filter './apps/hongguo/*' test",
+    "hongguo:verify": "pnpm -r --filter './apps/hongguo/*' verify",
+    "hongguo:start": "pnpm --filter @mlzwl/hongguo-server start"
   }
 }
 ```
 
-每个子包各自有 `typecheck: tsc --noEmit`、`lint: eslint .`、`test: vitest run`。
+每个子包各自有 `typecheck: tsc --noEmit`、`lint: eslint .`、`test: vitest run`、
+`format:check: prettier --check .`、`verify`（前三项串行）。`web` 的 `test` 带
+`--passWithNoTests`。
+
+日常只跑对应范围，不要动辄全仓 `pnpm verify`。具体取舍见本包 `AGENTS.md` 的「测试范围」。
 
 ---
 
@@ -751,7 +771,7 @@ pre-push:
 
 按这个顺序做，每步都能独立验证：
 
-1. **骨架**：monorepo + tsconfig.base + eslint + prettier + lefthook，跑通 `pnpm -r typecheck`。
+1. **骨架**：pnpm workspace + tsconfig.base + eslint + prettier，跑通 `pnpm hongguo:typecheck`。
 2. **shared**：Zod schema（上游响应 + 自有契约）+ `bytes.ts` + spade 还原 + MP4 box 解析，配单元测试。
 3. **server / hongguo**：SDK 封装 + 设备档案持久化，验证 `discover` 能出数据。
 4. **server / media**：`resolvePlayback` → spade → CENC 解密 → Range 流式，验证 Chrome 能播。
