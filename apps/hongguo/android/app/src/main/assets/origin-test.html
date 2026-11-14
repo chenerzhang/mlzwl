@@ -1,0 +1,21 @@
+<!doctype html><meta charset=utf-8><title>Origin 测试</title>
+<pre id="o" style="background:#0a0a0a;color:#ddd;font:12px ui-monospace;padding:10px;margin:0"></pre>
+<script>
+const log=(m)=>{document.getElementById('o').textContent+=m+'\n';console.log(m)}
+;(async()=>{
+  // 1) 看 fetch 到上游时浏览器自动加的请求头。用 httpbin 回显。
+  try{
+    const r=await fetch('https://httpbin.org/headers',{headers:{'x-probe':'1'}})
+    const j=await r.json()
+    log('=== httpbin 看到的请求头 ===')
+    log(JSON.stringify(j.headers,null,1))
+  }catch(e){log('httpbin 失败: '+e.message)}
+  // 2) 直连上游真实接口，看是否被 CORS/Origin 拦
+  try{
+    const u='https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/bookmall/tab/v?aid=8662&app_name=novelread'
+    const r=await fetch(u)
+    log('=== 直连上游: status='+r.status)
+  }catch(e){log('=== 直连上游失败: '+e.message)}
+  log('===== ORIGIN TEST DONE =====')
+})()
+</script>

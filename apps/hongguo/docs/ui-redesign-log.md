@@ -129,7 +129,7 @@ python3 .agents/skills/ui-ux-pro-max/scripts/search.py \
 
 ### 2.1 改造前
 
-`apps/web/src/styles/index.css` 只有一套深色值，且散落硬编码：
+`web/src/styles/index.css` 只有一套深色值，且散落硬编码：
 
 ```
 text-white ×15   bg-black ×12   white/8 ×10   white/15 ×5
@@ -246,8 +246,8 @@ SVG 图标从未被测量，见 5.4 缺陷 C）。补测后并入同一脚本，
 
 ### 2.6 主题切换与持久化
 
-实现：`features/theme/theme-store.ts`（zustand + persist，key `hongguo.theme.v1`）
-+ `features/theme/use-theme-effect.ts`（同步 `html[data-theme]` 与 `style.colorScheme`）。
+实现：`web/src/features/theme/theme-store.ts`（zustand + persist，key `hongguo.theme.v1`）
++ `web/src/features/theme/use-theme-effect.ts`（同步 `html[data-theme]` 与 `style.colorScheme`）。
 
 实测（真实鼠标点击）：
 
@@ -279,7 +279,7 @@ SVG 图标从未被测量，见 5.4 缺陷 C）。补测后并入同一脚本，
 ### 2.7 硬编码颜色清零验证
 
 ```
-$ grep -rn 'white/\|black/\|text-white\|bg-black\|border-white' apps/web/src --include='*.tsx'
+$ grep -rn 'white/\|black/\|text-white\|bg-black\|border-white' web/src --include='*.tsx'
 （无输出）
 ```
 
@@ -532,7 +532,7 @@ true），与 `feed-route.tsx` 保持一致。
 #### 缺陷 B：`aria-busy` 报告里写了但代码里没有
 
 1.3 节说「骨架加 `aria-hidden`，容器状态由父级 `aria-busy` 表达」，
-但 `grep -rn 'aria-busy' apps/web/src` 的结果是 **0 次**。这是一句没有落地的声明。
+但 `grep -rn 'aria-busy' web/src` 的结果是 **0 次**。这是一句没有落地的声明。
 
 后果：骨架是 `aria-hidden` 的纯装饰，屏幕阅读器读不到任何「正在加载」信号。
 
@@ -612,9 +612,9 @@ Web 产物：JS 335.19 kB / 103.36 kB gzip，CSS 36.67 kB / 6.95 kB gzip。
 
 新增：
 
-- `apps/web/src/features/theme/theme-store.ts` — zustand + persist 主题状态
-- `apps/web/src/features/theme/use-theme-effect.ts` — 同步 DOM 与系统偏好
-- `apps/web/src/lib/use-grid-columns.ts` — `ResizeObserver` 读真实列数
+- `web/src/features/theme/theme-store.ts` — zustand + persist 主题状态
+- `web/src/features/theme/use-theme-effect.ts` — 同步 DOM 与系统偏好
+- `web/src/lib/use-grid-columns.ts` — `ResizeObserver` 读真实列数
 - `scripts/ui-audit.mjs` — 审计脚本（canvas 解析颜色）
 - `design-system/hongguo/MASTER.md` — 设计系统（skill 生成）
 - `docs/ui-redesign-log.md` — 本文
@@ -622,21 +622,21 @@ Web 产物：JS 335.19 kB / 103.36 kB gzip，CSS 36.67 kB / 6.95 kB gzip。
 
 重写：
 
-- `apps/web/src/styles/index.css` — 语义 token + 双主题 + cursor 修复 + a11y
-- `apps/web/src/components/page-header.tsx` — 主题切换按钮 + 伸缩逻辑修复
-- `apps/web/src/components/series-card.tsx` — token 化 + 骨架尺寸对齐
-- `apps/web/src/routes/search-route.tsx` — 整页重做
+- `web/src/styles/index.css` — 语义 token + 双主题 + cursor 修复 + a11y
+- `web/src/components/page-header.tsx` — 主题切换按钮 + 伸缩逻辑修复
+- `web/src/components/series-card.tsx` — token 化 + 骨架尺寸对齐
+- `web/src/routes/search-route.tsx` — 整页重做
 
 修改：
 
-- `apps/web/src/app.tsx` — 挂 `useThemeEffect()`
-- `apps/web/src/routes/feed-route.tsx` — 骨架合并进同一 grid
-- `apps/web/src/routes/series-route.tsx` — token 化 + 触摸目标 44px
-- `apps/web/src/routes/history-route.tsx` — token 化
-- `apps/web/src/features/player/player.tsx` — scrim token + 文字对比度
-- `apps/web/src/features/player/progress-bar.tsx` — 命中区 36→44px + scrim token
-- `apps/web/src/features/player/episode-drawer.tsx` — 当前集文字色 + token
-- `apps/web/src/features/player/sprite-preview.tsx` — scrim token
+- `web/src/app.tsx` — 挂 `useThemeEffect()`
+- `web/src/routes/feed-route.tsx` — 骨架合并进同一 grid
+- `web/src/routes/series-route.tsx` — token 化 + 触摸目标 44px
+- `web/src/routes/history-route.tsx` — token 化
+- `web/src/features/player/player.tsx` — scrim token + 文字对比度
+- `web/src/features/player/progress-bar.tsx` — 命中区 36→44px + scrim token
+- `web/src/features/player/episode-drawer.tsx` — 当前集文字色 + token
+- `web/src/features/player/sprite-preview.tsx` — scrim token
 
 ---
 
@@ -1078,7 +1078,7 @@ Video Streaming/OTT，"Cinema dark + play red"）。本轮重新跑一次设计�
 | 6 | `search.py "grid card image aspect ratio" --stack html-tailwind` | **Images / Aspect ratio**（Medium）：`aspect-video` / `aspect-square`，容器必须有比例；**Reserve image space** 防布局跳动 | **采纳**。封面保持 `aspect-[3/4]`，骨架同比例，填充时不跳。 |
 | 7 | `search.py "focus ring visible keyboard" --domain ux` | **Focus States**（High）：每个可交互控件都要可见焦点环；不要 `outline-none` 无替代 | **采纳**。卡片 `group-focus-visible:ring-2`、滑块 `:focus-visible` 2px `accent-soft`、全局 `@layer base` 保留 outline。 |
 
-`references/pro-rules.md` 的 Pre-Delivery Checklist 逐项走过，结果见 7.6。
+`.agents/skills/ui-ux-pro-max/references/pro-rules.md` 的 Pre-Delivery Checklist 逐项走过，结果见 7.6。
 
 ### 7.2 语义 token 重校准
 
@@ -1189,12 +1189,12 @@ Video Streaming/OTT，"Cinema dark + play red"）。本轮重新跑一次设计�
 | 图片有固定比例，无布局跳动 | ✅ | `aspect-[3/4]` 封面与骨架同比例 |
 | `prefers-reduced-motion` | ✅ | 卡片与骨架均带 `motion-reduce:` |
 | 无渐变滥用 | ✅ | 全站渐变只剩封面底部 32px 的角标遮罩（已随角标一起删除）与播放器控件遮罩 |
-| 无 glow / 毛玻璃 | ✅ | `grep -rn backdrop-blur apps/web/src --include=*.tsx` → 只剩注释 2 行，代码 0 处；搜索框外发光 10% 单层 |
+| 无 glow / 毛玻璃 | ✅ | `grep -rn backdrop-blur web/src --include=*.tsx` → 只剩注释 2 行，代码 0 处；搜索框外发光 10% 单层 |
 | 无 Google Fonts 外链 | ✅ | 未引入，仍用系统字体栈 |
 | 无新 UI 框架 / 组件库 / CSS-in-JS | ✅ | 仍为 Tailwind 4 + 手写组件 |
 | 文件名 kebab-case | ✅ | `speed-menu.tsx`、`volume-control.tsx` |
 | strict 三标志保留 | ✅ | `tsconfig.base.json` 未改 |
-| 受保护文件未触碰 | ✅ | `spade.ts` / `mp4.ts` / `cenc.ts` / `apps/server/src/media/*` mtime 均早于本轮 |
+| 受保护文件未触碰 | ✅ | `spade.ts` / `mp4.ts` / `cenc.ts` / `server/src/media/*` mtime 均早于本轮 |
 | 未新增测试文件 | ✅ | `git status` 无 repo；`find` 无新增 `*.test.ts` |
 
 ### 7.7 工程检查
@@ -1428,7 +1428,7 @@ pnpm -r build       → 3/3 Done
 prettier --write    → 已格式化
 ```
 
-新增文件：`apps/web/src/features/player/use-fullscreen.ts`（kebab-case）。
+新增文件：`web/src/features/player/use-fullscreen.ts`（kebab-case）。
 未新增测试文件，未触碰受保护文件，未引入新依赖。
 
 ## 10. 遗留与后续建议

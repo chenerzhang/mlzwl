@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WASM 探针</title>
+<style>
+  body { background:#0a0a0a; color:#ddd; font:13px/1.6 ui-monospace,Menlo,monospace; margin:0; padding:12px; }
+  h1 { font-size:15px; color:#fff; margin:0 0 8px; }
+  #log { white-space:pre-wrap; word-break:break-all; }
+  .ok { color:#4ade80; }
+  .err { color:#f87171; }
+  .dim { color:#888; }
+</style>
+</head>
+<body>
+<h1>WebView 内 WASM 探针</h1>
+<div id="log"></div>
+<script src="/wasm_exec.js"></script>
+<script>
+const log = (m, cls) => {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = m;
+  document.getElementById('log').appendChild(line);
+  console.log(m);
+};
+const t0 = performance.now();
+const since = () => Math.round(performance.now() - t0);
+
+// ---- 桥接：把 Kotlin 的 hgBridge 包装成 SDK 的 Transport ----
+const pending = new Map();
+let nextId = 1;
+if (window.hgBridge) {
+  window.hgBridge.onmessage = (event) => {
+    let msg;
+    try { msg = JSON.parse(event.data); } catch { return; }
+    const entry = pending.get(msg.id);
+    if (!entry) return;
+    pending.delete(msg.id);
+    if (msg.error) entry.reject(new Error(msg.error));
+    else entry.resolve(msg);
+  };
+} else {
+  log('hgBridge 不存在，transport 不可用', 'err');
+}
+
+let requestCount = 0;
+function bridgeTransport(req) {
+  requestCount++;
+  return new Promise((resolve, reject) => {
+    const id = nextId++;
+    pending.set(id, { resolve, reject });
+    let bodyBase64 = '';
+    if (req.body && req.body.length) {
+      // Uint8Array -> base64，分块避免超长参数导致栈溢出
+      let bin = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < req.body.length; i += chunk) {
+        bin += String.fromCharCode.apply(null, req.body.subarray(i, i + chunk));
+      }
+      bodyBase64 = btoa(bin);
+    }
+    window.hgBridge.postMessage(JSON.stringify({
+      id,
+      method: req.method || 'GET',
+      url: req.url,
+      headers: req.headers || {},
+      bodyBase64,
+    }));
+  }).then((msg) => {
+    const body = msg.bodyBase64 ? Uint8Array.from(atob(msg.bodyBase64), (c) => c.charCodeAt(0)) : new Uint8Array(0);
+    return { status: msg.status, headers: msg.headers || {}, cookies: msg.cookies || {}, body };
+  });
+}
+
+(async () => {
+  try {
+    log(`[${since()}ms] 开始加载 wasm_exec.js`);
+    if (typeof globalThis.Go !== 'function') {
+      log('globalThis.Go 不存在，wasm_exec.js 未生效', 'err');
+      return;
+    }
+
+    const tWasm = performance.now();
+    const resp = await fetch('/openhongguo.wasm');
+    log(`[${since()}ms] wasm fetch: ${resp.status} content-length=${resp.headers.get('content-length')}`);
+    const bytes = await resp.arrayBuffer();
+    const tFetch = Math.round(performance.now() - tWasm);
+    log(`[${since()}ms] wasm 下载完成 ${(bytes.byteLength / 1048576).toFixed(1)} MB，耗时 ${tFetch}ms`, 'ok');
+
+    const tInst = performance.now();
+    const go = new globalThis.Go();
+    const { instance } = await WebAssembly.instantiate(bytes, go.importObject);
+    go.run(instance);
+    log(`[${since()}ms] wasm 实例化+启动 ${Math.round(performance.now() - tInst)}ms`, 'ok');
+
+    // SDK 启动后在 globalThis 上挂 __openhongguo，轮询等待
+    for (let i = 0; i < 100 && !globalThis.__openhongguo; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!globalThis.__openhongguo) {
+      log('__openhongguo 未出现，SDK 启动失败', 'err');
+      return;
+    }
+    log(`[${since()}ms] SDK 就绪`, 'ok');
+
+    const profile = {
+      load: async () => localStorage.getItem('ohg'),
+      save: async (p) => localStorage.setItem('ohg', p),
+      reset: async () => localStorage.removeItem('ohg'),
+    };
+
+    const c = globalThis.__openhongguo.newClient({
+      transport: bridgeTransport,
+      profile,
+      options: JSON.stringify({ retryAttempts: 1 }),
+    });
+    if (c.error) { log('newClient 失败: ' + c.error, 'err'); return; }
+
+    const tDisc = performance.now();
+    const raw = await c.call('discover', JSON.stringify([{}]));
+    const discMs = Math.round(performance.now() - tDisc);
+    const page = JSON.parse(raw);
+    log(`[${since()}ms] discover: ${page.items.length} 条，耗时 ${discMs}ms，请求 ${requestCount} 次`, 'ok');
+    if (page.items.length) {
+      log('首条: ' + page.items[0].id + ' / ' + (page.items[0].title || page.items[0].name || '?'), 'dim');
+    }
+    log('设备档案: ' + (localStorage.getItem('ohg') ? '已保存 ' + localStorage.getItem('ohg').length + 'B' : '未保存'), 'dim');
+    log('===== PROBE OK =====', 'ok');
+  } catch (e) {
+    log('探针失败: ' + (e && e.message ? e.message : String(e)), 'err');
+    if (e && e.stack) log(String(e.stack).slice(0, 600), 'dim');
+  }
+})();
+</script>
+</body>
+</html>

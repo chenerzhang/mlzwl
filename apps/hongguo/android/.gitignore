@@ -1,0 +1,28 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# 构建产物
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# WASM 运行时来自 node_modules 的 openhongguo 包，构建前用脚本同步，不入仓。
+app/src/main/assets/openhongguo.wasm
+app/src/main/assets/wasm_exec.js
+
+# 本机 SDK 路径与签名材料不得提交
+*.jks
+*.keystore
+key.properties
+app/src/main/assets/hevc-sample.mp4
+
+# 从 shared/src/mp4.ts 打包的生成物，构建前用 README 里的 esbuild 命令生成，不入仓。
+app/src/main/assets/hg-mp4.js

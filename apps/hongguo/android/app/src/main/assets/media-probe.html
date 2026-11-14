@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HEVC 播放探针</title>
+<style>
+  body { background:#0a0a0a; color:#ddd; font:13px/1.6 ui-monospace,Menlo,monospace; margin:0; padding:12px; }
+  h1 { font-size:15px; color:#fff; margin:0 0 8px; }
+  #log { white-space:pre-wrap; word-break:break-all; }
+  .ok { color:#4ade80; }
+  .err { color:#f87171; }
+  .dim { color:#888; }
+  video { width:100%; max-height:40vh; background:#000; margin-top:8px; }
+</style>
+</head>
+<body>
+<h1>HEVC 播放探针</h1>
+<div id="log"></div>
+<video id="v" muted playsinline></video>
+<script>
+const log = (m, cls) => {
+  const d = document.createElement('div');
+  if (cls) d.className = cls;
+  d.textContent = m;
+  document.getElementById('log').appendChild(d);
+  console.log(m);
+};
+
+const v = document.getElementById('v');
+const t0 = performance.now();
+const since = () => Math.round(performance.now() - t0);
+
+// canPlayType 先看声明支持度
+const types = [
+  'video/mp4; codecs="hvc1"',
+  'video/mp4; codecs="hev1"',
+  'video/mp4; codecs="hvc1.1.6.L120.90"',
+  'video/mp4; codecs="avc1.42E01E"',
+  'video/mp4',
+];
+for (const t of types) {
+  log(`canPlayType(${t}) = "${v.canPlayType(t)}"`);
+}
+
+v.addEventListener('loadedmetadata', () => {
+  log(`[${since()}ms] loadedmetadata: ${v.videoWidth}x${v.videoHeight}, duration=${v.duration.toFixed(2)}s`, 'ok');
+});
+v.addEventListener('loadeddata', () => log(`[${since()}ms] loadeddata`, 'ok'));
+v.addEventListener('canplay', () => log(`[${since()}ms] canplay`, 'ok'));
+v.addEventListener('playing', () => log(`[${since()}ms] playing —— 真的开始播了`, 'ok'));
+v.addEventListener('timeupdate', () => {
+  if (!v.__logged && v.currentTime > 0.3) {
+    v.__logged = true;
+    log(`[${since()}ms] 播放进度 ${v.currentTime.toFixed(2)}s`, 'ok');
+  }
+});
+v.addEventListener('error', () => {
+  const e = v.error;
+  const names = { 1: 'MEDIA_ERR_ABORTED', 2: 'MEDIA_ERR_NETWORK', 3: 'MEDIA_ERR_DECODE', 4: 'MEDIA_ERR_SRC_NOT_SUPPORTED' };
+  log(`[${since()}ms] ERROR code=${e?.code} ${names[e?.code] || '?'} message=${e?.message || ''}`, 'err');
+});
+v.addEventListener('stalled', () => log(`[${since()}ms] stalled`, 'dim'));
+
+// 试播 3 秒后报告解码是否真的出帧
+setTimeout(() => {
+  if (v.videoWidth > 0) {
+    log(`===== HEVC RESULT: 可播放 ${v.videoWidth}x${v.videoHeight} =====`, 'ok');
+  } else {
+    log('===== HEVC RESULT: 无法播放（无视频尺寸）=====', 'err');
+  }
+}, 6000);
+
+log(`[${since()}ms] 开始加载 hevc-sample.mp4`);
+v.src = '/hevc-sample.mp4';
+v.play().catch((e) => log('play() 被拒: ' + e.message, 'dim'));
+</script>
+</body>
+</html>

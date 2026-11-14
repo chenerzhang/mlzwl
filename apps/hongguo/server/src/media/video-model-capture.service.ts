@@ -225,16 +225,27 @@ function readVideoModel(payload: unknown): unknown {
   }
 }
 
-/** 同一集的所有清晰度共用一把密钥，取第一个非空值即可（已实测）。 */
+/**
+ * 同一集的所有清晰度共用一把密钥，取第一个非空值即可（已实测）。
+ *
+ * 两种位置都要认：
+ *
+ * - 旧接口 `video_model/v1`：`video_list[].encrypt_info.spade_a`。
+ * - 新接口 `multi_video_model/v1`：`video_list[].spade_a`（**顶层**，没有
+ *   `encrypt_info` 这层包装）。`multi_video_model` 的响应经
+ *   `playback-transport.ts` 归一后 `video_list` 已是数组，两处都能读到。
+ */
 function readSpadeA(model: unknown): string | undefined {
   const videoList = readPath(model, ['video_list']);
   if (!Array.isArray(videoList)) {
     return undefined;
   }
   for (const entry of videoList) {
-    const spadeA = readString(entry, ['encrypt_info', 'spade_a']);
-    if (spadeA !== undefined && spadeA.length > 0) {
-      return spadeA;
+    for (const path of [['encrypt_info', 'spade_a'], ['spade_a']]) {
+      const spadeA = readString(entry, path);
+      if (spadeA !== undefined) {
+        return spadeA;
+      }
     }
   }
   return undefined;
