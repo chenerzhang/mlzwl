@@ -83,7 +83,7 @@ Playwright 在 `http://127.0.0.1:5173` 上的真实测量，不是估算。
 
 ### 1.3 需要手动点「加载更多」
 
-**修复**：新增 `apps/web/src/lib/use-infinite-scroll.ts`，用
+**修复**：新增 `web/src/lib/use-infinite-scroll.ts`，用
 `IntersectionObserver` 实现滚动到底自动加载，feed 与 search 两处接入。
 
 **实测**（首页，每次滚到底后等 2 秒，卡片数按真实卡片统计）：
@@ -154,7 +154,7 @@ scrollHeight: 1482 → 4090
 
 **原因**：服务端无缓存，每次都打上游 `discover`。
 
-**修复**：新增 `apps/server/src/common/ttl-cache.ts`，带 TTL 与请求去重。
+**修复**：新增 `server/src/common/ttl-cache.ts`，带 TTL 与请求去重。
 
 - feed 60s / series 5min / search 60s
 - 并发未命中只发一次上游请求，其余等同一个 Promise
@@ -203,7 +203,7 @@ scrollHeight: 1482 → 4090
 **症状**：只能靠桌面端左右按钮或移动端滑动切集，104 集想直接跳到第 50 集
 做不到。
 
-**修复**：新增 `apps/web/src/features/player/episode-drawer.tsx`，底部抽屉。
+**修复**：新增 `web/src/features/player/episode-drawer.tsx`，底部抽屉。
 
 - 打开时自动 `scrollIntoView` 到当前集
 - `overscroll-contain` 防止抽屉内滚动带动背景页面
@@ -214,7 +214,7 @@ URL 变为 `.../watch/7700877572459990040`，抽屉关闭，`readyState 4` 正�
 
 ### 2.7 缺少 favicon
 
-控制台 404。补 `apps/web/public/favicon.svg`（播放三角 + 品牌红），
+控制台 404。补 `web/public/favicon.svg`（播放三角 + 品牌红），
 并在 `index.html` 加 `link rel="icon"` 与 `meta description`。
 
 ### 2.8 控件隐藏后切集按钮还挂着
@@ -327,29 +327,29 @@ pnpm -r build       → shared / server / web 全部 Done
 
 | 文件 | 作用 |
 | --- | --- |
-| `apps/web/src/lib/use-infinite-scroll.ts` | 滚动自动加载（两段式 + 三层防抖） |
-| `apps/web/src/features/player/progress-bar.tsx` | 自实现进度条（指针捕获、预览跟随） |
-| `apps/web/src/features/player/episode-drawer.tsx` | 选集抽屉 |
-| `apps/server/src/common/ttl-cache.ts` | TTL 缓存 + 请求去重 |
-| `apps/web/public/favicon.svg` | 站点图标 |
+| `web/src/lib/use-infinite-scroll.ts` | 滚动自动加载（两段式 + 三层防抖） |
+| `web/src/features/player/progress-bar.tsx` | 自实现进度条（指针捕获、预览跟随） |
+| `web/src/features/player/episode-drawer.tsx` | 选集抽屉 |
+| `server/src/common/ttl-cache.ts` | TTL 缓存 + 请求去重 |
+| `web/public/favicon.svg` | 站点图标 |
 
 修改：
 
 | 文件 | 改动 |
 | --- | --- |
-| `apps/web/src/features/player/player.tsx` | 重写手势语义、控件锁定、键盘、选集入口、拖动隐藏中央按钮 |
-| `apps/web/src/features/player/use-gestures.ts` | 指针捕获 + 三重长按兜底 |
-| `apps/web/src/routes/player-route.tsx` | 接入手势切集、选集抽屉、下一集预取 |
-| `apps/web/src/routes/feed-route.tsx` | 自动加载、跨页去重、到底停止 |
-| `apps/web/src/routes/search-route.tsx` | 自动加载、跨页去重 |
-| `apps/web/src/routes/series-route.tsx` | 评论数裁剪 |
-| `apps/web/src/lib/format.ts` | `shouldShowCount` 判断 |
-| `apps/web/src/app.tsx` | Query 默认参数调整 |
-| `apps/web/index.html` | favicon + description |
-| `apps/server/src/catalog/catalog.service.ts` | feed / series / search 接入 TTL 缓存 |
+| `web/src/features/player/player.tsx` | 重写手势语义、控件锁定、键盘、选集入口、拖动隐藏中央按钮 |
+| `web/src/features/player/use-gestures.ts` | 指针捕获 + 三重长按兜底 |
+| `web/src/routes/player-route.tsx` | 接入手势切集、选集抽屉、下一集预取 |
+| `web/src/routes/feed-route.tsx` | 自动加载、跨页去重、到底停止 |
+| `web/src/routes/search-route.tsx` | 自动加载、跨页去重 |
+| `web/src/routes/series-route.tsx` | 评论数裁剪 |
+| `web/src/lib/format.ts` | `shouldShowCount` 判断 |
+| `web/src/app.tsx` | Query 默认参数调整 |
+| `web/index.html` | favicon + description |
+| `server/src/catalog/catalog.service.ts` | feed / series / search 接入 TTL 缓存 |
 
-未改动：`packages/shared/src/{cenc,spade,mp4,bytes}.ts`、`apps/server/src/media/*`、
-`apps/server/src/cover/*`。CENC 解密、spade 密钥派生、雪碧图切分逻辑保持原样。
+未改动：`shared/src/{cenc,spade,mp4,bytes}.ts`、`server/src/media/*`、
+`server/src/cover/*`。CENC 解密、spade 密钥派生、雪碧图切分逻辑保持原样。
 
 ---
 
