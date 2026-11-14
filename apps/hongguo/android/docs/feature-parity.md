@@ -199,7 +199,7 @@ web 完全一致；`/api/sprite-sheet` → 200 `image/jpeg` 1,068,646 B，magic
 | `setSupportZoom` / `builtInZoomControls` | `false` | 应用内不该出现浏览器缩放控件 |
 | `configChanges` | 加 `smallestScreenSize\|screenLayout\|uiMode` | 旋转时不重建 Activity，保住页面状态 |
 
-## 四、提 PR 前的独立审查与修复（11 个缺陷）
+## 四、提 PR 前的独立审查与修复（13 个缺陷）
 
 在功能走查全部通过后，另起一轮针对代码本身的审查（安全 / 资源生命周期 /
 文档真实性）。审查又查出 6 个问题，均已修复并复验。
@@ -364,6 +364,71 @@ JS 堆里，比之前 base64 桥接 OOM 那次（39 MB）严重得多。
 同时把错误 `dispatchEvent` 也加同一道检查（否则旧请求失败会误报错误）。
 
 **验证**：播放中切到 1080p，`videoWidth` 从 640 变为 1920，`readyState 4`。
+
+### 19. 页面顶到状态栏下面
+
+**现象**：首页标题、播放页控件都被系统状态栏（时间、信号、电量）压住。
+
+**根因**：`targetSdk = 36`。Android 15（API 35）起，`targetSdk >= 35`
+的应用**强制 edge-to-edge**：窗口默认铺满整屏，绘制到状态栏后面。
+
+页面本身写得对：`web/index.html` 有 `viewport-fit=cover`，
+`web/src/styles/index.css:177` 有 `padding-top: env(safe-area-inset-top)`。
+但 WebView 只有在宿主声明「内容延伸到系统栏」时才向页面报告安全区，
+否则一律报 **0**。实测 `env(safe-area-inset-top)` 返回 `0`，
+所以那个 padding 在壳里等于没写。
+
+**修复**：`onCreate` 里调 `window.setDecorFitsSystemWindows(false)`。
+
+**为什么不在原生侧写死一个状态栏高度**：那样与页面的
+`env(safe-area-inset-*)` 会叠加成双倍留白，而且横屏时状态栏高度不同。
+交给系统报告真实安全区，页面自己的 CSS 就能生效。全屏时
+`enterImmersive()` 隐藏系统栏，安全区自动变 0，不需要额外分支。
+
+**验证**（1080x2400 / 420dpi）：修复前 `env(safe-area-inset-top)` 为 `0`、
+`header` 高 57px、`top` 为 0；修复后安全区 **52px**、`header` 高 109px、
+`top` 为 0（padding 在 header 内部，标题已下移到状态栏下方）。
+
+### 20. 同一集并发请求会互相破坏文件
+
+**现象**：播放页会预取下一集（`player-route.tsx` 的 `prefetchMedia`），
+同时点下载按钮、或切档后快速切回时，`shouldInterceptRequest`
+会在后台线程池里并发处理同一个 URL。
+
+**根因**：`handleVideo` 先查缓存，未命中就下载到
+`cacheDir/video-<sha256>.mp4`。两路同时进来时：
+
+1. `FileOutputStream` 会把文件截断重写，两路交叠写入可能交错损坏；
+2. 先完成那一路把 `FileInputStream` 交给 WebView，后一路把文件截断，
+   WebView 读到一半就断。
+
+引用计数解决不了这个：它只保证「已经在读的文件不被淘汰」，
+不管「正在写的文件被另一路同时写」。
+
+**修复**：
+
+1. `downloadLocks`：`ConcurrentHashMap<String, Any>` + `computeIfAbsent`，
+   同一个 URL 拿到同一把锁，下载串行化。
+2. 锁内重新查一次缓存：第二个请求进来时第一路已经写完，直接命中，
+   不重复下载。
+3. `releaseLock()` 在缓存已写好时删锁（后来者走快路径命中，不需要锁）；
+   下载失败时保留锁，重试接着用同一把。用 `try/finally` 而不是
+   `synchronized { }.also { }`——块里有两个提前 `return`，`.also` 不执行，锁会漏。
+4. `evictUnused(keep)` 新增 `keep` 参数：刚写入那一份还没被 `videoResponse`
+   加计数，但绝对不能删，否则紧接着的 `FileInputStream` 会抛
+   `FileNotFoundException`。
+
+**验证**：用 XHR 绕过 JS 层缓存，8 路并发打原生 `/api/video`（同一集 720p）：
+
+```
+XHR 8 路并发: {"rs":["200:12870860","200:12870860",...×8],"ms":2622}
+logcat:
+  D HgVideo : downloaded 12870860B in 2364ms        ← 只有 1 次真实下载
+  D HgVideo : cache hit after lock 12870860B        ← 另外 7 次
+  ...（共 7 条 cache hit，7 个不同线程 ID 25149/25150/25151/25152/25155/25423/25424）
+```
+
+7 个不同线程 ID 证明这确实是 8 个并发线程，其中 7 个在等锁，等到了直接命中。
 
 ## 五、未解决项
 

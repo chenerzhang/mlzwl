@@ -57,6 +57,48 @@ class VideoProxyHandler(
     private val refs = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     /**
+     * 正在下载的 URL → 那把锁。
+     *
+     * ## 为什么要它
+     *
+     * `shouldInterceptRequest` 在后台线程池里跑，同一个 URL 可能被并发请求：
+     * 播放和下载按钮会同时要同一集，切档后快速切回也会。两路同时写同一个
+     * `target` 文件时，`target.outputStream()` 会把文件截断重写，于是：
+     *
+     * 1. 两路交叠写入，文件内容可能交错损坏；
+     * 2. 先完成那一路把 `FileInputStream` 交给 WebView，后一路把文件截断，
+     *    WebView 读到一半就断。
+     *
+     * 引用计数解决不了这个：它只保证「已经在读的文件不被淘汰」，不管
+     * 「正在写的文件被另一路同时写」。
+     */
+    private val downloadLocks = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+    /**
+     * 拿一个 URL 的下载锁。
+     *
+     * `computeIfAbsent` 保证同一个 key 只会造一把锁，所有并发请求拿到同一实例。
+     */
+    private fun lockFor(source: String): Any =
+        downloadLocks.computeIfAbsent(source) { Any() }
+
+    /**
+     * 下载结束后丢掉这把锁。
+     *
+     * 不回收的话，每看过一集就永久多一个 `String` + `Any` 的条目。剧集列表可以
+     * 无限翻，长会话下就是一个稳定的内存增长点。
+     *
+     * 只在**缓存已经写好**时删锁。后来者重新 `computeIfAbsent` 后第一件事是
+     * 查缓存，命中就不进下载路径，所以不会出现「两把锁写同一个文件」。
+     * 如果下载失败（缓存没写成），锁保留——下一次重试要接着用同一把。
+     */
+    private fun releaseLock(source: String) {
+        if (cache.containsKey(source)) {
+            downloadLocks.remove(source)
+        }
+    }
+
+    /**
      * 处理 `/api/video?url=<encoded>`。
      *
      * **必须流式落盘**：39 MB 的 1080p 视频如果读进 `ByteArray` 会直接撞爆
@@ -71,6 +113,8 @@ class VideoProxyHandler(
             return error(403, "host not allowed")
         }
 
+        // 快路径：缓存已命中就不进锁。命中后文件不会被删（引用计数在
+        // `videoResponse` 里 +1），所以这里读 `cache` 是安全的。
         cache[source]?.let { file ->
             if (file.exists() && file.length() > 0) {
                 Log.d(tag, "cache hit ${file.length()}B")
@@ -79,6 +123,29 @@ class VideoProxyHandler(
             cache.remove(source)
         }
 
+        // 慢路径：同一个 URL 串行下载。第二个请求进来时第一路已经下载完，
+        // 重新走一遍缓存检查就能直接命中。
+        //
+        // 用 `try/finally` 而不是 `synchronized { }.also { }`：`synchronized`
+        // 块里有两个提前 `return`（缓存命中），`.also` 不会执行，锁就漏了。
+        try {
+            synchronized(lockFor(source)) {
+                cache[source]?.let { file ->
+                    if (file.exists() && file.length() > 0) {
+                        Log.d(tag, "cache hit after lock ${file.length()}B")
+                        return videoResponse(source, file)
+                    }
+                    cache.remove(source)
+                }
+                return downloadAndCache(source, cacheDir)
+            }
+        } finally {
+            releaseLock(source)
+        }
+    }
+
+    /** 真正下载并写入缓存。调用方必须持有该 URL 的锁。 */
+    private fun downloadAndCache(source: String, cacheDir: java.io.File): WebResourceResponse {
         val started = System.currentTimeMillis()
         // 文件名不能只用 hashCode：不同 URL 可能撞同一个值，撞上就会读到另一集的内容。
         // 用 URL 的 SHA-256 前 16 字节做标识。
@@ -99,8 +166,8 @@ class VideoProxyHandler(
         }
         Log.d(tag, "downloaded ${size}B in ${System.currentTimeMillis() - started}ms")
 
-        evictUnused()
         cache[source] = target
+        evictUnused(keep = source)
         return videoResponse(source, target)
     }
 
@@ -109,12 +176,19 @@ class VideoProxyHandler(
      *
      * 只删 `refs` 里计数为 0 的项。正在被 `FileInputStream` 读的文件保留，
      * 否则并发预取会把当前播放的那份删掉。
+     *
+     * `keep` 是刚刚写入的那一份：它还没被 `videoResponse` 加计数，
+     * 但绝对不能删——删了之后紧接着的 `FileInputStream` 会抛
+     * `FileNotFoundException`。
      */
-    private fun evictUnused() {
+    private fun evictUnused(keep: String? = null) {
         val iterator = cache.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
             val key = entry.key
+            if (key == keep) {
+                continue
+            }
             val count = refs[key] ?: 0
             if (count == 0) {
                 entry.value.delete()
