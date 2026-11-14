@@ -95,6 +95,9 @@ class VideoProxyHandler(
     private fun releaseLock(source: String) {
         if (cache.containsKey(source)) {
             downloadLocks.remove(source)
+            // 留一条可见痕迹：锁数量应该在有新集下载时上一下，随后回到 0。
+            // 如果它只增不减，说明这里的回收没生效。
+            Log.d(tag, "lock released, locks=${downloadLocks.size} cache=${cache.size}")
         }
     }
 
