@@ -1320,6 +1320,10 @@
       if (!m) {
         continue;
       }
+      // 预取让出带宽：当前集还在等首帧时，预取先等。见 `waitForFirstFrame`。
+      if (isPrefetchRequest(init)) {
+        await waitForFirstFrame();
+      }
       try {
         const out = await route.handle(parsed, m);
         // 下载端点返回原始字节；其余端点返回 JSON。
@@ -1542,11 +1546,175 @@
     LOG('已接管 <video src> 的 /api/media 地址');
   }
 
+  /**
+   * 修 `paused` 的语义：首帧未到时报告「还没开始播」。
+   *
+   * ## 要解决的问题
+   *
+   * 页面的停滞检测（`web/src/features/player/playback-error.ts` 的 `isStalled()`）
+   * 只看 `!video.paused` 与 `currentTime` 是否 20 秒未变。
+   *
+   * 但 `HTMLMediaElement.play()` 一被调用，`paused` **立刻**变 false，
+   * 哪怕一个字节都还没到（`readyState === 0`、`buffered.length === 0`）。
+   * 实测壳内冷启动进 `/watch/<id>`：
+   *
+   * ```
+   * t=1022ms  rs=0 paused=false ct=0 buf=0     ← play() 已调，字节未到
+   * t=20124ms rs=0 paused=false ct=0 buf=0     ← 浮层弹出「播放停滞，正在自动重新加载」
+   * ```
+   *
+   * 于是「等待首帧」被算成「播着播着卡住」。壳内这条路径比浏览器慢得多：
+   * 要先经 OkHttp 把整集下载到本地、再用 WebCrypto 解密，首帧前本来就要等很久。
+   *
+   * ## 为什么改 `paused` 而不是改 web 源码
+   *
+   * 页面读 `video.paused` 只有两处：
+   * - `player.tsx:543` 的停滞判定（就是这里要修的）
+   * - `player.tsx:571` 的播放/暂停切换
+   *
+   * 后者语义上也是对的：首帧未到时的按钮应该显示「播放」而不是「暂停」，
+   * 点下去会再 `play()` 一次（幂等）。所以两边都受益，不需要分支。
+   *
+   * `playing` 这个 React 状态走的是 `play`/`pause` 事件，不受影响。
+   *
+   * ## 边界
+   *
+   * - 只有**已经请求过播放**（调过 `play()`）且 `readyState < HAVE_CURRENT_DATA`
+   *   时才改。用户主动 `pause()` 后必须如实返回 true，否则按钮会错。
+   * - `readyState >= 2`（有当前帧数据）后一律返回原生值，不干预正常播放。
+   */
+  function installPausedSemantics() {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'paused');
+    if (descriptor === undefined || descriptor.get === undefined) {
+      LOG('无法修正 paused 语义：原型上没有 getter');
+      return;
+    }
+    const originalGet = descriptor.get;
+    const originalPlay = HTMLMediaElement.prototype.play;
+    const originalPause = HTMLMediaElement.prototype.pause;
+
+    /** 已经调过 `play()`、还没拿到首帧的元素。 */
+    const awaitingFirstFrame = new WeakSet();
+
+    HTMLMediaElement.prototype.play = function patchedPlay() {
+      const result = originalPlay.apply(this, arguments);
+      // `readyState < 2` 说明连当前帧都没有。标记上，让 `paused` 报告「还没开始播」。
+      // `readyState >= 2` 时不需要标记：此时 `paused` 本来就是 false，语义正确。
+      if (this.readyState < 2) {
+        awaitingFirstFrame.add(this);
+      }
+      if (result !== undefined && typeof result.then === 'function') {
+        result.then(
+          () => undefined,
+          () => {
+            // `play()` 被拒绝（自动播放策略、地址不可用）：不再等首帧，
+            // 否则 `paused` 会永远报 true，切换按钮永远显示「播放」。
+            awaitingFirstFrame.delete(this);
+          },
+        );
+      }
+      return result;
+    };
+
+    HTMLMediaElement.prototype.pause = function patchedPause() {
+      // 用户主动暂停：立刻退出「等首帧」状态，`paused` 必须如实返回 true。
+      awaitingFirstFrame.delete(this);
+      return originalPause.apply(this, arguments);
+    };
+
+    Object.defineProperty(HTMLMediaElement.prototype, 'paused', {
+      configurable: true,
+      enumerable: descriptor.enumerable,
+      get: function patchedPaused() {
+        const native = originalGet.call(this);
+        // 已拿到当前帧：原生值就是对的。
+        if (this.readyState >= 2) {
+          awaitingFirstFrame.delete(this);
+          return native;
+        }
+        // 正在等首帧：报告「还没开始播」，停滞检测就不会把这段等待算成停滞。
+        if (awaitingFirstFrame.has(this)) {
+          return true;
+        }
+        return native;
+      },
+      set: descriptor.set,
+    });
+    LOG('已修正 paused 语义（首帧未到时报告未播放）');
+  }
+
+  /**
+   * 预取请求的排队：当前集还在等首帧时，预取先让出带宽。
+   *
+   * ## 要解决的问题
+   *
+   * 播放页会预取下一集（`web/src/features/player/prefetch-next.ts`），发一个
+   * `range: bytes=0-1` 的请求。适配层收到后仍然要完整下载 + 解密整集，所以
+   * 它和当前正在播的那一集**争同一份带宽**。
+   *
+   * 实测：`lock released, locks=2 cache=1`——进播放页时同时有两个下载。
+   * 网络差时这会把首帧等待推到几十秒，也就是「播放停滞」浮层的直接原因。
+   *
+   * ## 判据
+   *
+   * 页面的预取请求带 `range: bytes=0-1`，正常播放不会带（`<video src>` 那条
+   * 路径根本不进 `fetch`）。所以用这个头区分两者，不用看 URL。
+   *
+   * ## 做法
+   *
+   * 预取先等「当前有 `<video>` 且它已经拿到首帧（`readyState >= 2`）」再开始。
+   * 等待有上限（[PREFETCH_MAX_WAIT_MS]）：如果用户一直没在播（比如停在列表页），
+   * 不能让预取永久挂起。超时后照常发请求。
+   *
+   * 这不是取消预取：预取仍然会跑，只是排在首帧之后。首帧是用户可见的，
+   * 预取是纯优化，让优化给体验让路。
+   */
+  const PREFETCH_MAX_WAIT_MS = 30_000;
+
+  /** 是否还有 `<video>` 在等首帧。 */
+  function awaitingFirstFrame() {
+    const videos = document.querySelectorAll('video');
+    for (const video of videos) {
+      if (video.readyState < 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** 等首帧就绪或超时，然后放行预取。 */
+  async function waitForFirstFrame() {
+    const deadline = Date.now() + PREFETCH_MAX_WAIT_MS;
+    while (awaitingFirstFrame() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  /** 这个请求是不是页面的预取（带 `range: bytes=0-1`）。 */
+  function isPrefetchRequest(init) {
+    if (!init || !init.headers) {
+      return false;
+    }
+    const headers = init.headers;
+    let range;
+    if (typeof headers.get === 'function') {
+      range = headers.get('range');
+    } else if (Array.isArray(headers)) {
+      const hit = headers.find((pair) => String(pair[0]).toLowerCase() === 'range');
+      range = hit ? hit[1] : undefined;
+    } else {
+      const key = Object.keys(headers).find((k) => k.toLowerCase() === 'range');
+      range = key === undefined ? undefined : headers[key];
+    }
+    return typeof range === 'string' && range.indexOf('bytes=0-1') === 0;
+  }
+
   // ---------------------------------------------------------------- 启动
 
   installBridgeListener();
   installDownloadInterceptor();
   installMediaSrcInterceptor();
+  installPausedSemantics();
   LOG('适配层已安装（' + routes.length + ' 个端点）');
   // 预热：提前启动 WASM，首屏请求就不用等它。
   startSdk().catch((e) => LOG('SDK 预热失败: ' + (e && e.message ? e.message : String(e))));
