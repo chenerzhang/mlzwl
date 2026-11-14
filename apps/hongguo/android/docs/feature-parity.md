@@ -199,7 +199,7 @@ web 完全一致；`/api/sprite-sheet` → 200 `image/jpeg` 1,068,646 B，magic
 | `setSupportZoom` / `builtInZoomControls` | `false` | 应用内不该出现浏览器缩放控件 |
 | `configChanges` | 加 `smallestScreenSize\|screenLayout\|uiMode` | 旋转时不重建 Activity，保住页面状态 |
 
-## 四、提 PR 前的独立审查与修复（13 个缺陷）
+## 四、提 PR 前的独立审查与修复（14 个缺陷）
 
 在功能走查全部通过后，另起一轮针对代码本身的审查（安全 / 资源生命周期 /
 文档真实性）。审查又查出 6 个问题，均已修复并复验。
@@ -429,6 +429,77 @@ logcat:
 ```
 
 7 个不同线程 ID 证明这确实是 8 个并发线程，其中 7 个在等锁，等到了直接命中。
+
+### 21. 首帧还没到就弹「播放停滞，正在自动重新加载」
+
+**现象**：点进播放页，画面中央出现「播放停滞，正在自动重新加载」，
+背景是已经解码的一帧。网络正常时不出现，网络慢时必现。
+
+**采样**（每 1 秒读一次 `readyState` / `paused` / `currentTime`）：
+
+```
+t=18ms    rs=0 paused=true  ct=0 buf=0
+t=1022ms  rs=0 paused=false ct=0 buf=0     ← play() 已调，字节未到
+t=20124ms rs=0 paused=false ct=0 buf=0     ← 浮层弹出
+```
+
+**根因**：两层叠加，都不是 web 的错。
+
+1. **`paused` 的语义**。页面的 `isStalled()`
+   （`web/src/features/player/playback-error.ts:129`）只看
+   `!video.paused` 与 `currentTime` 是否 20 秒未变。但
+   `HTMLMediaElement.play()` 一被调用，`paused` **立刻**变 false，
+   哪怕一个字节都没到。于是「等待首帧」被算成「播着播着卡住」。
+
+   壳内这条路径比浏览器慢得多：要先经 OkHttp 把整集下载到本地、
+   再用 WebCrypto 解密，首帧前本来就要等很久。实测 1080p 一集
+   24 MB，网络差时下载 91 秒。
+
+2. **预取抢带宽**。播放页会预取下一集
+   （`web/src/features/player/prefetch-next.ts`），发一个
+   `range: bytes=0-1` 的请求。适配层收到后仍要完整下载 + 解密整集，
+   所以它和当前正在播的那一集争同一份带宽。实测
+   `lock released, locks=2 cache=1`——进播放页时同时有两个下载。
+
+**修复**（都在 `hg-adapter.js`，未改 `web/src`）：
+
+1. `installPausedSemantics()`：接管 `HTMLMediaElement.prototype.paused`。
+   - `play()` 时若 `readyState < 2`，把元素记进 `awaitingFirstFrame`。
+   - getter 在「已请求播放 + `readyState < 2`」时返回 `true`，
+     其余情况返回原生值。
+   - `pause()` 时立刻移出集合，用户主动暂停必须如实返回 `true`。
+   - `play()` 的 Promise 被拒时也移出，否则按钮会永远显示「播放」。
+
+   页面读 `video.paused` 只有两处：停滞判定（要修的）和
+   播放/暂停切换。后者语义上也是对的——首帧未到时按钮该显示「播放」
+   而不是「暂停」。`playing` 这个 React 状态走 `play`/`pause` 事件，不受影响。
+
+2. `waitForFirstFrame()`：预取请求（带 `range: bytes=0-1`）先等
+   「有 `<video>` 且 `readyState >= 2`」再开始，上限 30 秒。
+   超时后照常发请求——用户停在列表页时不能让预取永久挂起。
+
+**为什么不改 `web/src`**：`isStalled` 缺的是 `readyState` 判据，
+但本轮的约束是不动 web 源码。壳内修 `paused` 语义能达到同样效果，
+且对浏览器与壳都成立——「还没拿到第一帧」本来就不该算「正在播放」。
+
+**验证**（`pm clear` 清空全部数据后冷启动）：
+
+| 项 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 浮层首次出现 | 20,124 ms | **未出现** |
+| `paused` 在 `rs=0` 时 | `false` | **`true`** |
+| 并发下载数（`locks=`） | 2 | **0** |
+| 播放中 `paused`（`rs=4`） | `false` | `false`（不回归） |
+| 暂停 → 恢复 | — | `true` → `false`（正确） |
+| `currentTime` 推进 | — | 6.21 → 11.21（5 秒） |
+
+3 次连续冷启动进 `/watch/<id>`：浮层均未出现。
+
+**仍未解决的**：首帧等待本身没有变短。网络 89 KB/s 时 24 MB 要 94 秒，
+这是物理限制，不是代码问题。修复只保证「等待期间不误报停滞」，
+以及「预取不跟当前集抢带宽」。真要缩短首帧，需要服务端支持 Range
+分段响应（端上是「下载整集再解密」，无法边下边播）。
+
 
 ## 五、未解决项
 
