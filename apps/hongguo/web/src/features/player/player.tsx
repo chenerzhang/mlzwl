@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SpriteMeta } from '@mlzwl/hongguo-shared';
 import {
   ArrowLeftIcon,
-  CaretDownIcon,
   FullscreenEnterIcon,
   FullscreenExitIcon,
   NextIcon,
   PlayIcon,
   PrevIcon,
+  SettingsIcon,
 } from '../../components/icons';
 import { formatDuration } from '../../lib/format';
 import {
@@ -235,15 +235,14 @@ export function Player({
   const showDefinitionPicker = shouldShowDefinitionPicker(availableDefinitions) && onSelectDefinition !== undefined;
   const [showControls, setShowControls] = useState(true);
   /**
-   * 底栏是否展开。
+   * 设置面板（二级菜单）是否展开。
    *
-   * 收起时只常驻「选集」「全屏」两个按钮；展开后是完整的进度条、音量、
-   * 清晰度、倍速与画幅模式。
+   * 收起时底部只有进度条与「设置 / 选集 / 全屏」三个按钮；展开后出现音量、
+   * 清晰度、倍速、画幅模式。
    *
-   * 默认收起：短剧用户主要动作是「继续看」与「换集」，画幅、倍速、音量
-   * 是低频开关，常驻只会遮住画面。
+   * 进度条**不**跟着收起：进度是播放页最核心的信息，任何时候都该看得见。
    */
-  const [barExpanded, setBarExpanded] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [error, setError] = useState<PlayerErrorState | null>(null);
   /** 拖动中的预览位置；`null` 表示没在拖。 */
   const [scrubPreview, setScrubPreview] = useState<number | null>(null);
@@ -953,9 +952,12 @@ export function Player({
 
         `pointer-events-none` 必需：它盖在视频上，能接事件就会把后续
         `pointermove` 抢过去，拖动直接中断。
+
+        `pt-safe` 也必需：视频铺满整屏（edge-to-edge），`top-0` 会让这条线
+        压在状态栏下面，实测被 51.81px 的状态栏完全遮住。
       */}
       {seekDrag.state.time !== null && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-10">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-10 pt-safe">
           <div className="h-0.5 w-full bg-on-scrim/25">
             <div
               className="h-full bg-accent"
@@ -1066,15 +1068,14 @@ export function Player({
       {/*
         底部控件。
 
-        分两层：
-        1. **常驻行**：只有「选集」「全屏」（外加桌面端的上一集/下一集）。
-           短剧用户的主要动作是继续看与换集，其余都是低频开关。
-        2. **展开面板**：画幅模式、进度条、音量、清晰度、倍速、提示文字。
-           默认收起，点常驻行的展开按钮才出现。
+        结构：
+        1. **进度条常驻**——进度是播放页最核心的信息，任何时候都该看得见。
+        2. **主行常驻**：设置图标、选集、全屏。
+        3. **设置面板**：音量、清晰度、倍速、画幅模式。点设置图标才出现，
+           相当于一个二级菜单。
 
-        收起时仍然显示常驻行而不是整块消失：`showControls` 由点击与自动隐藏
-        控制，`barExpanded` 由用户显式展开。两者独立——点一下画面唤出控件后
-        看到的仍是精简版，不会因为「唤出」就弹出整块面板。
+        为什么把四项收进二级菜单：短剧用户的高频动作只有「继续看」和「换集」，
+        音量/清晰度/倍速/画幅都是低频开关。常驻它们会把进度条挤窄，还会遮住画面。
       */}
       <div
         className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-scrim/80 to-transparent px-4 pb-safe transition-opacity duration-200 ${
@@ -1091,17 +1092,20 @@ export function Player({
         }}
       >
         {/*
-          展开面板。用 `hidden` 而不是卸载：进度条卸载再挂载会让正在进行的
-          拖动（`scrub`）丢状态，`ProgressBar` 内部的 pointer capture 也会失效。
+          设置面板（二级菜单）。
+
+          放在主行上方，从下往上展开，与底栏方向一致。
+          `hidden` 而不是卸载：菜单里有 `DefinitionMenu` / `SpeedMenu` 两个弹层，
+          卸载会丢掉它们的 `anchor` 引用，弹层会失去定位基准。
         */}
-        <div className={barExpanded ? 'block' : 'hidden'}>
-          {/* 画幅模式是低频开关，单独一排避免挤压主控件。 */}
-          <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 pb-1">
-            {/*
-            画幅模式：竖屏视频在横屏容器里默认 `contain`（两侧留黑不裁切），
-            想铺满时切 `cover`，需要满屏拉伸才用 `fill`。
-            不用 Tailwind 的 `object-contain` 类：这里要按状态动态切三档。
-          */}
+        <div
+          className={`mb-1 rounded-xl bg-scrim/85 p-3 ${settingsOpen ? 'block' : 'hidden'}`}
+          role="group"
+          aria-label="播放设置"
+        >
+          {/* 画幅模式：三档单选。 */}
+          <div className="flex items-center justify-between gap-3 py-1">
+            <span className="text-[11px] text-on-scrim-muted">画幅</span>
             <div className="flex items-center" role="group" aria-label="画幅模式">
               {FRAME_MODES.map(({ mode, label }) => (
                 <button
@@ -1122,40 +1126,21 @@ export function Player({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-on-scrim-muted">
-            <span className="tabular-nums">{formatDuration(scrubPreview ?? current)}</span>
-            <ProgressBar
-              current={current}
-              duration={duration}
-              bufferedRanges={bufferedRanges}
-              onScrubStart={onScrubStart}
-              onScrub={onScrub}
-              onScrubEnd={onScrubEnd}
-              renderPreview={(seconds) =>
-                sprite === undefined ? (
-                  <div className="rounded bg-scrim/80 px-2 py-1 text-xs tabular-nums text-on-scrim">
-                    {formatDuration(seconds)}
-                  </div>
-                ) : (
-                  <div className="overflow-hidden rounded-md border border-on-scrim/25 shadow-lg">
-                    <SpritePreview position={seconds} meta={sprite.meta} sheetUrls={sprite.sheetUrls} />
-                    <div className="bg-scrim/80 px-2 py-0.5 text-center text-[11px] tabular-nums text-on-scrim">
-                      {formatDuration(seconds)}
-                    </div>
-                  </div>
-                )
-              }
-            />
-            <span className="tabular-nums">{formatDuration(duration)}</span>
-          </div>
+          {/*
+            音量：喇叭按钮 + 滑块。
 
-          <div className="flex items-center justify-between pb-2">
-            <div className="flex items-center gap-1">
-              {/*
-              音量：喇叭按钮 + 悬停/点击展开的滑块。
-              移动端只有喇叭（iOS 的 video.volume 只读，滑块拖不动）。
-            */}
+            滑块在这里**常显**（`inline`）。原来的「悬停/点击展开」在触屏上
+            两条路径都断了：没有悬停，滑块收起时宽度是 0 也点不到。用户只能
+            看到喇叭按钮，反馈「只能开和关，调不了音量」。
+
+            `allowSlider` 仍由设备能力决定：iOS 的 `video.volume` 只读，
+            拖了也没用，那种设备上不渲染滑块。
+          */}
+          <div className="flex items-center gap-3 py-1">
+            <span className="flex-none text-[11px] text-on-scrim-muted">音量</span>
+            <div className="flex flex-1 items-center justify-end">
               <VolumeControl
+                inline
                 allowSlider={canSetVolume}
                 value={volume}
                 muted={muted}
@@ -1171,61 +1156,24 @@ export function Player({
                   }
                 }}
               />
+            </div>
+          </div>
 
-              {/*
-              清晰度：只在真有多档时显示。
-              单档时显示「只有一项」的菜单只是噪音，所以由 showDefinitionPicker 把关。
-            */}
-              {showDefinitionPicker && (
-                <div className="relative">
-                  <button
-                    ref={definitionButtonRef}
-                    type="button"
-                    onClick={() => {
-                      setDefinitionMenuOpen((open) => {
-                        const next = !open;
-                        setLock('definition-menu', !next);
-                        if (next) {
-                          clearHideTimer();
-                        } else {
-                          scheduleHide();
-                        }
-                        return next;
-                      });
-                    }}
-                    aria-haspopup="menu"
-                    aria-expanded={definitionMenuOpen}
-                    aria-label={`清晰度 ${definition ?? '自动'}`}
-                    className="flex h-11 items-center rounded-full px-4 text-xs tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
-                  >
-                    {definition === undefined ? '清晰度' : definition === 'unknown' ? '清晰度' : definition}
-                  </button>
-                  {definitionMenuOpen && (
-                    <DefinitionMenu
-                      available={availableDefinitions}
-                      value={definition}
-                      anchor={definitionButtonRef}
-                      onSelect={(next) => {
-                        onSelectDefinition?.(next);
-                      }}
-                      onClose={() => {
-                        setDefinitionMenuOpen(false);
-                        setLock('definition-menu', true);
-                        scheduleHide();
-                      }}
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* 倍速：点开列表选，不再循环点击。 */}
+          {/*
+            清晰度：只在真有多档时显示。
+            单档时显示「只有一项」的菜单只是噪音，所以由 showDefinitionPicker 把关。
+          */}
+          {showDefinitionPicker && (
+            <div className="flex items-center justify-between gap-3 py-1">
+              <span className="text-[11px] text-on-scrim-muted">清晰度</span>
               <div className="relative">
                 <button
+                  ref={definitionButtonRef}
                   type="button"
                   onClick={() => {
-                    setSpeedMenuOpen((open) => {
+                    setDefinitionMenuOpen((open) => {
                       const next = !open;
-                      setLock('speed-menu', !next);
+                      setLock('definition-menu', !next);
                       if (next) {
                         clearHideTimer();
                       } else {
@@ -1235,40 +1183,107 @@ export function Player({
                     });
                   }}
                   aria-haspopup="menu"
-                  aria-expanded={speedMenuOpen}
-                  aria-label={`播放速度 ${speed} 倍`}
-                  className="flex h-11 items-center rounded-full px-4 text-xs tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
+                  aria-expanded={definitionMenuOpen}
+                  aria-label={`清晰度 ${definition ?? '自动'}`}
+                  className="flex h-9 items-center rounded-full px-3 text-xs tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
                 >
-                  {speed === 1 ? '倍速' : `${speed}×`}
+                  {definition === undefined || definition === 'unknown' ? '自动' : definition}
                 </button>
-                {speedMenuOpen && (
-                  <SpeedMenu
-                    value={speed}
-                    onSelect={setSpeedTo}
+                {definitionMenuOpen && (
+                  <DefinitionMenu
+                    available={availableDefinitions}
+                    value={definition}
+                    anchor={definitionButtonRef}
+                    onSelect={(next) => {
+                      onSelectDefinition?.(next);
+                    }}
                     onClose={() => {
-                      setSpeedMenuOpen(false);
-                      setLock('speed-menu', true);
+                      setDefinitionMenuOpen(false);
+                      setLock('definition-menu', true);
                       scheduleHide();
                     }}
                   />
                 )}
               </div>
             </div>
-            <p className="text-[11px] text-on-scrim-muted">双击暂停 · 长按倍速</p>
+          )}
+
+          {/* 倍速：点开列表选，不循环点击。 */}
+          <div className="flex items-center justify-between gap-3 py-1">
+            <span className="text-[11px] text-on-scrim-muted">倍速</span>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setSpeedMenuOpen((open) => {
+                    const next = !open;
+                    setLock('speed-menu', !next);
+                    if (next) {
+                      clearHideTimer();
+                    } else {
+                      scheduleHide();
+                    }
+                    return next;
+                  });
+                }}
+                aria-haspopup="menu"
+                aria-expanded={speedMenuOpen}
+                aria-label={`播放速度 ${speed} 倍`}
+                className="flex h-9 items-center rounded-full px-3 text-xs tabular-nums text-on-scrim transition-colors hover:bg-on-scrim/15"
+              >
+                {speed === 1 ? '正常' : `${speed}×`}
+              </button>
+              {speedMenuOpen && (
+                <SpeedMenu
+                  value={speed}
+                  onSelect={setSpeedTo}
+                  onClose={() => {
+                    setSpeedMenuOpen(false);
+                    setLock('speed-menu', true);
+                    scheduleHide();
+                  }}
+                />
+              )}
+            </div>
           </div>
         </div>
 
-        {/*
-          常驻行：收起与展开都在。顺序与主流播放器一致——左侧展开/收起，
-          右侧「选集」「全屏」是最常用的两个动作。
-        */}
+        {/* 进度条：常驻，不随设置面板收起。 */}
+        <div className="flex items-center gap-3 text-xs text-on-scrim-muted">
+          <span className="tabular-nums">{formatDuration(scrubPreview ?? current)}</span>
+          <ProgressBar
+            current={current}
+            duration={duration}
+            bufferedRanges={bufferedRanges}
+            onScrubStart={onScrubStart}
+            onScrub={onScrub}
+            onScrubEnd={onScrubEnd}
+            renderPreview={(seconds) =>
+              sprite === undefined ? (
+                <div className="rounded bg-scrim/80 px-2 py-1 text-xs tabular-nums text-on-scrim">
+                  {formatDuration(seconds)}
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-md border border-on-scrim/25 shadow-lg">
+                  <SpritePreview position={seconds} meta={sprite.meta} sheetUrls={sprite.sheetUrls} />
+                  <div className="bg-scrim/80 px-2 py-0.5 text-center text-[11px] tabular-nums text-on-scrim">
+                    {formatDuration(seconds)}
+                  </div>
+                </div>
+              )
+            }
+          />
+          <span className="tabular-nums">{formatDuration(duration)}</span>
+        </div>
+
+        {/* 主行：设置、选集、全屏。 */}
         <div className="flex items-center justify-between pb-2">
           <button
             type="button"
             onClick={() => {
-              setBarExpanded((open) => {
+              setSettingsOpen((open) => {
                 const next = !open;
-                setLock('bar-expanded', !next);
+                setLock('settings', !next);
                 if (next) {
                   clearHideTimer();
                 } else {
@@ -1277,11 +1292,13 @@ export function Player({
                 return next;
               });
             }}
-            aria-expanded={barExpanded}
-            aria-label={barExpanded ? '收起控制栏' : '展开控制栏'}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-on-scrim transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20"
+            aria-expanded={settingsOpen}
+            aria-label="播放设置"
+            className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20 ${
+              settingsOpen ? 'bg-on-scrim/15 text-on-scrim' : 'text-on-scrim'
+            }`}
           >
-            <CaretDownIcon className={`h-5 w-5 transition-transform duration-200 ${barExpanded ? 'rotate-180' : ''}`} />
+            <SettingsIcon className="h-5 w-5" />
           </button>
 
           <div className="flex items-center gap-1">
