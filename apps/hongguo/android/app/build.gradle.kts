@@ -103,6 +103,13 @@ android {
     sourceSets["main"].assets.directories.add("src/main/assets")
     sourceSets["main"].assets.directories.add("../../web/dist")
 
+    // 调试期留在 assets 里的样本文件不能进包。它们已在 .gitignore 里，但
+    // Gradle 扫的是目录而不是 git 索引，不排除就会被静默打进 APK，
+    // 造成本地产物与 CI 产物不一致（实测差 1.2 MB）。
+    androidResources {
+        ignoreAssetsPattern = "hevc-sample.mp4"
+    }
+
     packaging {
         resources.excludes += setOf("META-INF/*.kotlin_module")
     }

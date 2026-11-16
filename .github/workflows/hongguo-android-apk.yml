@@ -65,14 +65,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # pnpm 版本从 package.json 的 packageManager 字段读，避免两处不一致。
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -80,13 +80,17 @@ jobs:
       # Android SDK 由 runner 预装（ANDROID_HOME 已设）。
       # AGP 9.5.1 的 Gradle 9.9 对 JDK 17 有 deprecation 警告，这里用 21。
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
+      # v6 默认走闭源的 Enhanced Caching。公开仓库虽免费，但这里显式指定
+      # 开源的 basic provider（actions/cache 的薄包装），避免依赖闭源组件。
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       # 把 base64 的 keystore 还原成文件。缺失时跳过，Gradle 会产出 unsigned。
       # 写进 runner.temp 而不是工作区，避免被后续 upload-artifact 或缓存带走。
@@ -201,7 +205,7 @@ jobs:
           fi
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: hongguo-shell-release
           path: apps/hongguo/android/${{ steps.apk.outputs.path }}
