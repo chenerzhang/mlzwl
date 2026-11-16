@@ -113,6 +113,19 @@ PR 上不跑这个 workflow。构建约 5 分钟，而 APK 只在合入后才需
 两种情况都上传为 artifact `hongguo-shell-release`，保留 30 天。
 从 GitHub 网页或 `gh run download <run-id> -n hongguo-shell-release` 取回。
 
+### 构建可复现
+
+同一份源码在 CI 与本地构建出的 unsigned APK 字节完全相同。
+实测 `sha256sum` 两边都是 `e07d2a51...ddae`。
+
+这条性质依赖两个前提，破坏任一个就会失去可复现性：
+
+1. `assets/` 下的调试样本被显式排除。`hevc-sample.mp4` 这类文件在
+   `.gitignore` 里，但 Gradle 扫的是目录而不是 git 索引。不排除就会被
+   静默打进本地 APK，而 CI 上没有该文件。
+2. build-tools 版本固定。workflow 用 `36.0.0`，与 `compileSdk` 对齐。
+   改成「取最新」会随 runner 镜像漂移。
+
 ### 签名材料如何配置
 
 四个 secrets，缺任意一个就退化成 unsigned：
@@ -179,6 +192,41 @@ hg.keystore.password=口令
 hg.key.alias=hongguo
 hg.key.password=口令
 ```
+
+### 六种签名方案对比
+
+选型依据是真实项目做法与官方文档，不是直觉。
+
+| 方案                                      | 适用场景                   | 公开仓库下的风险                          | 本项目是否采用                               |
+| ----------------------------------------- | -------------------------- | ----------------------------------------- | -------------------------------------------- |
+| ① CI 内 `keytool` 临时生成                | 产物只用于测试，不对外分发 | 无。密钥每次构建都变，用完即弃            | 否。侧载包必须签名稳定，否则用户无法覆盖安装 |
+| ② secrets 存 base64 keystore              | 个人或小团队、侧载分发     | 低。见下方说明                            | **是**                                       |
+| ③ `environment` + required reviewers      | 团队协作，需要人工卡口     | 更低。审批通过前拿不到 secrets            | 否。单人项目，人工审批只增加摩擦             |
+| ④ Play App Signing / 上传密钥分离         | 上架 Google Play           | 低。签名密钥在 Google 侧，CI 只持上传密钥 | 否。本项目不上架 Play                        |
+| ⑤ OIDC + 云 KMS 签名                      | 中大型团队，密钥不出硬件   | 最低。私钥不可导出                        | 否。需要云账号与费用，对个人项目过重         |
+| ⑥ `local.properties` / 环境变量读签名配置 | 所有场景的落地方式         | 取决于材料存在哪                          | **是**，作为②的读取层                        |
+
+方案②的风险边界要讲清。GitHub 官方文档写明：
+
+> With the exception of `GITHUB_TOKEN`, secrets are not passed to the runner
+> when a workflow is triggered from a forked repository.
+
+所以只要不使用 `pull_request_target` / `workflow_run`，fork 无法拿到 secrets。
+本 workflow 的触发器是 `push: master` 与 `workflow_dispatch`，两者都要求仓库
+写权限。`pull_request_target` 的危险在于它会在有 secrets 的前提下 checkout
+不可信代码，这正是 secrets 泄漏最常见的原因。
+
+参考的真实项目：
+
+| 项目            | 仓库 | 做法                                                                  |
+| --------------- | ---- | --------------------------------------------------------------------- |
+| Signal-Android  | 公开 | 只出 unsigned。workflow 注释原文「No credentials are available here」 |
+| Element-Android | 公开 | 只出 unsigned                                                         |
+| Bitwarden       | 公开 | Azure Key Vault 取 keystore（方案⑤的托管版）                          |
+| FadCam          | 公开 | secrets 存 base64 keystore，直接出签名包（方案②）                     |
+
+Signal 与 Element 出 unsigned 是因为它们有独立的发布流水线，不是技术上
+做不到。侧载分发的项目用方案②是通行做法。
 
 ### 轮换密钥
 
