@@ -32,9 +32,11 @@ name: Hongguo Android APK
 on:
   push:
     branches: [master]
+    # 只在这些改动会实际影响 APK 产物时才构建。
+    # 不列 `scripts/**`：根脚本是给 x-adapter / magpie 用的，apps/hongguo
+    # 下的包没有任何一个引用它们（各包的 build 脚本都是本地的 tsc / vite）。
     paths:
       - 'apps/hongguo/**'
-      - 'scripts/**'
       - 'pnpm-workspace.yaml'
       - 'pnpm-lock.yaml'
       - 'package.json'
