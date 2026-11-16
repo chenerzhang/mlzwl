@@ -95,10 +95,10 @@ cd apps/hongguo && npx esbuild shared/src/mp4.ts --bundle --format=iife \
 
 ### 触发条件
 
-| 事件                | 条件                                                                                                                                          |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `push`              | 目标分支为 `master`，且改动命中 `apps/hongguo/**`、`scripts/**`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`package.json` 或 workflow 文件本身 |
-| `workflow_dispatch` | 任意分支，手动触发                                                                                                                            |
+| 事件                | 条件                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `push`              | 目标分支为 `master`，且改动命中 `apps/hongguo/**`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`package.json` 或 workflow 文件本身 |
+| `workflow_dispatch` | 任意分支，手动触发                                                                                                              |
 
 PR 上不跑这个 workflow。构建约 5 分钟，而 APK 只在合入后才需要。
 同一分支的连续推送会取消上一次构建（`concurrency`）。
