@@ -188,6 +188,14 @@
    * `max()` 而不是直接取变量：某些环境两者都有值（未来 WebView 修好了），
    * 取大的那个不会少留白。
    */
+  /*
+   * 壳内（`.hg-native-insets`）：系统栏空间由原生用 WebView 的 padding 让出，
+   * 页面不再自己避让，四个工具类全部退化成固定值。
+   *
+   * 必须连 `env()` 一起关掉：WebView 加了 padding 之后仍会向页面报告非 0 的
+   * `env(safe-area-inset-top)`（实测 51.81px）。若继续取大值，系统栏会留两次。
+   * 见 `apps/hongguo/android/app/src/main/assets/hg-adapter.js` 的 `applyInsets`。
+   */
   .pt-safe {
     padding-top: max(var(--hg-inset-top, 0px), env(safe-area-inset-top, 0px));
   }
@@ -203,6 +211,19 @@
       100dvh - max(var(--hg-inset-top, 0px), env(safe-area-inset-top, 0px)) -
         max(var(--hg-inset-bottom, 0px), env(safe-area-inset-bottom, 0px))
     );
+  }
+
+  .hg-native-insets .pt-safe {
+    padding-top: 0;
+  }
+  .hg-native-insets .pb-safe {
+    padding-bottom: 0;
+  }
+  .hg-native-insets .pb-safe-page {
+    padding-bottom: 5rem;
+  }
+  .hg-native-insets .h-safe-screen {
+    height: 100dvh;
   }
 
   /*

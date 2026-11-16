@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  图标前景：白色苹果剪影 + 红色播放三角镂空。
+
+  ## 形状取舍
+
+  第一版是红底白三角，桌面上与 YouTube 无法区分——红底白三角是 YouTube
+  的既有视觉资产。这一版改成**苹果剪影**，把「红果」的字面线索直接画出来，
+  同时用镂空的播放三角保留「短剧」的含义。
+
+  ## 为什么叶子这么小
+
+  实测把叶子画大（横向 43dp、纵向 10dp）后，桌面圆形裁剪下看起来像兔耳朵，
+  整体像一只杯子。叶子必须短而圆，贴在果顶正上方，宽度不超过果身的一半，
+  才读作「苹果」。
+
+  ## 尺寸
+
+  108dp 画布，可见区是中间 72dp（18 到 90）。果身圆心 (54,60)、半径 25，
+  纵向 35 到 85，全部在安全区内。叶子只到 y=26，也在安全区内。
+  圆身直径 50dp 让四周留白，任何裁剪形状都不会切到果身。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 果柄：短竖条，压在果顶与叶子之间 -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M52,36 L52,30 L56,30 L56,36 Z" />
+
+    <!-- 叶子：短、圆、略向右上翘，宽度不超过果身一半 -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M56,32 C60,24 68,22 72,24 C70,30 62,33 56,32 Z" />
+
+    <!-- 果身：圆心 (54,60)，半径 25 -->
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M54,35 A25,25 0 1 1 53.99,35 Z" />
+
+    <!-- 播放三角：与背景同色，视觉上像果身上的镂空 -->
+    <path
+        android:fillColor="#e11d48"
+        android:pathData="M49,50 L49,70 L65,60 Z"
+        android:strokeColor="#e11d48"
+        android:strokeWidth="5"
+        android:strokeLineJoin="round" />
+</vector>

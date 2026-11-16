@@ -1468,24 +1468,24 @@
     if (!detail || typeof detail !== 'object') {
       return;
     }
+    /*
+     * 系统栏空间由原生用 WebView 的 margin 让出来，页面不再自己避让。
+     *
+     * 这里把 `--hg-inset-*` 一律写成 0，并给 `<html>` 打上 `hg-native-insets`
+     * 标记。`styles/index.css` 的 `.pt-safe` / `.pb-safe` / `.pb-safe-page` /
+     * `.h-safe-screen` 在该标记下改用固定值，不再读 `env()`。
+     *
+     * 必须连 `env()` 一起关掉：WebView 加了 margin 之后仍会向页面报告非 0 的
+     * `env(safe-area-inset-top)`（实测 51.81px）。若页面继续按
+     * `max(--hg-inset-*, env(...))` 取大值，系统栏会留两次，标题下方多出一段
+     * 空白。
+     */
     const root = document.documentElement;
-    const px = (value) => (typeof value === 'number' && value >= 0 ? value.toFixed(2) + 'px' : null);
-    const top = px(detail.top);
-    const bottom = px(detail.bottom);
-    const left = px(detail.left);
-    const right = px(detail.right);
-    if (top !== null) {
-      root.style.setProperty('--hg-inset-top', top);
-    }
-    if (bottom !== null) {
-      root.style.setProperty('--hg-inset-bottom', bottom);
-    }
-    if (left !== null) {
-      root.style.setProperty('--hg-inset-left', left);
-    }
-    if (right !== null) {
-      root.style.setProperty('--hg-inset-right', right);
-    }
+    root.classList.add('hg-native-insets');
+    root.style.setProperty('--hg-inset-top', '0px');
+    root.style.setProperty('--hg-inset-bottom', '0px');
+    root.style.setProperty('--hg-inset-left', '0px');
+    root.style.setProperty('--hg-inset-right', '0px');
   }
 
   /**
