@@ -14,6 +14,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
@@ -31,6 +33,9 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
 
     private val tag = "HgShell"
+
+    /** 最近一次拿到的系统栏尺寸（dp）。页面可能早于首次 inset 回调就问。 */
+    private var lastInsets: JSONObject? = null
     private val transport = HttpTransport()
     private val io = Executors.newFixedThreadPool(4)
     private lateinit var downloads: DownloadHandler
@@ -85,6 +90,17 @@ class MainActivity : AppCompatActivity() {
          */
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
+        }
+
+        /*
+         * 系统栏尺寸变化时通知页面。
+         *
+         * 三键导航 / 手势导航切换、旋转屏幕都会改变 inset，页面必须跟着重排。
+         * 页面侧监听 `hg:insets` 事件并写 CSS 变量。
+         */
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            pushInsets(insets)
+            insets
         }
 
         webView.settings.apply {
@@ -313,6 +329,23 @@ class MainActivity : AppCompatActivity() {
                     put("cancelled", downloads.cancel(req.optString("token")))
                 }.toString()
             }
+            // 系统栏尺寸：WebView 的 `env(safe-area-inset-bottom)` 在实测里恒为 0
+            // （三键导航栏高 126px 时仍报 0），页面拿不到真实值。这里由原生
+            // 上报，页面写进 CSS 变量。
+            if (op == "insets") {
+                return JSONObject().apply {
+                    put("id", id)
+                    put("insets", currentInsets())
+                }.toString()
+            }
+            // 状态栏图标明暗跟随页面主题：浅色主题下白色图标在白底上看不见。
+            if (op == "theme") {
+                applyStatusBarAppearance(req.optString("mode") == "light")
+                return JSONObject().apply {
+                    put("id", id)
+                    put("ok", true)
+                }.toString()
+            }
             val result = transport.execute(
                 method = req.optString("method", "GET"),
                 url = req.getString("url"),
@@ -334,6 +367,84 @@ class MainActivity : AppCompatActivity() {
                 put("error", e.message ?: e::class.java.simpleName)
             }.toString()
         }
+    }
+
+    /**
+     * 把系统栏尺寸交给页面。
+     *
+     * 单位是 CSS px 而不是物理像素：页面拿到的值会直接写进 `padding` /
+     * `height`，用物理像素会在 420dpi 的机器上放大 2.625 倍。
+     * 除以 `density` 就是 CSS px。
+     *
+     * 用 `evaluateJavascript` 而不是桥接回包：inset 是单向推送，页面不需要
+     * 应答，也不需要跟 `pending` 表对号。
+     */
+    private fun pushInsets(insets: WindowInsetsCompat) {
+        val density = resources.displayMetrics.density
+        if (density <= 0f) {
+            return
+        }
+        val bars = insets.getInsets(
+            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+        )
+        val payload = JSONObject().apply {
+            put("top", bars.top / density)
+            put("bottom", bars.bottom / density)
+            put("left", bars.left / density)
+            put("right", bars.right / density)
+        }
+        lastInsets = payload
+        dispatchInsets(payload)
+    }
+
+    /** 供页面主动查询（首帧早于 inset 回调时）。 */
+    private fun currentInsets(): JSONObject {
+        lastInsets?.let { return it }
+        val rootInsets = ViewCompat.getRootWindowInsets(root)
+        if (rootInsets == null) {
+            return JSONObject().apply {
+                put("top", 0)
+                put("bottom", 0)
+                put("left", 0)
+                put("right", 0)
+            }
+        }
+        val density = resources.displayMetrics.density.takeIf { it > 0f } ?: 1f
+        val bars = rootInsets.getInsets(
+            WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+        )
+        return JSONObject().apply {
+            put("top", bars.top / density)
+            put("bottom", bars.bottom / density)
+            put("left", bars.left / density)
+            put("right", bars.right / density)
+        }
+    }
+
+    private fun dispatchInsets(payload: JSONObject) {
+        val json = payload.toString()
+        webView.post {
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('hg:insets',{detail:$json}))",
+                null,
+            )
+        }
+    }
+
+    /**
+     * 状态栏图标明暗。
+     *
+     * `isAppearanceLightStatusBars = true` 表示「系统栏底色是浅色，请画深色
+     * 图标」。参数叫 `lightSurface` 而不是 `dark`，避免调用处反复推敲语义。
+     */
+    private fun applyStatusBarAppearance(lightSurface: Boolean) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
+            return
+        }
+        window.insetsController?.setSystemBarsAppearance(
+            if (lightSurface) WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0,
+            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+        )
     }
 
     /**

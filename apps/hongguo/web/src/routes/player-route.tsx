@@ -403,7 +403,16 @@ export function PlayerRoute(): React.JSX.Element {
   }
 
   return (
-    <div className="relative h-safe-screen w-full">
+    /*
+     * 播放页铺满整屏，不用 `h-safe-screen`。
+     *
+     * `h-safe-screen` 是 `100dvh` 减去顶部与底部安全区。播放器需要黑色延伸到
+     * 屏幕最底部，减掉底部安全区会在视频区下方露出一条 body 背景色——实测就是
+     * 截图里那块浅色空白。
+     *
+     * 安全区改由底部控件自己的 `pb-safe` 负责：视频铺满，控件往上让。
+     */
+    <div className="relative h-dvh w-full bg-scrim">
       {playbackQuery.isPending && (
         <div className="flex h-full items-center justify-center text-sm text-text-secondary">正在准备播放…</div>
       )}
