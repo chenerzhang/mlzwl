@@ -1,0 +1,216 @@
+name: Hongguo Android APK
+
+# 构建 hongguo Android 壳的 release APK，产物作为 workflow artifact 上传。
+#
+# ## 触发
+#
+# - 推送到 master 且改动了 `apps/hongguo/**`、根脚本或本文件。
+# - 手动触发（`workflow_dispatch`），可在任意分支跑。
+#
+# 不在 PR 上跑：这个构建约 5 分钟，APK 只在合入后才需要。
+#
+# ## 签名
+#
+# 两条路径，由 secrets 是否齐全自动决定：
+#
+# 1. `HG_KEYSTORE_BASE64` / `HG_KEYSTORE_PASSWORD` / `HG_KEY_ALIAS` /
+#    `HG_KEY_PASSWORD` 四项都配好 → 产出**已签名**的
+#    `hongguo-shell-release.apk`，可直接 `adb install`。
+# 2. 缺任何一项 → 产出 `hongguo-shell-release-unsigned.apk`，构建不失败。
+#    维护者本地签名后再分发。
+#
+# 为什么 secrets 放公开仓库是安全的：GitHub 官方文档明确
+# 「With the exception of GITHUB_TOKEN, secrets are not passed to the runner
+# when a workflow is triggered from a forked repository.」
+# 本 workflow 只由 `push: master` 与 `workflow_dispatch` 触发，两者都需要
+# 仓库写权限，fork 无法触发。风险只出现在 `pull_request_target` /
+# `workflow_run` 这类会 checkout 不可信代码的触发器上，本文件不使用。
+#
+# 绝不要给本 workflow 加 `pull_request_target`。那会把 secrets 暴露给任何
+# 能提 PR 的人——这正是 secrets 泄漏最常见的原因。
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'apps/hongguo/**'
+      - 'scripts/**'
+      - 'pnpm-workspace.yaml'
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '.github/workflows/hongguo-android-apk.yml'
+  workflow_dispatch:
+
+# 同一分支的连续推送只保留最后一次构建，避免排队积压。
+concurrency:
+  group: hongguo-android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # 传给 app/build.gradle.kts 的签名参数。值为空时 Gradle 走 unsigned 路径。
+      # HG_KEYSTORE_FILE 不在这里设：job 级 env 不允许引用 runner 上下文，
+      # 改为在 decode / assemble / cleanup 三步各自设，值一致。
+      HG_KEYSTORE_PASSWORD: ${{ secrets.HG_KEYSTORE_PASSWORD }}
+      HG_KEY_ALIAS: ${{ secrets.HG_KEY_ALIAS }}
+      HG_KEY_PASSWORD: ${{ secrets.HG_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm 版本从 package.json 的 packageManager 字段读，避免两处不一致。
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Android SDK 由 runner 预装（ANDROID_HOME 已设）。
+      # AGP 9.5.1 的 Gradle 9.9 对 JDK 17 有 deprecation 警告，这里用 21。
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # 把 base64 的 keystore 还原成文件。缺失时跳过，Gradle 会产出 unsigned。
+      # 写进 runner.temp 而不是工作区，避免被后续 upload-artifact 或缓存带走。
+      - name: Decode keystore
+        id: keystore
+        env:
+          HG_KEYSTORE_FILE: ${{ runner.temp }}/hongguo-release.jks
+          KEYSTORE_BASE64: ${{ secrets.HG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 HG_KEYSTORE_BASE64，本次产出未签名 APK。"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$HG_KEYSTORE_FILE"
+          if [ ! -s "$HG_KEYSTORE_FILE" ]; then
+            echo "::error::keystore 解码失败，检查 HG_KEYSTORE_BASE64 是否为合法 base64。"
+            exit 1
+          fi
+          echo "keystore 已还原：$(stat -c%s "$HG_KEYSTORE_FILE") B"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      # openhongguo 的 WASM 运行时来自 npm 包，必须装依赖后才能同步进 assets。
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # web/dist 是 APK 的页面来源，Gradle 只读取不生成。
+      - name: Build web
+        run: pnpm hongguo:build
+
+      # hg-mp4.js 是从 shared/src/mp4.ts 打的自包含 bundle，不入仓。
+      # 命令与 apps/hongguo/android/README.md 的「构建」一节保持一致。
+      - name: Bundle MP4 parser
+        working-directory: apps/hongguo
+        run: |
+          npx esbuild shared/src/mp4.ts --bundle --format=iife \
+            --global-name=HgMp4 --target=es2020 \
+            --outfile=android/app/src/main/assets/hg-mp4.js
+
+      # openhongguo.wasm 与 wasm_exec.js 同样不入仓。
+      - name: Sync WASM runtime
+        working-directory: apps/hongguo/android
+        run: ./sync-wasm.sh
+
+      # 有签名材料时 AGP 直接产出已签名 APK；否则产出 -unsigned。
+      - name: Assemble release
+        working-directory: apps/hongguo/android
+        env:
+          HG_KEYSTORE_FILE: ${{ runner.temp }}/hongguo-release.jks
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      # 统一产物名，让下游步骤不必区分两种输出路径。
+      # zipalign 只对 unsigned 包需要：AGP 对已签名包会自动对齐。
+      - name: Collect APK
+        id: apk
+        working-directory: apps/hongguo/android
+        run: |
+          set -euo pipefail
+          SRC_DIR=app/build/outputs/apk/release
+          if [ -f "$SRC_DIR/app-release.apk" ]; then
+            SRC="$SRC_DIR/app-release.apk"
+            OUT=hongguo-shell-release.apk
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            SRC="$SRC_DIR/app-release-unsigned.apk"
+            OUT=hongguo-shell-release-unsigned.apk
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+          cp "$SRC" "$OUT"
+          ls -l "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      # zipalign 在 unsigned 包上也必须做：未对齐的 APK 装不上。
+      #
+      # build-tools 版本固定为 36.0.0，不取「最新」。理由：compileSdk 是 36，
+      # zipalign 与 aapt2 只需能读这个版本的产物；取最新会随 runner 镜像漂移
+      # （当前镜像同时装了 34/35/36/37），一旦某个新版本行为变化，构建就会
+      # 在没有代码改动的情况下突然失败。
+      - name: Align unsigned APK
+        if: steps.apk.outputs.signed == 'false'
+        working-directory: apps/hongguo/android
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          test -x "$BUILD_TOOLS/zipalign" || {
+            echo "::error::找不到 $BUILD_TOOLS/zipalign"
+            ls "$ANDROID_HOME/build-tools"
+            exit 1
+          }
+          "$BUILD_TOOLS/zipalign" -f 4 \
+            hongguo-shell-release-unsigned.apk \
+            hongguo-shell-release-unsigned-aligned.apk
+          mv hongguo-shell-release-unsigned-aligned.apk \
+            hongguo-shell-release-unsigned.apk
+          ls -l hongguo-shell-release-unsigned.apk
+
+      # 记录校验和与包信息，方便对照本地构建。
+      - name: Report APK facts
+        working-directory: apps/hongguo/android
+        run: |
+          set -euo pipefail
+          APK="${{ steps.apk.outputs.path }}"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          sha256sum "$APK"
+          "$BUILD_TOOLS/aapt2" dump badging "$APK" \
+            | grep -E "^package: |^application-label:|^minSdkVersion:|^targetSdkVersion:"
+          if [ "${{ steps.apk.outputs.signed }}" = "true" ]; then
+            "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
+              | grep -E "SHA-256 digest|Verified using"
+          else
+            echo "未签名产物，跳过证书校验。"
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hongguo-shell-release
+          path: apps/hongguo/android/${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      # 无论成功失败都清掉 keystore，避免残留在 runner 上。
+      - name: Remove keystore
+        if: always()
+        env:
+          HG_KEYSTORE_FILE: ${{ runner.temp }}/hongguo-release.jks
+        run: rm -f "$HG_KEYSTORE_FILE"

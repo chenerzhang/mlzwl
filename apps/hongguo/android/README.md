@@ -89,6 +89,110 @@ cd apps/hongguo && npx esbuild shared/src/mp4.ts --bundle --format=iife \
 ./gradlew :app:assembleDebug
 ```
 
+## CI 构建与签名
+
+`.github/workflows/hongguo-android-apk.yml` 在合码后自动构建 release APK。
+
+### 触发条件
+
+| 事件                | 条件                                                                                                                                          |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `push`              | 目标分支为 `master`，且改动命中 `apps/hongguo/**`、`scripts/**`、`pnpm-workspace.yaml`、`pnpm-lock.yaml`、`package.json` 或 workflow 文件本身 |
+| `workflow_dispatch` | 任意分支，手动触发                                                                                                                            |
+
+PR 上不跑这个 workflow。构建约 5 分钟，而 APK 只在合入后才需要。
+同一分支的连续推送会取消上一次构建（`concurrency`）。
+
+### 产物
+
+| 情况           | 产物名                               | 能否直接安装   |
+| -------------- | ------------------------------------ | -------------- |
+| secrets 齐全   | `hongguo-shell-release.apk`          | 是             |
+| 缺任一 secrets | `hongguo-shell-release-unsigned.apk` | 否，需本地签名 |
+
+两种情况都上传为 artifact `hongguo-shell-release`，保留 30 天。
+从 GitHub 网页或 `gh run download <run-id> -n hongguo-shell-release` 取回。
+
+### 签名材料如何配置
+
+四个 secrets，缺任意一个就退化成 unsigned：
+
+| Secret                 | 含义                   |
+| ---------------------- | ---------------------- |
+| `HG_KEYSTORE_BASE64`   | keystore 文件的 base64 |
+| `HG_KEYSTORE_PASSWORD` | keystore 口令          |
+| `HG_KEY_ALIAS`         | 密钥别名               |
+| `HG_KEY_PASSWORD`      | 密钥口令               |
+
+生成 keystore 并转 base64（只在本机执行，产物不要提交）：
+
+```bash
+keytool -genkeypair -v -keystore hongguo-release.jks \
+  -alias hongguo -keyalg RSA -keysize 2048 -validity 10000 \
+  -storepass '<口令>' -keypass '<口令>' \
+  -dname 'CN=hongguo, OU=mlzwl, O=mlzwl, L=, ST=, C=CN'
+
+base64 -i hongguo-release.jks | tr -d '\n' > hongguo-release.b64
+```
+
+写入 GitHub secrets（在仓库根执行，命令会提示粘贴）：
+
+```bash
+gh secret set HG_KEYSTORE_BASE64 < hongguo-release.b64
+gh secret set HG_KEYSTORE_PASSWORD
+gh secret set HG_KEY_ALIAS
+gh secret set HG_KEY_PASSWORD
+```
+
+配完执行 `gh secret list` 应看到四项。
+
+### 为什么 secrets 可以放在公开仓库
+
+GitHub 官方文档写明：
+
+> With the exception of `GITHUB_TOKEN`, secrets are not passed to the runner
+> when a workflow is triggered from a forked repository.
+
+本 workflow 只由 `push: master` 与 `workflow_dispatch` 触发。两者都需要仓库
+写权限，fork 无法触发。
+
+**绝不要给这个 workflow 加 `pull_request_target` 或 `workflow_run`**。
+这两类触发器会在有 secrets 的前提下 checkout 不可信代码，是 secrets
+泄漏最常见的原因。
+
+### 本地开发不受影响
+
+`app/build.gradle.kts` 按以下顺序读签名参数：
+
+1. 环境变量 `HG_KEYSTORE_FILE` / `HG_KEYSTORE_PASSWORD` / `HG_KEY_ALIAS` /
+   `HG_KEY_PASSWORD`
+2. `local.properties` 的 `hg.keystore.file` / `hg.keystore.password` /
+   `hg.key.alias` / `hg.key.password`
+3. 都没有 → 产出 unsigned，构建不失败
+
+本地要出签名包，把四项写进 `local.properties` 即可。
+该文件已在 `.gitignore` 里：
+
+```properties
+hg.keystore.file=/绝对路径/hongguo-release.jks
+hg.keystore.password=口令
+hg.key.alias=hongguo
+hg.key.password=口令
+```
+
+### 轮换密钥
+
+注意：换 keystore 会改变签名证书。已安装旧版的设备必须先卸载，
+因为 Android 拒绝签名不一致的覆盖安装。
+
+```bash
+# 1) 生成新 keystore（同上）
+# 2) 覆盖四个 secrets
+gh secret set HG_KEYSTORE_BASE64 < hongguo-release.b64
+# 3) 手动跑一次 workflow 验证
+gh workflow run hongguo-android-apk.yml
+```
+
 ## 运行
 
 模拟器：
