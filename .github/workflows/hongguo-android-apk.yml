@@ -144,13 +144,18 @@ jobs:
 
       # 统一产物名，让下游步骤不必区分两种输出路径。
       # zipalign 只对 unsigned 包需要：AGP 对已签名包会自动对齐。
+      # 是否签名不看文件名，而用 apksigner 实际验证。
+      # AGP 在签名失败时也可能留下 app-release.apk，只看文件名会把
+      # 未签名的包当成已签名上传出去。
       - name: Collect APK
         id: apk
         working-directory: apps/hongguo/android
         run: |
           set -euo pipefail
           SRC_DIR=app/build/outputs/apk/release
-          if [ -f "$SRC_DIR/app-release.apk" ]; then
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          if [ -f "$SRC_DIR/app-release.apk" ] \
+            && "$BUILD_TOOLS/apksigner" verify "$SRC_DIR/app-release.apk" 2>/dev/null; then
             SRC="$SRC_DIR/app-release.apk"
             OUT=hongguo-shell-release.apk
             echo "signed=true" >> "$GITHUB_OUTPUT"
