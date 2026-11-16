@@ -256,13 +256,27 @@ WebView 不把导航栏算进 safe-area。页面因此拿不到底部真实高�
 
 实测两种模式下变量都跟随：三键 48.00px、手势 24.00px。
 
-### 为什么状态栏图标要原生管
+### 为什么状态栏与导航栏都要原生管
 
 浅色主题下系统默认画**白色**图标，在白底上几乎看不见（实测截图确认）。
 
 页面主题写在 `<html data-theme>`，适配层用 `MutationObserver` 监听它，通过
-`theme` 命令把 `light` / `dark` 转告原生；原生据此设
-`APPEARANCE_LIGHT_STATUS_BARS`。
+`theme` 命令把 `light` / `dark` 转告原生；原生据此设置：
+
+| 项                                      | 浅色主题         | 深色主题         |
+| --------------------------------------- | ---------------- | ---------------- |
+| `statusBarColor` / `navigationBarColor` | `#f5f5f7`        | `#08080a`        |
+| `APPEARANCE_LIGHT_STATUS_BARS`          | 开（画深色图标） | 关（画白色图标） |
+| `APPEARANCE_LIGHT_NAVIGATION_BARS`      | 开               | 关               |
+
+**底色必须一起管，不能只管图标。** 主题是 `Theme.AppCompat.NoActionBar`（浅色），
+导航栏默认取系统浅色。页面切到深色后，底部会露出一条白带——用户报的「底部导航栏
+还占着空间」就是这条白带。它不是页面留白，是导航栏自己白着。
+
+历史实现只有 `enterImmersive()` 设过 `Color.BLACK`，且只在全屏时设；日常状态从未
+设过，`exitImmersive()` 也不还原，所以退出全屏后导航栏会永久停在黑色。现在两处都
+走同一个 `applyStatusBarAppearance()`，由页面主题决定颜色，与全屏无关；`onCreate`
+先按深色涂一次，消掉页面加载前的浅色闪烁。
 
 逐项功能走查结果见 [`docs/feature-parity.md`](docs/feature-parity.md)。
 

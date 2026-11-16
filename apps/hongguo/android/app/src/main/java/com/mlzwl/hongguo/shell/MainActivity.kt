@@ -36,6 +36,15 @@ class MainActivity : AppCompatActivity() {
 
     /** 最近一次拿到的系统栏尺寸（dp）。页面可能早于首次 inset 回调就问。 */
     private var lastInsets: JSONObject? = null
+
+    /**
+     * 页面当前是否为浅色主题。
+     *
+     * 全屏时系统栏强制涂黑（视频周围不该有浅色），退出全屏要还原成页面主题。
+     * 只存这个布尔值，不重新问页面：`exitImmersive()` 是同步调用，问页面要
+     * 异步往返，那一帧会闪一下错的颜色。
+     */
+    private var lastLightSurface: Boolean = false
     private val transport = HttpTransport()
     private val io = Executors.newFixedThreadPool(4)
     private lateinit var downloads: DownloadHandler
@@ -91,6 +100,15 @@ class MainActivity : AppCompatActivity() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
         }
+
+        /*
+         * 先按深色涂一次系统栏。
+         *
+         * 主题 `Theme.AppCompat.NoActionBar` 是浅色，导航栏默认取系统浅色。
+         * 页面加载完会通过 `theme` 命令报真实主题，但在那之前会露出浅色系统栏。
+         * 页面默认主题是深色（`--color-surface: #08080a`），先按深色涂能消掉闪烁。
+         */
+        applyStatusBarAppearance(lightSurface = false)
 
         /*
          * 系统栏尺寸变化时通知页面。
@@ -340,7 +358,9 @@ class MainActivity : AppCompatActivity() {
             }
             // 状态栏图标明暗跟随页面主题：浅色主题下白色图标在白底上看不见。
             if (op == "theme") {
-                applyStatusBarAppearance(req.optString("mode") == "light")
+                val lightSurface = req.optString("mode") == "light"
+                lastLightSurface = lightSurface
+                applyStatusBarAppearance(lightSurface)
                 return JSONObject().apply {
                     put("id", id)
                     put("ok", true)
@@ -432,18 +452,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 状态栏图标明暗。
+     * 系统栏底色与图标明暗一起跟随页面主题。
      *
-     * `isAppearanceLightStatusBars = true` 表示「系统栏底色是浅色，请画深色
-     * 图标」。参数叫 `lightSurface` 而不是 `dark`，避免调用处反复推敲语义。
+     * `lightSurface = true` 表示「页面底色是浅色」：系统栏涂浅色，图标画深色。
+     * 参数叫 `lightSurface` 而不是 `dark`，避免调用处反复推敲语义。
+     *
+     * ## 为什么导航栏也要涂色
+     *
+     * 主题是 `Theme.AppCompat.NoActionBar`（浅色），导航栏默认取系统浅色。
+     * 页面切到深色后，底部会露出一条白条——用户报的就是这个：「底部导航栏
+     * 还占着空间」。实际不是留白，是导航栏自己白着。
+     *
+     * 之前只有 `enterImmersive()` 设过 `Color.BLACK`，而且只在全屏时设；
+     * 日常状态从未设过。`exitImmersive()` 也不还原，退出全屏后导航栏
+     * 会永久停在黑色，浅色主题下同样错。
+     *
+     * 两处都交给这一个函数，由页面主题决定颜色，与全屏无关。
      */
     private fun applyStatusBarAppearance(lightSurface: Boolean) {
+        // 底色必须与页面一致，否则页面铺满时四周会露出系统栏的底色。
+        val barColor = if (lightSurface) Color.rgb(0xf5, 0xf5, 0xf7) else Color.rgb(0x08, 0x08, 0x0a)
+        window.statusBarColor = barColor
+        window.navigationBarColor = barColor
+
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
             return
         }
+        // 两个 flag 一起设：状态栏与导航栏是独立的 appearance 位。
+        val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(
-            if (lightSurface) WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0,
-            WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+            if (lightSurface) mask else 0,
+            mask,
         )
     }
 
@@ -465,6 +505,8 @@ class MainActivity : AppCompatActivity() {
          * 翻转，与 Chrome 的 lock('landscape') 行为一致。
          */
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // 全屏时强制黑：视频四周不该出现浅色系统栏。
+        // 退出时由 `exitImmersive()` 还原成页面主题色。
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -476,7 +518,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 退出全屏：恢复系统栏与竖屏。 */
+    /**
+     * 退出全屏：恢复系统栏、竖屏，并把系统栏底色还原成页面主题色。
+     *
+     * 不还原的话导航栏会永久停在 `enterImmersive()` 设的黑色：浅色主题下
+     * 底部变成一条黑带，深色主题下只是碰巧看着对。
+     */
     private fun exitImmersive() {
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
@@ -484,6 +531,7 @@ class MainActivity : AppCompatActivity() {
                 WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars(),
             )
         }
+        applyStatusBarAppearance(lastLightSurface)
     }
 
     /**
