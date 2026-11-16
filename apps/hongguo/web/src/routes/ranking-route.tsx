@@ -95,7 +95,7 @@ export function RankingRoute(): React.JSX.Element {
   };
 
   return (
-    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
+    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-safe-page`}>
       <PageHeader
         left={
           <HeaderButton

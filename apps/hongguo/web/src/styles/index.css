@@ -172,15 +172,37 @@
 }
 
 @layer utilities {
-  /* 安全区域，适配刘海屏与底部手势条。 */
+  /*
+   * 安全区域。
+   *
+   * ## 为什么不用纯 `env()`
+   *
+   * `env(safe-area-inset-*)` 是标准写法，但 Android WebView 实测**只报顶部**：
+   * 模拟器三键导航栏高 126px 时，`env(safe-area-inset-bottom)` 仍为 0。
+   * 拿不到真实值，底部内容就会被导航栏压住。
+   *
+   * 壳（`apps/hongguo/android`）会用原生 `WindowInsets` 算出真实尺寸，写进
+   * `--hg-inset-*`（单位 CSS px）。变量不存在时回退到 `env()`：桌面浏览器、
+   * iOS Safari、普通 Chrome 里都走标准路径，行为不变。
+   *
+   * `max()` 而不是直接取变量：某些环境两者都有值（未来 WebView 修好了），
+   * 取大的那个不会少留白。
+   */
   .pt-safe {
-    padding-top: env(safe-area-inset-top);
+    padding-top: max(var(--hg-inset-top, 0px), env(safe-area-inset-top, 0px));
   }
   .pb-safe {
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(var(--hg-inset-bottom, 0px), env(safe-area-inset-bottom, 0px));
+  }
+  /* 底部留白：内容自己想要的间距 + 系统栏。两个来源相加，不是二选一。 */
+  .pb-safe-page {
+    padding-bottom: calc(5rem + max(var(--hg-inset-bottom, 0px), env(safe-area-inset-bottom, 0px)));
   }
   .h-safe-screen {
-    height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    height: calc(
+      100dvh - max(var(--hg-inset-top, 0px), env(safe-area-inset-top, 0px)) -
+        max(var(--hg-inset-bottom, 0px), env(safe-area-inset-bottom, 0px))
+    );
   }
 
   /*

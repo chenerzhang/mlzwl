@@ -47,16 +47,16 @@ assets/hg-adapter.js        注入到 <head> 最前，拦截 window.fetch
 
 ## 这个工程验证了什么
 
-| 项 | 结果 |
-| --- | --- |
-| WebView 内加载 6.5 MB WASM | 可行。下载 540 ms，实例化+启动 602 ms |
-| WebView 内 `fetch` 直连上游 API | **被 CORS 拦截**。自动带 `Origin`，上游无 `ACAO` 响应头 |
-| WebView 内 `fetch` 直连视频 CDN | **403**。UA 是 Android WebView，响应体为空 |
-| Kotlin 侧 OkHttp 发签名请求 | 可行。`device_register` 200，`discover` 返回 9 条 |
-| `WebViewAssetLoader` 托管 `web/dist` | 可行。绝对路径 `/assets/*` 无需改 vite base |
-| WebCrypto AES-CTR 解 CENC | 可行。与 server 的 `node:crypto` **逐字节一致**，8663 样本 110 ms（并发 32 时 49 ms） |
-| HEVC 在 WebView 内播放 | 可行。`hvc1.1.6.L120.90` → `probably` |
-| 上游封面是 HEIC | WebView 不解码，必须原生转 JPEG（`BitmapFactory`，API 28+） |
+| 项                                   | 结果                                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| WebView 内加载 6.5 MB WASM           | 可行。下载 540 ms，实例化+启动 602 ms                                                 |
+| WebView 内 `fetch` 直连上游 API      | **被 CORS 拦截**。自动带 `Origin`，上游无 `ACAO` 响应头                               |
+| WebView 内 `fetch` 直连视频 CDN      | **403**。UA 是 Android WebView，响应体为空                                            |
+| Kotlin 侧 OkHttp 发签名请求          | 可行。`device_register` 200，`discover` 返回 9 条                                     |
+| `WebViewAssetLoader` 托管 `web/dist` | 可行。绝对路径 `/assets/*` 无需改 vite base                                           |
+| WebCrypto AES-CTR 解 CENC            | 可行。与 server 的 `node:crypto` **逐字节一致**，8663 样本 110 ms（并发 32 时 49 ms） |
+| HEVC 在 WebView 内播放               | 可行。`hvc1.1.6.L120.90` → `probably`                                                 |
+| 上游封面是 HEIC                      | WebView 不解码，必须原生转 JPEG（`BitmapFactory`，API 28+）                           |
 
 ## 环境要求
 
@@ -147,22 +147,22 @@ curl -s http://127.0.0.1:9333/json/list
 
 ## 结构
 
-| 文件 | 作用 |
-| --- | --- |
-| `MainActivity.kt` | WebView 装配、`WebViewAssetLoader`、`WebMessageListener` 桥接 |
-| `InjectingAssetHandler.kt` | 托管 assets，并把适配层脚本插到 `index.html` 的 `<head>` 最前 |
-| `HttpTransport.kt` | OkHttp 发请求；`execute` 走 Base64（SDK 用），`downloadToFile` 流式落盘（视频用） |
-| `CoverHandler.kt` | `/api/cover`：HEIC → JPEG，LRU 缓存 |
-| `VideoProxyHandler.kt` | `/api/video`：视频字节流式落盘后交给 `FileInputStream`；引用计数保护正在播放的那份 |
-| `DownloadHandler.kt` | 下载落盘：三段式桥接命令 + MediaStore 写入公共下载目录 |
-| `SpriteHandler.kt` | `/api/sprite-sheet`：HEIC 雪碧图 → JPEG，**不降采样** |
-| `assets/hg-adapter.js` | `/api/*` 适配层：15 个端点、mapper、视频接口改写、CENC 触发、`<a download>` 接管 |
-| `assets/hg-cenc.js` | WebCrypto AES-CTR 解 CENC |
-| `assets/hg-mp4.js` | 从 `shared/src/mp4.ts` 打包的 MP4 box 解析器 |
-| `assets/probe.html` | WASM 探针 |
-| `assets/origin-test.html` | WebView `fetch` 的 `Origin` 与 CORS 行为 |
-| `assets/media-probe.html` | HEVC 播放探针 |
-| `sync-wasm.sh` | 从 `node_modules` 同步 `openhongguo.wasm` 与 `wasm_exec.js` |
+| 文件                       | 作用                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------- |
+| `MainActivity.kt`          | WebView 装配、`WebViewAssetLoader`、`WebMessageListener` 桥接                      |
+| `InjectingAssetHandler.kt` | 托管 assets，并把适配层脚本插到 `index.html` 的 `<head>` 最前                      |
+| `HttpTransport.kt`         | OkHttp 发请求；`execute` 走 Base64（SDK 用），`downloadToFile` 流式落盘（视频用）  |
+| `CoverHandler.kt`          | `/api/cover`：HEIC → JPEG，LRU 缓存                                                |
+| `VideoProxyHandler.kt`     | `/api/video`：视频字节流式落盘后交给 `FileInputStream`；引用计数保护正在播放的那份 |
+| `DownloadHandler.kt`       | 下载落盘：三段式桥接命令 + MediaStore 写入公共下载目录                             |
+| `SpriteHandler.kt`         | `/api/sprite-sheet`：HEIC 雪碧图 → JPEG，**不降采样**                              |
+| `assets/hg-adapter.js`     | `/api/*` 适配层：15 个端点、mapper、视频接口改写、CENC 触发、`<a download>` 接管   |
+| `assets/hg-cenc.js`        | WebCrypto AES-CTR 解 CENC                                                          |
+| `assets/hg-mp4.js`         | 从 `shared/src/mp4.ts` 打包的 MP4 box 解析器                                       |
+| `assets/probe.html`        | WASM 探针                                                                          |
+| `assets/origin-test.html`  | WebView `fetch` 的 `Origin` 与 CORS 行为                                           |
+| `assets/media-probe.html`  | HEVC 播放探针                                                                      |
+| `sync-wasm.sh`             | 从 `node_modules` 同步 `openhongguo.wasm` 与 `wasm_exec.js`                        |
 
 `openhongguo.wasm`、`wasm_exec.js`、`hg-mp4.js`、`hevc-sample.mp4`、`build/`、
 `.gradle/`、`local.properties` 均已 gitignore，不入仓。
@@ -171,16 +171,16 @@ curl -s http://127.0.0.1:9333/json/list
 
 页面一共调 15 个端点。
 
-| 端点 | 实现 |
-| --- | --- |
-| `feed` / `search` / `suggest` | WASM SDK + mapper |
-| `series/:id` / `series/:id/episodes` | WASM SDK + 分页收集 |
-| `episodes/:id/playback` | SDK 解析元数据，返回自有 `/api/media/:id` 地址（**不下载视频**） |
-| `media/:id` | SDK 解析 + 原生代理下载 + 端上解密，返回明文 MP4 字节 |
-| `ranking` / `ranking/catalog` / `random` | SDK `shortRank` + 严格过滤 |
-| `cover` | 原生 `CoverHandler`（HEIC → JPEG） |
-| `sprite/:id` / `sprite/:id/:n` | 适配层从 `video_model.big_thumbs` 读元数据；图片走原生 `SpriteHandler` |
-| `health` / `diagnostics` | 端上自答 |
+| 端点                                     | 实现                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------- |
+| `feed` / `search` / `suggest`            | WASM SDK + mapper                                                      |
+| `series/:id` / `series/:id/episodes`     | WASM SDK + 分页收集                                                    |
+| `episodes/:id/playback`                  | SDK 解析元数据，返回自有 `/api/media/:id` 地址（**不下载视频**）       |
+| `media/:id`                              | SDK 解析 + 原生代理下载 + 端上解密，返回明文 MP4 字节                  |
+| `ranking` / `ranking/catalog` / `random` | SDK `shortRank` + 严格过滤                                             |
+| `cover`                                  | 原生 `CoverHandler`（HEIC → JPEG）                                     |
+| `sprite/:id` / `sprite/:id/:n`           | 适配层从 `video_model.big_thumbs` 读元数据；图片走原生 `SpriteHandler` |
+| `health` / `diagnostics`                 | 端上自答                                                               |
 
 页面的 15 个端点在壳内全部可用。`/api/video` 与 `/api/sprite-sheet` 不经
 `window.fetch`：前者是视频字节，后者是 `background-image`，两者都由
@@ -202,13 +202,13 @@ curl -s http://127.0.0.1:9333/json/list
 这五项在移动端浏览器上由浏览器提供，Android WebView 不提供。缺任何一项都会表现为
 「页面功能坏了」，但根因在宿主：
 
-| 能力 | 缺了会怎样 | 实现 |
-| --- | --- | --- |
-| DOM 全屏 | `requestFullscreen()` 抛 `Fullscreen is not supported` | `WebChromeClient.onShowCustomView` / `onHideCustomView` |
-| 横屏锁 | 全屏后仍竖屏，16:9 视频上下大黑边 | `requestedOrientation = SCREEN_ORIENTATION_SENSOR_LANDSCAPE` |
-| 下载落盘 | `<a download href="blob:">` 点了没反应，文件不落盘 | 接管 `HTMLAnchorElement.prototype.click` + 分块桥接 + MediaStore |
-| 非 `fetch` 的媒体请求 | `background-image` 拿到 `FileNotFoundException`；`<video src="/api/media/...">` 永远停在 `readyState 0` | `shouldInterceptRequest` 拦 `/api/cover` 与 `/api/sprite-sheet`；适配层拦 `HTMLMediaElement.src` 换成 blob URL |
-| 安全区 | 标题与控件被状态栏压住 | `window.setDecorFitsSystemWindows(false)`，让页面的 `env(safe-area-inset-*)` 生效 |
+| 能力                  | 缺了会怎样                                                                                              | 实现                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DOM 全屏              | `requestFullscreen()` 抛 `Fullscreen is not supported`                                                  | `WebChromeClient.onShowCustomView` / `onHideCustomView`                                                                                                          |
+| 横屏锁                | 全屏后仍竖屏，16:9 视频上下大黑边                                                                       | `requestedOrientation = SCREEN_ORIENTATION_SENSOR_LANDSCAPE`                                                                                                     |
+| 下载落盘              | `<a download href="blob:">` 点了没反应，文件不落盘                                                      | 接管 `HTMLAnchorElement.prototype.click` + 分块桥接 + MediaStore                                                                                                 |
+| 非 `fetch` 的媒体请求 | `background-image` 拿到 `FileNotFoundException`；`<video src="/api/media/...">` 永远停在 `readyState 0` | `shouldInterceptRequest` 拦 `/api/cover` 与 `/api/sprite-sheet`；适配层拦 `HTMLMediaElement.src` 换成 blob URL                                                   |
+| 安全区                | 标题被状态栏压住；底部内容被导航栏压住                                                                  | 顶部：`setDecorFitsSystemWindows(false)` 让页面的 `env()` 生效。底部：WebView 的 `env(safe-area-inset-bottom)` 实测恒为 0，改由原生上报 `WindowInsets`（见下节） |
 
 `screen.orientation.lock()` 在 WebView 里直接抛
 `NotSupportedError: ... is not available on this device`，所以横屏必须由宿主设置。
@@ -232,6 +232,38 @@ edge-to-edge**：窗口默认铺满整屏，绘制到状态栏后面。
 不要在原生侧写死一个状态栏高度：那样会与页面的 `env(safe-area-inset-*)`
 叠加成双倍留白，而且横屏时状态栏高度不同。
 
+### 为什么底部安全区必须由原生上报
+
+`setDecorFitsSystemWindows(false)` 只解决了**顶部**。实测（1080x2400 / 420dpi）：
+
+| 导航模式 | 导航栏物理高度 | `env(safe-area-inset-bottom)` | `env(safe-area-inset-top)` |
+| -------- | -------------- | ----------------------------- | -------------------------- |
+| 三键     | 126px          | **0**                         | 52px                       |
+| 手势     | 63px           | **0**                         | 52px                       |
+
+WebView 不把导航栏算进 safe-area。页面因此拿不到底部真实高度，内容会被压住。
+
+做法：原生用 `ViewCompat.setOnApplyWindowInsetsListener` 监听
+`systemBars() or displayCutout()`，除以 `density` 换算成 CSS px，通过
+`evaluateJavascript` 派发 `hg:insets` 事件；适配层（`hg-adapter.js`）把它写进
+`--hg-inset-top/bottom/left/right`。
+
+页面侧 `styles/index.css` 的 `.pb-safe` / `.pt-safe` / `.pb-safe-page` 读这些变量，
+并用 `max(var(--hg-inset-bottom, 0px), env(safe-area-inset-bottom, 0px))` 回退到
+`env()`：桌面浏览器与 iOS Safari 没有原生桥接，仍然走标准路径。
+
+`max()` 而不是直接取变量：将来 WebView 修好了两者都有值，取大的不会少留白。
+
+实测两种模式下变量都跟随：三键 48.00px、手势 24.00px。
+
+### 为什么状态栏图标要原生管
+
+浅色主题下系统默认画**白色**图标，在白底上几乎看不见（实测截图确认）。
+
+页面主题写在 `<html data-theme>`，适配层用 `MutationObserver` 监听它，通过
+`theme` 命令把 `light` / `dark` 转告原生；原生据此设
+`APPEARANCE_LIGHT_STATUS_BARS`。
+
 逐项功能走查结果见 [`docs/feature-parity.md`](docs/feature-parity.md)。
 
 ## 为什么 transport 必须桥接到 Kotlin
@@ -242,14 +274,14 @@ OkHttp 是原生 HTTP 客户端，不受同源策略约束，所以签名请求�
 
 ## 与 server 的差异
 
-| 项 | server | 端上 |
-| --- | --- | --- |
-| 设备档案 | SQLite `devices.profile` | `localStorage['ohg']` |
-| 封面 | `heic-convert` + `sharp` | `BitmapFactory`（API 28+ 原生支持 HEIF） |
-| 视频 | 落盘 + Range 分段响应 | 流式落盘 + 一次性返回 |
-| CENC 解密 | `node:crypto` | `crypto.subtle` AES-CTR |
-| 缓存 | TtlCache（内存） | 简单 Map / LRU |
-| `sprite` | 有 `big_thumbs` 时返回，无则 404 | 同样 |
+| 项        | server                           | 端上                                     |
+| --------- | -------------------------------- | ---------------------------------------- |
+| 设备档案  | SQLite `devices.profile`         | `localStorage['ohg']`                    |
+| 封面      | `heic-convert` + `sharp`         | `BitmapFactory`（API 28+ 原生支持 HEIF） |
+| 视频      | 落盘 + Range 分段响应            | 流式落盘 + 一次性返回                    |
+| CENC 解密 | `node:crypto`                    | `crypto.subtle` AES-CTR                  |
+| 缓存      | TtlCache（内存）                 | 简单 Map / LRU                           |
+| `sprite`  | 有 `big_thumbs` 时返回，无则 404 | 同样                                     |
 
 ## 已知问题
 
@@ -263,7 +295,9 @@ OkHttp 是原生 HTTP 客户端，不受同源策略约束，所以签名请求�
 7. **播放页会同时缓存两份视频**：`player-route.tsx` 会预取下一集，所以缓存目录里最多同时有当前集和下一集。淘汰只在文件没被读取时才生效，所以峰值占用大约是两集之和（1080p 最多约 30 MB）。
 8. **同一集的并发请求串行化**：`VideoProxyHandler` 用一把 per-URL 锁。8 路并发打同一集时，只有 1 次真实下载，另外 7 次等锁后命中缓存。代价是并发请求同一集时最慢那一路要等第一路下完；收益是不会出现「两路同时写同一个文件」。
 9. **首帧等待受网络限制**：端上是「下载整集 → 解密 → 给 blob URL」，没有 Range 分段响应，所以首帧要等整集下载完。实测网络 89 KB/s 时 1080p 一集 24 MB 要 94 秒；5.4 MB/s 时只要 2.3 秒。壳内已保证这段等待不会误报「播放停滞」（见缺陷 21），但等待本身无法消除。要真正缩短首帧，需要服务端支持 Range。
-10. **预取会给首帧让路**：页面的预取请求（`range: bytes=0-1`）会先等当前集 `readyState >= 2` 再开始，上限 30 秒。代价是切下一集时缓存可能还没就绪；收益是网络差时首帧不被预取抢带宽。
+10. **底栏默认收起**：播放页底部只常驻「选集」「全屏」和展开箭头，画幅模式、进度条、音量、清晰度、倍速收在展开面板里。短剧用户的主要动作是继续看与换集，其余是低频开关。
+11. **横向拖动调进度只在有总时长时生效**：`duration` 未知（元数据还没到）时手势不接管，避免算出无意义的位置。灵敏度固定 90 秒/屏宽，不是按片长百分比——短剧一集只有 1–3 分钟，百分比模式会让一屏拖过半个片子。
+12. **预取会给首帧让路**：页面的预取请求（`range: bytes=0-1`）会先等当前集 `readyState >= 2` 再开始，上限 30 秒。代价是切下一集时缓存可能还没就绪；收益是网络差时首帧不被预取抢带宽。
 
 ## 本工程不是 npm 包
 

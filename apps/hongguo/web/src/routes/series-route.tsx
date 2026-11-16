@@ -147,7 +147,7 @@ export function SeriesRoute(): React.JSX.Element {
   const { favorite, following } = followFlags(followRecord);
 
   return (
-    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
+    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-safe-page`}>
       <PageHeader
         left={
           <HeaderButton

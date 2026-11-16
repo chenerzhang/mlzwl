@@ -1447,6 +1447,93 @@
     });
   }
 
+  // ------------------------------------------------------------ 系统栏与主题
+
+  /**
+   * 把系统栏尺寸写进 CSS 变量。
+   *
+   * ## 为什么不能只用 `env(safe-area-inset-*)`
+   *
+   * 实测（模拟器 1080x2400 / 420dpi，三键导航栏高 126px）：
+   * `env(safe-area-inset-bottom)` 恒为 **0**。顶部 `env(safe-area-inset-top)`
+   * 能拿到 52px，底部拿不到。WebView 不把导航栏算进 safe-area。
+   *
+   * 所以底部安全区必须由原生上报。变量名用 `--hg-inset-*` 而不是改
+   * `env()`：`env()` 是只读的，覆盖不了。
+   *
+   * 变量值的回退是 `env(safe-area-inset-*)`：桌面浏览器与 iOS Safari 没有
+   * 原生桥接时，仍然走标准的 `env()`。写法见 `styles/index.css` 的 `.pb-safe`。
+   */
+  function applyInsets(detail) {
+    if (!detail || typeof detail !== 'object') {
+      return;
+    }
+    const root = document.documentElement;
+    const px = (value) => (typeof value === 'number' && value >= 0 ? value.toFixed(2) + 'px' : null);
+    const top = px(detail.top);
+    const bottom = px(detail.bottom);
+    const left = px(detail.left);
+    const right = px(detail.right);
+    if (top !== null) {
+      root.style.setProperty('--hg-inset-top', top);
+    }
+    if (bottom !== null) {
+      root.style.setProperty('--hg-inset-bottom', bottom);
+    }
+    if (left !== null) {
+      root.style.setProperty('--hg-inset-left', left);
+    }
+    if (right !== null) {
+      root.style.setProperty('--hg-inset-right', right);
+    }
+  }
+
+  /**
+   * 把系统栏尺寸同步到页面，并持续跟随变化。
+   *
+   * 两条来源缺一不可：
+   * 1. **主动查询**：页面首帧可能早于原生首次 `onApplyWindowInsets`，
+   *    不查就会先按 0 排版一次再跳一下。
+   * 2. **事件推送**：三键/手势导航切换、旋转屏都会改变 inset。
+   */
+  function installInsetsBridge() {
+    if (!window.hgBridge) {
+      return;
+    }
+    window.addEventListener('hg:insets', (event) => {
+      applyInsets(event.detail);
+    });
+    hostCommand({ op: 'insets' })
+      .then((msg) => {
+        applyInsets(msg.insets);
+      })
+      .catch((e) => LOG('系统栏尺寸查询失败: ' + (e && e.message ? e.message : String(e))));
+  }
+
+  /**
+   * 状态栏图标明暗跟随页面主题。
+   *
+   * 浅色主题下系统默认画白色图标，在白底上几乎看不见（实测截图确认）。
+   * 页面主题写在 `<html data-theme>`，这里监听它的变化并转告原生。
+   *
+   * 用 `MutationObserver` 而不是在主题 store 里挂钩：适配层拿不到 React
+   * 内部状态，而 `data-theme` 是两者唯一共享的事实。
+   */
+  function installThemeBridge() {
+    if (!window.hgBridge) {
+      return;
+    }
+    const push = () => {
+      const mode = document.documentElement.dataset['theme'] === 'light' ? 'light' : 'dark';
+      hostCommand({ op: 'theme', mode: mode }).catch(() => undefined);
+    };
+    push();
+    new MutationObserver(push).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme'],
+    });
+  }
+
   /**
    * 接管 `<video src="/api/media/...">`。
    *
@@ -1715,6 +1802,8 @@
   installDownloadInterceptor();
   installMediaSrcInterceptor();
   installPausedSemantics();
+  installInsetsBridge();
+  installThemeBridge();
   LOG('适配层已安装（' + routes.length + ' 个端点）');
   // 预热：提前启动 WASM，首屏请求就不用等它。
   startSdk().catch((e) => LOG('SDK 预热失败: ' + (e && e.message ? e.message : String(e))));

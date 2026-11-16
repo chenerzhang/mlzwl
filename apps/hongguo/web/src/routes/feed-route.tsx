@@ -270,7 +270,7 @@ export function FeedRoute(): React.JSX.Element {
     query.isPending || query.isFetchingNextPage ? (columns - (visibleItems.length % columns)) % columns || columns : 0;
 
   return (
-    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-24`}>
+    <div className={`mx-auto w-full ${SHELL_WIDTH} pb-safe-page`}>
       <PageHeader
         left={<h1 className="truncate text-[15px] font-semibold tracking-tight">红果短剧</h1>}
         actions={
