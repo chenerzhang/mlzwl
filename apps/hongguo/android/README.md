@@ -256,27 +256,52 @@ WebView 不把导航栏算进 safe-area。页面因此拿不到底部真实高�
 
 实测两种模式下变量都跟随：三键 48.00px、手势 24.00px。
 
-### 为什么状态栏与导航栏都要原生管
+### 系统栏空间由原生 margin 管，不让页面算安全区
 
-浅色主题下系统默认画**白色**图标，在白底上几乎看不见（实测截图确认）。
+`targetSdk = 36`，Android 15 起强制 edge-to-edge：窗口铺满整屏，内容绘制到系统栏
+后面。WebView 的可见区域因此包含状态栏与导航栏，页面标题会被状态栏压住。
 
-页面主题写在 `<html data-theme>`，适配层用 `MutationObserver` 监听它，通过
-`theme` 命令把 `light` / `dark` 转告原生；原生据此设置：
+做法：`applyWindowInsetsToWebView()` 把 `systemBars() or displayCutout()` 的四个边
+设成 **WebView 的 margin**。WebView 的测量尺寸因此缩小，CSS viewport 跟着变小，
+页面拿到的就是系统栏之间的矩形。全屏时 `immersive = true`，方法直接返回不动
+WebView（`customView` 自己 `MATCH_PARENT` 铺满）；退出全屏重算 margin。
 
-| 项                                      | 浅色主题         | 深色主题         |
-| --------------------------------------- | ---------------- | ---------------- |
-| `statusBarColor` / `navigationBarColor` | `#f5f5f7`        | `#08080a`        |
-| `APPEARANCE_LIGHT_STATUS_BARS`          | 开（画深色图标） | 关（画白色图标） |
-| `APPEARANCE_LIGHT_NAVIGATION_BARS`      | 开               | 关               |
+**必须用 margin，不能用 `setPadding()`。** WebView 内部是独立渲染 surface，
+`setPadding()` 只裁绘制区域，CSS viewport 不变，页面内容照样从 y=0 开始画。实测
+加 padding 后标题直接压到状态栏上。
 
-**底色必须一起管，不能只管图标。** 主题是 `Theme.AppCompat.NoActionBar`（浅色），
-导航栏默认取系统浅色。页面切到深色后，底部会露出一条白带——用户报的「底部导航栏
-还占着空间」就是这条白带。它不是页面留白，是导航栏自己白着。
+**全屏期间不能改 WebView 的布局参数。** 全屏时 WebView 已 `GONE`，此时改 margin
+会触发 `root` 重排，WebView 认为自身尺寸变化，立刻取消 DOM 全屏——实测进入全屏
+256ms 后自动 `onHideCustomView()`。
 
-历史实现只有 `enterImmersive()` 设过 `Color.BLACK`，且只在全屏时设；日常状态从未
-设过，`exitImmersive()` 也不还原，所以退出全屏后导航栏会永久停在黑色。现在两处都
-走同一个 `applyStatusBarAppearance()`，由页面主题决定颜色，与全屏无关；`onCreate`
-先按深色涂一次，消掉页面加载前的浅色闪烁。
+页面侧配套：`hg-adapter.js` 的 `applyInsets()` 给 `<html>` 加 `hg-native-insets`
+类并把 `--hg-inset-*` 全写 0；`styles/index.css` 在该类下把 `.pt-safe` / `.pb-safe`
+归零、`.pb-safe-page` 改成 `5rem`、`.h-safe-screen` 改成 `100dvh`。
+
+**必须连 `env()` 一起关掉。** WebView 加了 margin 之后仍会向页面报告非 0 的
+`env(safe-area-inset-top)`（实测 51.81px）。若页面继续按
+`max(--hg-inset-*, env(...))` 取大值，系统栏会留两次，标题下方多出一段空白。
+
+实测（1080x2400 / 420dpi，三键导航）：视口 815px = 915 − 51.81（状态栏）−
+48.00（导航栏）；`header` 的 `padding-top` 为 0；`.pb-safe-page` 为 80px。
+
+### 系统栏底色为什么用透明
+
+`targetSdk = 36`：Android 15（API 35）起 `window.statusBarColor` /
+`window.navigationBarColor` 已废弃，赋值不再生效。实测浅色主题下把状态栏涂成
+`#f5f5f7` 后它仍是黑的。
+
+所以改成透明：`window.statusBarColor = Color.TRANSPARENT`，同时把
+`window.backgroundDrawable` 设成页面底色（浅色 `#f5f5f7` / 深色 `#08080a`）。
+系统栏在 WebView 的 margin 之外，不会被页面覆盖，靠窗口背景着色即可。
+
+图标明暗仍要单独管：浅色底画深色图标，深色底画白色图标。页面主题写在
+`<html data-theme>`，适配层用 `MutationObserver` 监听，通过 `theme` 命令转告
+原生，原生设 `APPEARANCE_LIGHT_STATUS_BARS | APPEARANCE_LIGHT_NAVIGATION_BARS`。
+
+`enterImmersive()` 全屏时把窗口背景涂黑，`exitImmersive()` 按 `lastLightSurface`
+还原成页面底色。存布尔值而不是重新问页面：`exitImmersive()` 是同步调用，问页面
+要异步往返，那一帧会闪一下错色。
 
 逐项功能走查结果见 [`docs/feature-parity.md`](docs/feature-parity.md)。
 

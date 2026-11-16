@@ -52,6 +52,19 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var root: ViewGroup
 
+    /**
+     * 最近一次拿到的系统栏 inset（物理像素）。
+     *
+     * WebView 的 padding 由它算出来：非全屏时按系统栏高度补，全屏时归零。
+     * 存下来是因为 `enterImmersive()` / `exitImmersive()` 触发时不会立刻收到
+     * 新的 inset 回调，必须用已知值重算。
+     */
+    private var lastSystemBars: androidx.core.graphics.Insets =
+        androidx.core.graphics.Insets.NONE
+
+    /** 全屏期间为 true：WebView 的 padding 归零，内容铺满整屏。 */
+    private var immersive: Boolean = false
+
     /** DOM 全屏期间承载 WebView 自定义视图的容器；非全屏时为 null。 */
     private var customView: View? = null
     private var customViewCallback: android.webkit.WebChromeClient.CustomViewCallback? = null
@@ -71,7 +84,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(root)
 
         /*
-         * 把状态栏与导航栏的尺寸交给页面自己排版。
+         * 把 WebView 限制在系统栏之间，**不让页面自己算安全区**。
          *
          * ## 不处理会怎样
          *
@@ -80,22 +93,27 @@ class MainActivity : AppCompatActivity() {
          * 实测（1080x2400 / 420dpi）：`header` 的 `getBoundingClientRect().top`
          * 为 0，标题被状态栏压住。
          *
-         * ## 为什么不能只靠页面
+         * ## 为什么改由原生管空间
          *
-         * 页面已经写了 `viewport-fit=cover` 和 `padding-top: env(safe-area-inset-top)`
-         * （`web/src/styles/index.css:177`），这是移动端 Chrome 的正确写法。
-         * 但实测 `env(safe-area-inset-top)` 返回 **0**：WebView 只有在宿主
-         * 明确声明「内容延伸到系统栏」时才向页面报告安全区，否则一律报 0。
-         * 所以这个 padding 在壳里等于没写。
+         * 之前用 `setDecorFitsSystemWindows(false)` 让页面拿真实安全区，再让
+         * 页面用 `padding` 避开系统栏。问题是页面容器仍然铺满整屏：滚动内容会
+         * 从导航栏下面穿过去，状态栏区域也成了页面的一部分。用户看到标题上方
+         * 多出一段空白，就是页面在为系统栏让位。
          *
-         * ## 做法
+         * 现在的做法：窗口仍然铺满整屏（`decorFitsSystemWindows(false)`），
+         * 但**由原生把系统栏尺寸补成 WebView 的 padding**。WebView 的可见区域
+         * 就等于系统栏之间的矩形，页面拿到的视口不再包含系统栏，也就不需要
+         * 任何 `pt-safe` / `pb-safe` 来避让。
          *
-         * `setDecorFitsSystemWindows(false)` 让 WebView 拿到真实安全区，
-         * 页面自己的 `env(safe-area-inset-*)` 就能生效。这样不用在原生侧写死
-         * 一个状态栏高度，也不用改 `web/src`（本轮约束禁止改）。
+         * 不用 `decorFitsSystemWindows(true)`：Android 16 起 edge-to-edge 强制
+         * 生效，靠系统收缩内容区在不同 API 上行为不一致。padding 由我们算，
+         * 各版本结果一样，也方便全屏时精确归零。
          *
-         * 全屏时 `enterImmersive()` 会隐藏系统栏，安全区自动变 0，页面铺满——
-         * 不需要额外分支。
+         * ## 全屏时怎么办
+         *
+         * 全屏要铺满整屏，所以 `enterImmersive()` 会隐藏系统栏并把 WebView 的
+         * padding 归零；`exitImmersive()` 重新按系统栏尺寸补回 padding。
+         * 两条路径都走 `applyWindowInsetsToWebView()`，只有一处真相。
          */
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
@@ -111,12 +129,19 @@ class MainActivity : AppCompatActivity() {
         applyStatusBarAppearance(lightSurface = false)
 
         /*
-         * 系统栏尺寸变化时通知页面。
+         * 系统栏尺寸变化时给 WebView 补 padding。
          *
-         * 三键导航 / 手势导航切换、旋转屏幕都会改变 inset，页面必须跟着重排。
-         * 页面侧监听 `hg:insets` 事件并写 CSS 变量。
+         * 三键导航 / 手势导航切换、旋转屏幕都会改变 inset。`decorFitsSystemWindows`
+         * 只处理窗口本身，`root` 是全屏 FrameLayout，仍然铺满整屏，所以要把
+         * 系统栏高度补成 WebView 的 padding，内容区才落在系统栏之间。
+         *
+         * 全屏期间 `immersive` 为 true，padding 归零，视频铺满整屏。
          */
         ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            lastSystemBars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+            )
+            applyWindowInsetsToWebView()
             pushInsets(insets)
             insets
         }
@@ -399,6 +424,55 @@ class MainActivity : AppCompatActivity() {
      * 用 `evaluateJavascript` 而不是桥接回包：inset 是单向推送，页面不需要
      * 应答，也不需要跟 `pending` 表对号。
      */
+    /**
+     * 按当前系统栏尺寸与全屏状态设置 WebView 的 padding。
+     *
+     * 只有这一处改 WebView 的空间：`onApplyWindowInsets`、`enterImmersive()`、
+     * `exitImmersive()` 都调它，避免三处各写一份容易漏。
+     *
+     * 全屏时 padding 归零，视频铺满整屏；非全屏时按系统栏高度补，滚动内容
+     * 不会穿到状态栏或导航栏下面。
+     */
+    private fun applyWindowInsetsToWebView() {
+        if (!::webView.isInitialized) {
+            return
+        }
+        /*
+         * 全屏期间不动 WebView 的布局参数。
+         *
+         * 全屏时 WebView 已 `GONE`，真正显示的是 `customView`。此时改它的
+         * margin 会触发 `root` 重排，WebView 认为自身尺寸变化，立刻取消 DOM
+         * 全屏——实测进入全屏 256ms 后自动 `onHideCustomView()`。
+         *
+         * 全屏铺满由 `customView` 的 `MATCH_PARENT` 保证，与 WebView 无关。
+         * 退出全屏时再按系统栏补回 margin。
+         */
+        if (immersive) {
+            return
+        }
+        val bars = lastSystemBars
+        /*
+         * 用 margin 而不是 `setPadding()`。
+         *
+         * WebView 内部是独立的渲染 surface：`setPadding()` 只裁掉绘制区域，
+         * CSS viewport 仍然是 WebView 的完整测量尺寸，页面内容照样从 y=0
+         * 开始画。实测加上 padding 后标题直接压到状态栏上。
+         *
+         * margin 缩小的是 WebView 自身的测量尺寸，viewport 跟着变小，
+         * 页面拿到的就是系统栏之间的矩形。
+         */
+        val lp = webView.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+        if (lp.leftMargin == bars.left &&
+            lp.topMargin == bars.top &&
+            lp.rightMargin == bars.right &&
+            lp.bottomMargin == bars.bottom
+        ) {
+            return
+        }
+        lp.setMargins(bars.left, bars.top, bars.right, bars.bottom)
+        webView.layoutParams = lp
+    }
+
     private fun pushInsets(insets: WindowInsetsCompat) {
         val density = resources.displayMetrics.density
         if (density <= 0f) {
@@ -470,15 +544,35 @@ class MainActivity : AppCompatActivity() {
      * 两处都交给这一个函数，由页面主题决定颜色，与全屏无关。
      */
     private fun applyStatusBarAppearance(lightSurface: Boolean) {
-        // 底色必须与页面一致，否则页面铺满时四周会露出系统栏的底色。
-        val barColor = if (lightSurface) Color.rgb(0xf5, 0xf5, 0xf7) else Color.rgb(0x08, 0x08, 0x0a)
-        window.statusBarColor = barColor
-        window.navigationBarColor = barColor
+        /*
+         * 系统栏底色用**透明**，不用涂色。
+         *
+         * `targetSdk = 36`：Android 15（API 35）起 `window.statusBarColor` /
+         * `navigationBarColor` 已废弃，赋值不再生效。实测浅色主题下涂
+         * `#f5f5f7` 后状态栏仍是黑的，就是这两个 setter 被忽略。
+         *
+         * 透明之后露出的是窗口背景（`Theme.HgShell` 的 `windowBackground`），
+         * 所以把窗口背景也设成页面底色。系统栏在 WebView 的 margin 之外，
+         * 不会被页面覆盖，靠窗口背景着色即可。
+         */
+        val surface = if (lightSurface) Color.rgb(0xf5, 0xf5, 0xf7) else Color.rgb(0x08, 0x08, 0x0a)
+        window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(surface))
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                window.statusBarColor = surface
+                window.navigationBarColor = surface
+            }
+        }
 
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
             return
         }
         // 两个 flag 一起设：状态栏与导航栏是独立的 appearance 位。
+        // 浅色底 → 画深色图标；深色底 → 画白色图标。
         val mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
             WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
         window.insetsController?.setSystemBarsAppearance(
@@ -509,6 +603,9 @@ class MainActivity : AppCompatActivity() {
         // 退出时由 `exitImmersive()` 还原成页面主题色。
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
+        // 全屏要铺满整屏：把 WebView 的 padding 归零。
+        immersive = true
+        applyWindowInsetsToWebView()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             window.insetsController?.let { controller ->
                 controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
@@ -531,6 +628,9 @@ class MainActivity : AppCompatActivity() {
                 WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars(),
             )
         }
+        // 退出全屏：重新把 WebView 限制在系统栏之间。
+        immersive = false
+        applyWindowInsetsToWebView()
         applyStatusBarAppearance(lastLightSurface)
     }
 

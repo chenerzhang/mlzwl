@@ -696,18 +696,90 @@ t=20124ms rs=0 paused=false ct=0 buf=0     ← 浮层弹出
 滚到底的数值：`pb-safe-page` 128px、inset 48.00px、末行底边 755px、视口 915px、
 导航栏上沿 866px。
 
+**后续修正（见 #27、#28）**：这一条涂色的做法在 `targetSdk = 36` 上无效——
+`statusBarColor` 从 Android 15 起已废弃。现在改成透明 + 窗口背景着色。
+
+### 27. 首页标题上方多出一段空白（红框）
+
+**现象**：深色主题首页，标题上方有一段约 52px 的空白。用户圈出红框问「是留给
+状态栏的还是」。
+
+**判断纠正**：不是页面多留白，是**状态栏本身加上 `header` 为避开它写的
+`pt-safe`**。状态栏高 51.81px，`header` 的 `padding-top` 也是 51.81px，两者不
+重复预留；看起来「多出来」是因为状态栏图标居中后下方还剩约 20px。
+
+**根因**：之前用 `setDecorFitsSystemWindows(false)` 让页面拿真实安全区，再让
+页面用 `padding` 避开系统栏。页面容器仍然铺满整屏，滚动内容会从导航栏下面穿过，
+状态栏区域也成了页面的一部分。
+
+**修法**：改由原生管空间。`applyWindowInsetsToWebView()` 把
+`systemBars() or displayCutout()` 的四个边设成 WebView 的 **margin**，CSS
+viewport 跟着缩小。页面侧加 `hg-native-insets` 类，把 `.pt-safe` / `.pb-safe`
+归零、`.pb-safe-page` 改成 `5rem`、`.h-safe-screen` 改成 `100dvh`。
+
+**两个必须避开的坑**：
+
+1. **不能用 `setPadding()`**。WebView 内部是独立渲染 surface，padding 只裁绘制
+   区域，CSS viewport 不变。实测加 padding 后标题直接压到状态栏上。
+2. **全屏期间不能改 WebView 布局参数**。全屏时 WebView 已 `GONE`，改 margin 会
+   触发 `root` 重排，WebView 认为自身尺寸变化，立刻取消 DOM 全屏——实测进入全屏
+   256ms 后自动 `onHideCustomView()`。
+
+**实测**：视口 815px = 915 − 51.81 − 48.00；`header` 的 `padding-top` 0px；
+`.pb-safe-page` 80px；首页标题紧贴状态栏下方；滚到底末行底边 703px、视口 815px。
+截图 `/tmp/walk/99-margin.png`、`/tmp/walk/113-dark-top.png`。
+
+### 28. 浅色主题下状态栏是黑的
+
+**现象**：浅色主题首页，页面浅灰但状态栏仍是纯黑，深色图标看不见。
+
+**根因**：`targetSdk = 36`。Android 15（API 35）起 `window.statusBarColor` /
+`window.navigationBarColor` 已废弃，赋值不再生效。`applyStatusBarAppearance()`
+里涂 `#f5f5f7` 的那两行被系统忽略。
+
+**修法**：改成透明 + 窗口背景着色。
+
+1. `window.statusBarColor = Color.TRANSPARENT`（`navigationBarColor` 同）。
+2. `window.setBackgroundDrawable(ColorDrawable(页面底色))`——浅色 `#f5f5f7`、
+   深色 `#08080a`。系统栏在 WebView 的 margin 之外，不会被页面覆盖，靠窗口背景
+   着色即可。
+3. 图标明暗仍单独管：`APPEARANCE_LIGHT_STATUS_BARS |
+APPEARANCE_LIGHT_NAVIGATION_BARS`。
+
+**实测**：浅色主题状态栏与导航栏均为浅灰、图标深色（截图
+`/tmp/walk/115-light-transparent.png`）；深色主题均为深色（`/tmp/walk/116-dark-transparent.png`）。
+
+### 29. 应用名与图标
+
+**改动**：`android:label` 从「红果壳」改为「红果」；新增自适应图标
+`res/mipmap-anydpi-v26/ic_launcher.xml` + 前景/背景 drawable。
+
+**图标形状**：白色苹果剪影（圆身 + 短柄 + 单片叶）+ 与背景同色的镂空播放三角。
+第一版是红底白三角，装上桌面后与 YouTube 无法区分——红底白三角是 YouTube 的
+既有视觉资产。第二版叶子画得太大（横向 43dp），圆形裁剪下像兔耳朵、整体像杯子。
+最终版叶子宽度压到果身一半以内。
+
+**配色**：背景红渐变 `#fb3b5c → #e11d48 → #9f1239`，取自 `styles/index.css` 的
+`--color-accent`（`#e11d48`）与 `--color-accent-soft`（`#fb7185`）。产品配色参考
+`ui-ux-pro-max` 的 Video Streaming/OTT 档案：「Cinema dark + play red」。
+
+**实测**：桌面与应用抽屉均显示「红果」，图标为红底白色苹果（截图
+`/tmp/walk/112-icon-v3-zoom.png`、`/tmp/walk/109-icon-v2.png`）。
+
 ### 回归结果（release APK，干净安装）
 
-| 项            | 结果                                                                                 |
-| ------------- | ------------------------------------------------------------------------------------ |
-| 首页封面      | 12/12 `naturalWidth > 0`                                                             |
-| 适配层端点    | 14                                                                                   |
-| `/api/health` | 200 `mode: self-contained`                                                           |
-| `/api/sprite` | 200，1181 帧 / 12 张                                                                 |
-| 播放          | `readyState 4`，1920x1080                                                            |
-| 停滞浮层      | 未出现                                                                               |
-| 全屏          | 915x412 `landscape-primary`，返回键退出回 412x915                                    |
-| 下载落盘      | `HgDownload: saved ... (8151606 B) -> content://media/external_primary/downloads/25` |
+| 项            | 结果                                                                             |
+| ------------- | -------------------------------------------------------------------------------- |
+| 首页封面      | 12/12 `naturalWidth > 0`                                                         |
+| 适配层端点    | 14                                                                               |
+| `/api/health` | 200 `mode: self-contained`                                                       |
+| `/api/sprite` | 200，1181 帧 / 12 张                                                             |
+| 播放          | `readyState 4`，1920x1080                                                        |
+| 停滞浮层      | 未出现                                                                           |
+| 全屏          | 915x412 `landscape-primary`，返回键退出回 412x915                                |
+| 下载落盘      | `HgDownload: saved 7697465535398677529-360p.mp4 (3065286 B) -> .../downloads/29` |
+| 系统栏空间    | 视口 815px = 915 − 51.81 − 48.00；`header` padding 0；`.pb-safe-page` 80px       |
+| 应用名        | 红果                                                                             |
 
 ## 九、复现命令
 

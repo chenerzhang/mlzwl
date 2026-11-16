@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  图标背景：品牌红渐变。
+
+  颜色取自 `web/src/styles/index.css` 的 accent 变量（#e11d48）与
+  accent-soft 变量（#fb7185）。深色主题下页面用 #e11d48，浅色主题用
+  #d61f45；图标固定取深色主题那一档，饱和度更高，桌面缩到 48dp 也看得清。
+
+  斜向渐变（左上到右下）比纯色更有体积感，且不影响前景对比度。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="315"
+        android:startColor="#fb3b5c"
+        android:centerColor="#e11d48"
+        android:endColor="#9f1239"
+        android:type="linear" />
+</shape>
