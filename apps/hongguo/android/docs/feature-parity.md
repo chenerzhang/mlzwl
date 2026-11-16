@@ -581,6 +581,9 @@ t=20124ms rs=0 paused=false ct=0 buf=0     ← 浮层弹出
 
 **实测**：浅色主题下图标由白变深灰（截图 `/tmp/walk/44-light-statusbar.png`）。
 
+**后续修正**：这一条只改了图标明暗，没改系统栏底色，因此深色主题下底部
+导航栏仍然白着。见 #26。
+
 ### 24. 底部操作区被导航栏遮挡
 
 **现象**：首页与其余列表页底部内容被三键导航栏 / 手势条压住。
@@ -654,6 +657,44 @@ t=20124ms rs=0 paused=false ct=0 buf=0     ← 浮层弹出
 | 拖动中浮层         | `3:32 / 6:09` + `+38 秒`，2px 细进度条出现            |
 | `currentTime` 变化 | 79.56 → 140.46（+60.9 秒）；0.15 → 49.02              |
 | 松手后浮层         | 消失（`span` 里无「秒」字样）                         |
+
+### 26. 系统导航栏底色不跟随页面主题
+
+**现象**：深色主题下，底部系统导航栏是一条白带，看起来像「底部导航栏还占着
+空间」。用户以为是页面留白没算对。
+
+**判断纠正**：不是留白。实测深色主题下 `pb-safe-page` 计算值 128px（`5rem` +
+48px inset），末行底边 755px，导航栏上沿 866px——留白绰绰有余。白带是**导航栏
+自己白着**。
+
+**根因**：主题是 `Theme.AppCompat.NoActionBar`（浅色），`android:navigationBarColor`
+默认取系统浅色。代码里只有 `enterImmersive()` 设过 `Color.BLACK`，而且只在全屏
+时设；日常状态从未设过。`exitImmersive()` 也不还原，所以退出全屏后导航栏会永久
+停在黑色——浅色主题下变成一条黑带，是同一个 bug 的另一面。
+
+**修法**：
+
+1. `applyStatusBarAppearance(lightSurface)` 同时涂 `statusBarColor` 与
+   `navigationBarColor`（浅色 `#f5f5f7` / 深色 `#08080a`），并同时设
+   `APPEARANCE_LIGHT_STATUS_BARS | APPEARANCE_LIGHT_NAVIGATION_BARS`。
+2. 新增字段 `lastLightSurface`，`theme` 命令里记录；`exitImmersive()` 末尾调
+   `applyStatusBarAppearance(lastLightSurface)` 还原。不重新问页面——那是异步
+   往返，会闪一帧错色。
+3. `onCreate` 先按深色涂一次，消掉页面加载前的浅色闪烁（页面默认主题是深色）。
+
+**实测**：
+
+| 场景               | 结果                                    | 截图                             |
+| ------------------ | --------------------------------------- | -------------------------------- |
+| 全新安装，深色主题 | 导航栏 `#08080a`，与页面同色，无白带    | `/tmp/walk/86-navbar-fixed.png`  |
+| 浅色主题           | 导航栏 `#f5f5f7`，图标深色              | `/tmp/walk/87-navbar-light.png`  |
+| 浅色主题进全屏     | 915x412 `landscape-primary`，系统栏隐藏 | `/tmp/walk/89-fs-light.png`      |
+| 浅色主题退全屏     | 导航栏还原成浅灰，**不是黑**            | `/tmp/walk/90-exit-fs-light.png` |
+| 深色主题退全屏     | 导航栏还原成深色                        | `/tmp/walk/91-exit-fs-dark.png`  |
+| 深色主题滚到底     | 导航栏与页面同色，无白带                | `/tmp/walk/92-dark-bottom.png`   |
+
+滚到底的数值：`pb-safe-page` 128px、inset 48.00px、末行底边 755px、视口 915px、
+导航栏上沿 866px。
 
 ### 回归结果（release APK，干净安装）
 
