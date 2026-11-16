@@ -24,6 +24,16 @@ export interface VolumeControlProps {
    * 必须传设备能力，不能传宽度。
    */
   allowSlider: boolean;
+  /**
+   * 滑块常显，不做悬停/点击展开。
+   *
+   * 放进设置二级菜单后必须常显。原来的展开依赖两条路径：鼠标悬停，或点击
+   * 滑块本身。触屏设备没有悬停；而滑块收起时宽度是 0，点击也点不到——两条
+   * 路径都断了，用户只能看到喇叭按钮，于是「只能开和关，调不了音量」。
+   *
+   * 设置面板是用户主动打开的，空间充足，不需要再省这一行的宽度。
+   */
+  inline?: boolean;
 }
 
 /**
@@ -46,6 +56,7 @@ export function VolumeControl({
   onToggleMute,
   onExpandedChange,
   allowSlider,
+  inline = false,
 }: VolumeControlProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -92,20 +103,24 @@ export function VolumeControl({
   const label = muted || value === 0 ? '取消静音' : '静音';
 
   // 滑块展开时才抢焦点：收起状态下容器里只剩一个喇叭按钮，拦 Tab 会打断页面导航。
-  useFocusTrap(containerRef, { onClose: () => setExpandedBoth(false), enabled: expanded && allowSlider });
+  // 常显时滑块本来就在页面上，不需要焦点陷阱；只在「浮层式」展开时才拦 Tab。
+  useFocusTrap(containerRef, {
+    onClose: () => setExpandedBoth(false),
+    enabled: !inline && expanded && allowSlider,
+  });
 
   return (
     <div
       ref={containerRef}
       className="relative flex items-center"
       onPointerEnter={(event) => {
-        // 只在鼠标上展开；触屏 hover 事件不可靠。
-        if (event.pointerType === 'mouse') {
+        // 只在鼠标上展开；触屏 hover 事件不可靠。常显时无需展开。
+        if (!inline && event.pointerType === 'mouse') {
           open();
         }
       }}
       onPointerLeave={(event) => {
-        if (event.pointerType === 'mouse') {
+        if (!inline && event.pointerType === 'mouse') {
           closeSoon();
         }
       }}
@@ -130,9 +145,13 @@ export function VolumeControl({
       */}
       {allowSlider && (
         <div
-          className={`overflow-hidden transition-[width,opacity] duration-200 ${
-            expanded ? 'w-24 opacity-100' : 'w-0 opacity-0'
-          }`}
+          className={
+            inline
+              ? 'flex-1'
+              : `overflow-hidden transition-[width,opacity] duration-200 ${
+                  expanded ? 'w-24 opacity-100' : 'w-0 opacity-0'
+                }`
+          }
         >
           <input
             type="range"
@@ -144,9 +163,11 @@ export function VolumeControl({
               onChange(Number(event.currentTarget.value) / 100);
               open();
             }}
-            onPointerDown={open}
+            onPointerDown={inline ? undefined : open}
             aria-label="音量"
-            className="volume-range mx-2 h-1 w-20 cursor-pointer appearance-none rounded-full bg-on-scrim/25 outline-none"
+            className={`volume-range mx-2 h-1 cursor-pointer appearance-none rounded-full bg-on-scrim/25 outline-none ${
+              inline ? 'w-full' : 'w-20'
+            }`}
             style={{
               // 已播放部分用实心白，未播放部分用半透明，与进度条一致。
               background: `linear-gradient(to right, var(--color-on-scrim) ${level * 100}%, color-mix(in oklab, var(--color-on-scrim) 25%, transparent) ${level * 100}%)`,
