@@ -64,6 +64,14 @@ jobs:
       HG_KEYSTORE_PASSWORD: ${{ secrets.HG_KEYSTORE_PASSWORD }}
       HG_KEY_ALIAS: ${{ secrets.HG_KEY_ALIAS }}
       HG_KEY_PASSWORD: ${{ secrets.HG_KEY_PASSWORD }}
+      # 版本号。见 app/build.gradle.kts 里的说明。
+      #
+      # versionCode 用 run_number：严格单调递增，被取消的 run 也消耗序号，
+      # 不会出现两个产物同号。不用 commit 计数（需要额外拉全历史）。
+      # versionName 由 gradle 拼成 `0.1.0+<run_number>.g<sha>`，基号只在
+      # build.gradle.kts 里写一次。
+      HG_VERSION_CODE: ${{ github.run_number }}
+      HG_GIT_SHA: ${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -210,8 +218,37 @@ jobs:
           APK="${{ steps.apk.outputs.path }}"
           BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
           sha256sum "$APK"
-          "$BUILD_TOOLS/aapt2" dump badging "$APK" \
-            | grep -E "^package: |^application-label:|^minSdkVersion:|^targetSdkVersion:"
+          # `--include-version-name` 不存在，aapt2 的 badging 默认就带。
+          # 单独把版本号写进 step summary：下载 artifact 前不用翻日志就能
+          # 确认拿到的是哪一版。
+          BADGING=$("$BUILD_TOOLS/aapt2" dump badging "$APK")
+          echo "$BADGING" | grep -E "^package: |^application-label:|^minSdkVersion:|^targetSdkVersion:"
+          VERSION_LINE=$(echo "$BADGING" | grep -E "^package: " | head -1)
+          VERSION_CODE=$(echo "$VERSION_LINE" | sed -E "s/.*versionCode='([^']*)'.*/\1/")
+          VERSION_NAME=$(echo "$VERSION_LINE" | sed -E "s/.*versionName='([^']*)'.*/\1/")
+          {
+            echo "### APK 版本"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| versionCode | \`$VERSION_CODE\` |"
+            echo "| versionName | \`$VERSION_NAME\` |"
+            echo "| commit | \`${{ github.sha }}\` |"
+            echo "| 签名 | ${{ steps.apk.outputs.signed }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 版本号没注入时静默回退到 1 / 0.1.0，产物看上去正常但无法区分。
+          # 这里显式失败，避免默默发出一个无版本标识的包。
+          if [ "$VERSION_CODE" != "$HG_VERSION_CODE" ]; then
+            echo "::error::versionCode 未按预期注入：期望 $HG_VERSION_CODE，实际 $VERSION_CODE"
+            exit 1
+          fi
+          case "$VERSION_NAME" in
+            *"+$HG_VERSION_CODE"*) ;;
+            *)
+              echo "::error::versionName 缺少构建元数据：期望包含 +$HG_VERSION_CODE，实际 $VERSION_NAME"
+              exit 1
+              ;;
+          esac
           if [ "${{ steps.apk.outputs.signed }}" = "true" ]; then
             "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
               | grep -E "SHA-256 digest|Verified using"
