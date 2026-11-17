@@ -33,6 +33,18 @@ export function PlayerRoute(): React.JSX.Element {
   const navigate = useNavigate();
   const seriesId = params.get('series') ?? '';
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /**
+   * 全屏目标元素。
+   *
+   * 必须是**比 `<Player>` 更外层**的稳定节点。换集时 `key` 变化、换清晰度时
+   * `awaitingDefinition` 为真，两者都会把整个播放器子树换掉；若全屏元素在子树
+   * 里，浏览器会把它移出文档并退出全屏。WebView 在无用户手势时无法重新请求
+   * 全屏（实测 `Permissions check failed`），用户只能手动再点一次。
+   *
+   * 这个 `div` 包住播放器与「正在准备播放」「正在切换清晰度」等占位，
+   * 在整个播放页生命周期内不卸载。
+   */
+  const fullscreenRef = useRef<HTMLDivElement>(null);
 
   const record = useHistoryStore((state) => state.record);
   /** 用户上次选的档位；`undefined` 表示让它自动挑。 */
@@ -412,7 +424,7 @@ export function PlayerRoute(): React.JSX.Element {
      *
      * 安全区改由底部控件自己的 `pb-safe` 负责：视频铺满，控件往上让。
      */
-    <div className="relative h-dvh w-full bg-scrim">
+    <div ref={fullscreenRef} className="player-host relative h-dvh w-full bg-scrim">
       {playbackQuery.isPending && (
         <div className="flex h-full items-center justify-center text-sm text-text-secondary">正在准备播放…</div>
       )}
@@ -442,6 +454,7 @@ export function PlayerRoute(): React.JSX.Element {
         <Player
           key={playback.episodeId}
           src={playback.streamUrl}
+          fullscreenTarget={fullscreenRef}
           onBack={() => {
             void navigate(playerBackTarget(seriesId), { replace: true });
           }}

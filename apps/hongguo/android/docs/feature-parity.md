@@ -766,6 +766,72 @@ APPEARANCE_LIGHT_NAVIGATION_BARS`。
 **实测**：桌面与应用抽屉均显示「红果」，图标为红底白色苹果（截图
 `/tmp/walk/112-icon-v3-zoom.png`、`/tmp/walk/109-icon-v2.png`）。
 
+### 30. 全屏下切集/换清晰度会退出全屏，倍速与画幅丢失
+
+**现象**：全屏状态下点「下一集」，画面退回竖屏窗口态；倍速回到 1×，画幅回到「适应」。
+
+**实测数据（修复前）**：
+
+| 时刻       | `fullscreenElement` | 方向                | 视口    | `playbackRate` | `objectFit` |
+| ---------- | ------------------- | ------------------- | ------- | -------------- | ----------- |
+| 全屏中     | `DIV.player-shell`  | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 切集 +0.3s | `null`              | `landscape-primary` | 915×412 | 1              | —           |
+| 切集 +2.0s | `null`              | `portrait-primary`  | 412×863 | 1              | `contain`   |
+| 切集 +5.0s | `null`              | `portrait-primary`  | 412×815 | 1              | `contain`   |
+
+**根因一：全屏元素在会被卸载的子树里。** 两个卸载源都实测过：
+
+1. `player-route.tsx` 的 `<Player key={playback.episodeId}>`——换集时 `key` 变，
+   `Player` 整体卸载重挂，`containerRef` 指向的 `.player-shell` 被移出文档，
+   浏览器自行退出全屏。
+2. `awaitingDefinition` 为真时整块换成「正在切换到记住的清晰度…」占位——
+   切清晰度同样让 `Player` 卸载。实测从 1080p 切 480p，`fullscreenElement` 变
+   `null`，`video` 标记从 `V1` 变 `NEW`。
+
+**为什么不能「退出后自动重新进全屏」**：WebView 在无用户手势时不允许
+`requestFullscreen()`。实测等待 7 秒（超过 5 秒临时激活窗口）后再请求，
+报 `TypeError: Permissions check failed`。所以只能让全屏元素**不被卸载**。
+
+**修法**：全屏目标上提到路由层的 `.player-host`。新增可选 prop
+`PlayerProps.fullscreenTarget`，`useFullscreen` 用它替代自己的 `containerRef`。
+这个 `div` 包住播放器与全部占位文案，在整个播放页生命周期内不卸载。
+`use-fullscreen.ts` 的 `active` / `enteredByUs` 初值改为读一次当前全屏状态，
+否则重挂后的新实例会以为没在全屏，按钮显示「全屏」而不是「退出全屏」。
+
+**根因二：倍速只写了 `playbackRate`。** 新的媒体资源加载完成时，浏览器把
+`playbackRate` 恢复成 `defaultPlaybackRate`（新元素是 1）。实测对照：
+
+| 写法                                | 加载完成后 `playbackRate` | `defaultPlaybackRate` |
+| ----------------------------------- | ------------------------- | --------------------- |
+| 只写 `playbackRate = 1.5`（修复前） | **1**                     | 1                     |
+| 同时写 `defaultPlaybackRate = 1.5`  | **1.5**                   | 1.5                   |
+
+**修法**：`setSpeedTo` 与同步 effect 都同时写 `defaultPlaybackRate` 与
+`playbackRate`。长按 2× 仍只改 `playbackRate`，不改基准值，所以松手能回到用户
+选的档位而不是回到 2×。
+
+**根因三：画幅模式只存在组件 state。** 重挂后回到 `contain`。
+**修法**：加进 `PlayerPreferences`（`frameMode`），与倍速、音量一样落盘。
+`sanitizeFrameMode` 只接受三个合法值，存档被改坏时回 `undefined`（= 默认），
+而不是替用户默默选一个他没点过的画幅。
+
+**实测数据（修复后，release APK）**：
+
+| 时刻                         | `fullscreenElement` | 方向                | 视口    | `playbackRate` | `objectFit` |
+| ---------------------------- | ------------------- | ------------------- | ------- | -------------- | ----------- |
+| 全屏中                       | `DIV.player-host`   | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 切集 +0.5s                   | `DIV.player-host`   | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 切集 +7.5s                   | `DIV.player-host`   | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 全屏下切 480p 后             | `DIV.player-host`   | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 连续再切 3 集（第 3/4/5 集） | `DIV.player-host`   | `landscape-primary` | 915×412 | 1.5            | `cover`     |
+| 退出全屏                     | `null`              | `portrait-primary`  | 412×815 | 1.5            | `cover`     |
+
+连切 3 集时每集均 `readyState 4`、`paused false`、`video.error null`。
+
+**顺带确认未受影响的项**：音量（0.35 跨集保持）、封面（`naturalWidth 400`）、
+`/api/sprite` 200、退出全屏后系统栏恢复（原生截图
+`/tmp/walk/131-exit-fs-native.png` 可见状态栏与三键导航栏都回来）。
+
 ### 回归结果（release APK，干净安装）
 
 | 项            | 结果                                                                             |

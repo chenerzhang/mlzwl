@@ -245,6 +245,21 @@
   }
 
   /*
+   * 全屏目标在路由层（`.player-host`），不在 `.player-shell` 上。
+   *
+   * 换集与换清晰度都会重挂播放器子树；若全屏元素在子树里，浏览器会把它移出
+   * 文档并退出全屏，而 WebView 在无用户手势时不允许重新请求全屏。
+   * 所以全屏元素上提一层，这里给它同样的铺满规则。
+   */
+  .player-host:fullscreen,
+  .player-host:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    background: var(--color-scrim);
+    overflow: hidden;
+  }
+
+  /*
    * 音量滑块。原生 `input[type=range]` 的轨道在各浏览器默认样式差异很大，
    * 而且默认是凸起的 3D 轨道，在视频上很突兀。这里只保留一条 4px 的细线，
    * 滑块（thumb）做成 12px 的圆点，与进度条同一套视觉。

@@ -105,7 +105,14 @@ export function useFullscreen(
   options: UseFullscreenOptions = {},
 ): FullscreenState {
   const { lockLandscape = false } = options;
-  const [active, setActive] = useState(false);
+  /**
+   * 初始值必须读一次当前全屏元素，不能写死 `false`。
+   *
+   * 全屏期间换集时，播放器子树会重挂（换 `src` 要先等新的播放信息，
+   * 期间不挂载 `<video>`）。若这里写死 `false`，新实例会以为没在全屏：
+   * 按钮显示「全屏」而不是「退出全屏」，`toggle()` 会再去请求一次全屏。
+   */
+  const [active, setActive] = useState(() => getFullscreenElement() !== null);
   const [supported] = useState(() => {
     if (typeof document === 'undefined') {
       return false;
@@ -113,8 +120,13 @@ export function useFullscreen(
     const el = document.documentElement as HTMLElement & { webkitRequestFullscreen?: unknown };
     return el.requestFullscreen !== undefined || el.webkitRequestFullscreen !== undefined;
   });
-  /** 是否是本 hook 主动进入的全屏。用来区分用户按 Esc 退出。 */
-  const enteredByUs = useRef(false);
+  /**
+   * 是否是本 hook 主动进入的全屏。用来区分用户按 Esc 退出。
+   *
+   * 初始值同理取当前全屏状态：重挂前是全屏，说明那次全屏是我们发起的，
+   * 退出时要负责解锁方向。否则设备会卡在横屏。
+   */
+  const enteredByUs = useRef(getFullscreenElement() !== null);
 
   // 同步全屏状态。用户按 Esc、或浏览器自行退出时都要能反映到 UI。
   useEffect(() => {

@@ -208,3 +208,33 @@ describe('download definition preference', () => {
     expect('downloadDefinition' in usePlayerStore.getState()).toBe(false);
   });
 });
+
+/**
+ * 画幅模式。
+ *
+ * 必须落盘：切集与换清晰度都会重挂播放器子树，只放组件 state 会每次都回到
+ * `contain`——用户选过的「裁剪」在下一集被静默丢弃（实测确认过）。
+ */
+describe('frame mode preference', () => {
+  it('persists the chosen frame mode', () => {
+    usePlayerStore.getState().setFrameMode('cover');
+    expect(usePlayerStore.getState().frameMode).toBe('cover');
+
+    usePlayerStore.getState().setFrameMode('fill');
+    expect(usePlayerStore.getState().frameMode).toBe('fill');
+  });
+
+  it('survives the sanitize pass', () => {
+    expect(sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, frameMode: 'cover' }).frameMode).toBe(
+      'cover',
+    );
+  });
+
+  it('drops an unknown frame mode instead of silently picking one', () => {
+    // 存档被改坏时必须回到默认，而不是替用户选一个他没点过的画幅。
+    expect('frameMode' in sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1, frameMode: 'zoom' })).toBe(
+      false,
+    );
+    expect('frameMode' in sanitizePlayerPreferences({ volume: 1, muted: false, speed: 1 })).toBe(false);
+  });
+});
