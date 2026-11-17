@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createLocalStorageWriteQueue, createQueuedPersistStorage } from '../../lib/write-queue';
 import { isValidDefinitionLabel } from './definition-selection';
+import type { FrameMode } from './frame-mode';
 
 /** 允许的倍速白名单。`<video>.playbackRate` 只接受这几个值。 */
 export const SPEED_VALUES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -18,6 +19,13 @@ export interface PlayerPreferences {
    * 但它不存在于新一集的可用档位时必须回退，不能硬发。
    */
   definition?: string;
+  /**
+   * 画幅模式。
+   *
+   * 与倍速、音量一样落盘：切集后播放器会重挂，不存就每次都要重新选一遍。
+   * `undefined` 表示没选过，用 `contain`。
+   */
+  frameMode?: FrameMode;
   /**
    * 下载专用清晰度。
    *
@@ -55,6 +63,7 @@ interface PlayerState extends PlayerPreferences {
   setSpeed: (speed: number) => void;
   setDefinition: (definition: string | undefined) => void;
   setDownloadDefinition: (definition: string | undefined) => void;
+  setFrameMode: (mode: FrameMode) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -107,7 +116,21 @@ export function sanitizePlayerPreferences(raw: unknown): PlayerPreferences {
   if (downloadDefinition !== undefined) {
     result.downloadDefinition = downloadDefinition;
   }
+  const frameMode = sanitizeFrameMode(raw['frameMode']);
+  if (frameMode !== undefined) {
+    result.frameMode = frameMode;
+  }
   return result;
+}
+
+/**
+ * 画幅模式的合法性判定。
+ *
+ * 只接受 `FRAME_MODES` 里的三个值。存档被改坏时回 `undefined`（= 用默认），
+ * 而不是默默选一个，否则用户会看到自己没选过的画幅。
+ */
+export function sanitizeFrameMode(raw: unknown): FrameMode | undefined {
+  return raw === 'contain' || raw === 'cover' || raw === 'fill' ? raw : undefined;
 }
 
 /**
@@ -192,6 +215,9 @@ export const usePlayerStore = create<PlayerState>()(
           return;
         }
         set({ definition: label });
+      },
+      setFrameMode: (mode) => {
+        set({ frameMode: mode });
       },
     }),
     {

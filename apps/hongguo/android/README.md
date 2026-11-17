@@ -140,13 +140,19 @@ PR 上不跑这个 workflow。构建约 5 分钟，而 APK 只在合入后才需
 生成 keystore 并转 base64（只在本机执行，产物不要提交）：
 
 ```bash
+# 口令自己生成，不要手写。40 字符够用且能直接粘进 keytool。
+PW=$(openssl rand -base64 32 | tr -d '/+=' | head -c 40)
+
 keytool -genkeypair -v -keystore hongguo-release.jks \
-  -alias hongguo -keyalg RSA -keysize 2048 -validity 10000 \
-  -storepass '<口令>' -keypass '<口令>' \
-  -dname 'CN=hongguo, OU=mlzwl, O=mlzwl, L=, ST=, C=CN'
+  -alias hongguo -keyalg RSA -keysize 4096 -validity 10000 \
+  -storepass "$PW" -keypass "$PW" \
+  -dname 'CN=hongguo, OU=mlzwl, O=mlzwl, L=Beijing, ST=Beijing, C=CN'
 
 base64 -i hongguo-release.jks | tr -d '\n' > hongguo-release.b64
 ```
+
+密钥长度用 4096 而不是 2048：签名验证在安装时只做一次，4096 的开销可以忽略，
+而侧载分发的密钥有效期很长（这里 10000 天），长周期下强度更重要。
 
 写入 GitHub secrets（在仓库根执行，命令会提示粘贴）：
 
@@ -158,6 +164,27 @@ gh secret set HG_KEY_PASSWORD
 ```
 
 配完执行 `gh secret list` 应看到四项。
+
+#### 首次配置的记录（2026-11-17）
+
+按上面的步骤实际配过一次，结果如下：
+
+| 项                     | 值                                                                 |
+| ---------------------- | ------------------------------------------------------------------ |
+| 密钥算法               | RSA 4096，有效期 10000 天                                          |
+| 别名                   | `hongguo`                                                          |
+| keystore               | `.tmp/apk/hongguo-release.jks`（4,394 B，不入仓）                  |
+| 证书 SHA-256           | `1b96807fb1ea0e5cfa298cfe618ecd4a2308ffbeb1e6145811ae53bc12bc33cb` |
+| CI run                 | `43989963877`（`workflow_dispatch`，`success`）                    |
+| 产物                   | 5,402,854 B，`hongguo-shell-release.apk`                           |
+| `application-label`    | 红果                                                               |
+| `minSdk` / `targetSdk` | 26 / 36                                                            |
+
+口令由 `openssl rand -base64 32` 生成（40 字符），只存在本地
+`.tmp/apk/release-keystore.txt`（`chmod 600`，`.tmp/` 已被 `.gitignore` 覆盖）。
+
+**证书指纹一旦变化，已装设备必须先 `adb uninstall` 再装。** 本次是首次正式签名，
+与之前用测试 keystore（`9842dd3f...`）签的包不兼容。
 
 ### 为什么 secrets 可以放在公开仓库
 

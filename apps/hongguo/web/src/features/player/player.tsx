@@ -67,6 +67,15 @@ export interface PlayerProps {
    */
   onProgress?: (position: number, duration: number, speed: number) => void;
   /**
+   * 全屏目标元素。不传时用播放器自己的容器。
+   *
+   * 路由层应传入**比播放器更外层**的稳定元素。原因：换集与换清晰度都会让
+   * 播放器子树重挂，若全屏元素在子树里，浏览器会把它移出文档并退出全屏。
+   * 而 WebView 在无用户手势时无法重新 `requestFullscreen()`
+   * （实测报 `Permissions check failed`），用户只能再手动点一次。
+   */
+  fullscreenTarget?: React.RefObject<HTMLElement | null>;
+  /**
    * 可用清晰度档位，来自 `Playback.availableDefinitions`（低→高）。
    *
    * 单档或空数组时不渲染选择器：只有一个选项的菜单只是噪音。
@@ -201,6 +210,7 @@ export function Player({
   definitions,
   definition,
   onSelectDefinition,
+  fullscreenTarget,
 }: PlayerProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -210,8 +220,13 @@ export function Player({
   const [duration, setDuration] = useState(0);
   /** 已缓冲区间（已合并）。进度条按区间分别绘制，不再只画到最后一个 `end`。 */
   const [bufferedRanges, setBufferedRanges] = useState<readonly TimeRange[]>([]);
-  /** 画幅模式。默认 `contain`：竖屏视频在横屏容器里留黑，不裁掉人物。 */
-  const [frameMode, setFrameMode] = useState<FrameMode>('contain');
+  /**
+   * 画幅模式。默认 `contain`：竖屏视频在横屏容器里留黑，不裁掉人物。
+   *
+   * 初始值取存档：切集与换清晰度都会重挂播放器，不落盘就每次都回到 `contain`。
+   */
+  const storedFrameMode = usePlayerStore((state) => state.frameMode);
+  const [frameMode, setFrameMode] = useState<FrameMode>(storedFrameMode ?? 'contain');
   // 初始偏好取存档值：否则控件显示与实际媒体属性不一致。
   const storedSpeed = usePlayerStore((state) => state.speed);
   const storedMuted = usePlayerStore((state) => state.muted);
@@ -306,7 +321,7 @@ export function Player({
     probe.volume = 0.5;
     return Math.abs(probe.volume - 0.5) < 0.01;
   });
-  const fullscreen = useFullscreen(containerRef, { lockLandscape: isTouch });
+  const fullscreen = useFullscreen(fullscreenTarget ?? containerRef, { lockLandscape: isTouch });
   const progressRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
 
   const clearHideTimer = useCallback(() => {
@@ -451,12 +466,23 @@ export function Player({
     }
   }, [src, initialTime]);
 
-  // 把当前倍速写进 `<video>`。元素默认 1，换集重挂后也要重新应用一次。
+  /**
+   * 把当前倍速写进 `<video>`。元素默认 1，换集重挂后也要重新应用一次。
+   *
+   * 必须同时写 `defaultPlaybackRate`。只写 `playbackRate` 时，新的媒体资源
+   * 加载完成会把 `playbackRate` 恢复成 `defaultPlaybackRate`（新元素是 1），
+   * 倍速在换集后静默丢失。实测：只写 `playbackRate` 最终是 1，两者都写才是 1.5。
+   *
+   * `defaultPlaybackRate` 才是「这部片子的默认速度」，`playbackRate` 是它上面的
+   * 临时覆盖。长按 2× 只改 `playbackRate`、不改 `defaultPlaybackRate`，所以松开
+   * 时能回到用户选的档位而不是回到 2×。
+   */
   useEffect(() => {
     const video = videoRef.current;
     if (video === null) {
       return;
     }
+    video.defaultPlaybackRate = speed;
     video.playbackRate = speed;
   }, [speed, src]);
 
@@ -608,6 +634,9 @@ export function Player({
       if (video === null) {
         return;
       }
+      // 与下面的 effect 保持一致：`defaultPlaybackRate` 是基准速度，
+      // 只改 `playbackRate` 会在下次换源时被重置回 1。
+      video.defaultPlaybackRate = next;
       video.playbackRate = next;
       setSpeed(next);
       // 写回偏好存储，下次进播放器沿用这个倍速。
@@ -1114,6 +1143,7 @@ export function Player({
                   aria-pressed={frameMode === mode}
                   onClick={() => {
                     setFrameMode(mode);
+                    usePlayerStore.getState().setFrameMode(mode);
                     revealControls();
                   }}
                   className={`h-8 rounded-full px-2.5 text-[11px] transition-colors hover:bg-on-scrim/15 ${
