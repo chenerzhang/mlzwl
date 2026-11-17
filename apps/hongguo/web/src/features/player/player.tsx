@@ -448,6 +448,25 @@ export function Player({
     [clearHideTimer],
   );
 
+  /**
+   * 挂载时安排一次自动隐藏。
+   *
+   * **没有这一条，换集后控件就永久停在画面上**：`player-route.tsx` 用
+   * `<Player key={playback.episodeId}>`，换集（手动点按钮、上滑手势、或自动连播到
+   * 下一集）都会让 `Player` 整体卸载重挂。`showControls` 初值是 `true`，而原来
+   * 只有“用户点画面”、“指针移动”、“按键”等交互才会调 `scheduleHide()`。
+   * 重挂之后没有任何交互发生，就没人启动计时，顶栏与底栏一直亮着。
+   *
+   * 实测（全屏 915×412，点「下一集」后不操作）：切集 +12.5s 顶栏与底栏的
+   * `opacity` 仍为 1。加上这条 effect 后恢复为 6 秒自动隐藏。
+   *
+   * 依赖只写 `scheduleHide`：它在 `src` 变化时不会重建（`useCallback` 依赖只有
+   * `clearHideTimer`），所以这条 effect 一个挂载周期只跑一次。
+   */
+  useEffect(() => {
+    scheduleHide();
+  }, [scheduleHide]);
+
   // 换集时重置状态并跳到起始位置。
   useEffect(() => {
     const video = videoRef.current;
