@@ -92,14 +92,19 @@ export interface PlayerProps {
   onSelectDefinition?: (definition: string) => void;
 }
 
-/** 控件自动隐藏的延迟。拖动或长按期间不隐藏。 */
-const HIDE_DELAY_MS = 3200;
+/**
+ * 控件自动隐藏的延迟。拖动或长按期间不隐藏。
+ *
+ * 6 秒而不是更短：顶栏含返回按钮与剧名/集数，底栏含进度条与全部主操作。
+ * 短于 6 秒时，用户刚看清标题、还没点到目标控件，两者就一起淡出了。
+ */
+const HIDE_DELAY_MS = 6000;
 
 /**
  * 焦点还在控件内时，复查一次「能不能隐藏」的间隔。
  *
  * 比 `HIDE_DELAY_MS` 短得多：这段时间里控件本来就该保持显示，不需要再等完整的
- * 3.2 秒才反应；但也别短到变成忙等——1 秒一次对定时器开销可以忽略。
+ * 6 秒才反应；但也别短到变成忙等——1 秒一次对定时器开销可以忽略。
  */
 const FOCUS_HOLD_RECHECK_MS = 1000;
 
@@ -1060,46 +1065,20 @@ export function Player({
       )}
 
       {/*
-        桌面端切集按钮。放在 Player 内部而不是路由层，这样它会跟随控件一起
-        显隐——放在外面时控件已隐藏、按钮还挂在画面上，观感很突兀。
+        宽屏两侧的切集胶囊**已移除**，切集入口统一在底部主行。
+
+        原来的胶囊是 `hidden lg:flex`，只有视口宽 ≥1024px 才出现。手机竖屏
+        （412px）与全屏横屏（915px）都达不到这个断点，所以手机上根本看不到
+        「下一集」。底部主行的图标按钮在所有宽度下都可见；两者并存就是同一
+        动作的重复入口，而且侧边胶囊会压在画面内容上。
       */}
-      {showControls && (canPrev || canNext) && (
-        <>
-          {canPrev && (
-            <button
-              type="button"
-              onClick={() => {
-                onPrevEpisode?.();
-              }}
-              aria-label="上一集"
-              className="absolute left-3 top-1/2 hidden h-11 -translate-y-1/2 items-center gap-1 rounded-full bg-scrim/75 px-3.5 text-xs text-on-scrim transition-colors hover:bg-scrim/90 lg:flex"
-            >
-              <PrevIcon size="sm" />
-              上一集
-            </button>
-          )}
-          {canNext && (
-            <button
-              type="button"
-              onClick={() => {
-                onNextEpisode?.();
-              }}
-              aria-label="下一集"
-              className="absolute right-3 top-1/2 hidden h-11 -translate-y-1/2 items-center gap-1 rounded-full bg-scrim/75 px-3.5 text-xs text-on-scrim transition-colors hover:bg-scrim/90 lg:flex"
-            >
-              下一集
-              <NextIcon size="sm" />
-            </button>
-          )}
-        </>
-      )}
 
       {/*
         底部控件。
 
         结构：
         1. **进度条常驻**——进度是播放页最核心的信息，任何时候都该看得见。
-        2. **主行常驻**：设置图标、选集、全屏。
+        2. **主行常驻**：设置图标、上一集、下一集、选集、全屏。
         3. **设置面板**：音量、清晰度、倍速、画幅模式。点设置图标才出现，
            相当于一个二级菜单。
 
@@ -1306,7 +1285,7 @@ export function Player({
           <span className="tabular-nums">{formatDuration(duration)}</span>
         </div>
 
-        {/* 主行：设置、选集、全屏。 */}
+        {/* 主行：设置、切集、选集、全屏。 */}
         <div className="flex items-center justify-between pb-2">
           <button
             type="button"
@@ -1330,6 +1309,45 @@ export function Player({
           >
             <SettingsIcon className="h-5 w-5" />
           </button>
+
+          {/*
+            切集按钮，这是全宽度下唯一的切集入口。
+
+            放在主行内而不是画面两侧：主行本来就常驻，按钮跟着它一起显隐；
+            贴边浮在画面上的按钮会在控件隐藏后仍压在内容上。
+
+            尺寸与位置：与全屏按钮同为 44×44 命中区。主行左侧齿轮 44px、右侧
+            「选集 + 全屏」100px，412px 视口下中间还有 232px 空隙，两个按钮
+            共 88px，不会与任何现有控件重叠。
+          */}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => {
+                onPrevEpisode?.();
+              }}
+              aria-label="上一集"
+              disabled={!canPrev}
+              className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20 ${
+                canPrev ? 'text-on-scrim' : 'pointer-events-none text-on-scrim-muted/40'
+              }`}
+            >
+              <PrevIcon />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onNextEpisode?.();
+              }}
+              aria-label="下一集"
+              disabled={!canNext}
+              className={`flex h-11 w-11 items-center justify-center rounded-full transition-colors hover:bg-on-scrim/15 active:bg-on-scrim/20 ${
+                canNext ? 'text-on-scrim' : 'pointer-events-none text-on-scrim-muted/40'
+              }`}
+            >
+              <NextIcon />
+            </button>
+          </div>
 
           <div className="flex items-center gap-1">
             {onOpenEpisodes !== undefined && (
