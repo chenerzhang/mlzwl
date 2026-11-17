@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.os.Bundle
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -326,6 +327,29 @@ class MainActivity : AppCompatActivity() {
                     replyProxy: androidx.webkit.JavaScriptReplyProxy,
                 ) {
                     val data = message.data ?: return
+                    /*
+                     * 系统栏相关的命令必须在主线程执行，**不能**丢进 `io` 线程池。
+                     *
+                     * `theme` 改窗口背景与 `insetsController`，`insets` 读
+                     * `getRootWindowInsets()`，两者都直接碰视图树。丢到后台线程时
+                     * `setBackgroundDrawable` 侥幸不检查线程、能生效，但
+                     * `setSystemBarsAppearance` 会抛
+                     * `Only the original thread that created a view hierarchy can
+                     * touch its views`——整个 `applyStatusBarAppearance()` 在涂完
+                     * 底色后就中断了。
+                     *
+                     * 实际症状：浅色主题下系统栏底色变浅，但图标仍是白色，用户在
+                     * 真机上看到的就是「浅色模式下状态栏/导航栏文字还是白的」。
+                     * logcat 里每次主题切换都有一条 `bridge error: Only the original
+                     * thread ...`。
+                     *
+                     * 这两条命令都不做 IO，主线程直接处理的开销可以忽略。网络请求与
+                     * 下载仍然走 `io`：那部分没有视图操作，且耗时不可控。
+                     */
+                    if (isMainThreadCommand(data)) {
+                        replyProxy.postMessage(handleBridgeMessage(data))
+                        return
+                    }
                     io.execute {
                         val reply = handleBridgeMessage(data)
                         replyProxy.postMessage(reply)
@@ -335,7 +359,35 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** 处理一条桥接消息，返回要回传的 JSON 字符串。 */
+    /**
+     * 这条命令是否必须在主线程处理。
+     *
+     * 只从消息开头找 `"op":"<名字>"`，不解析整条 JSON：网络请求的消息体里带
+     * 几十 KB 的 base64，为了判断分派再解析一遍会白白多一次拷贝。`hg-adapter.js`
+     * 总是把 `op` 放在前几个字段，所以只扫前 64 个字符足够；扫不到就当普通请求。
+     */
+    private fun isMainThreadCommand(data: String): Boolean {
+        val head = data.take(64)
+        val marker = head.indexOf("\"op\":\"")
+        if (marker < 0) {
+            return false
+        }
+        val start = marker + 6
+        val end = head.indexOf('"', start)
+        if (end < 0) {
+            return false
+        }
+        val op = head.substring(start, end)
+        return op == "theme" || op == "insets"
+    }
+
+    /**
+     * 处理一条桥接消息，返回要回传的 JSON 字符串。
+     *
+     * 线程约定：`theme` 与 `insets` 由 `installBridge` 在主线程直接调用，其余
+     * 命令在 `io` 线程池执行。两条系统栏命令的代码只能碰主线程对象，改这里
+     * 的分支前先确认线程归属。
+     */
     private fun handleBridgeMessage(data: String): String {
         return try {
             val req = JSONObject(data)
@@ -555,6 +607,13 @@ class MainActivity : AppCompatActivity() {
          * 所以把窗口背景也设成页面底色。系统栏在 WebView 的 margin 之外，
          * 不会被页面覆盖，靠窗口背景着色即可。
          */
+        // 防御：这条路径必须主线程。走到这里说明分派逻辑被改坏了，先跳回主线程
+        // 再涂，避免出现「底色变了、图标没变」这种半生效状态。
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            Log.w(tag, "applyStatusBarAppearance off main thread; re-dispatching")
+            android.os.Handler(Looper.getMainLooper()).post { applyStatusBarAppearance(lightSurface) }
+            return
+        }
         val surface = if (lightSurface) Color.rgb(0xf5, 0xf5, 0xf7) else Color.rgb(0x08, 0x08, 0x0a)
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(surface))
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {

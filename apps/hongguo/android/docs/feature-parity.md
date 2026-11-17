@@ -1029,3 +1029,86 @@ adb exec-out screencap -p > /tmp/shot.png
 ```
 
 页面内调试入口：`globalThis.__hgAdapter`（`sdkCall` 直调 WASM SDK，`routes` 看已挂端点）。
+
+### 33. 浅色主题下状态栏 / 导航栏图标仍是白色（真机症状）
+
+**现象**：浅色主题下系统栏底色已经变浅灰，但时间、信号、电量、返回键仍是白色，
+几乎看不见。用户报「手机上始终是白色」。
+
+**根因**：**`theme` 命令每次都在后台线程抛异常，`applyStatusBarAppearance()`
+从未执行到设置图标明暗的那一步。**
+
+`installBridge()` 把每条桥接消息都丢进 `io.execute { handleBridgeMessage(...) }`。
+`handleBridgeMessage` 的 `theme` 分支直接调 `applyStatusBarAppearance()`，里面
+`window.setBackgroundDrawable()` / `window.statusBarColor` /
+`window.insetsController?.setSystemBarsAppearance()` 全部是主线程 API。
+
+`setBackgroundDrawable()` 不检查线程，侥幸生效——所以**底色看起来是对的**。
+下一行 `setSystemBarsAppearance()` 抛 `CalledFromWrongThreadException`，
+被 `handleBridgeMessage` 的 `catch (e: Throwable)` 吞掉并只打一行日志，于是
+函数在「底色已改、图标未改」的半生效状态中断。
+
+logcat 里每次主题切换都有：
+
+```
+E HgShell : bridge error: Only the original thread that created a view hierarchy
+             can touch its views. Expected: main Calling: pool-3-thread-4
+```
+
+同一个缺陷也让 `insets` 命令失效（`currentInsets()` 读 `getRootWindowInsets()`）。
+
+**修法**：
+
+1. `installBridge` 先判断命令类型：`theme` / `insets` 在主线程直接处理，
+   其余（网络请求、下载）继续走 `io` 线程池。这两条命令都不做 IO。
+2. 新增 `isMainThreadCommand(data)`，只扫消息开头 64 个字符找 `"op":"<名字>"`，
+   不解析整条 JSON——网络请求体里可能带几十 KB 的 base64，为了分派再解析一遍
+   是白白多一次拷贝。
+3. `applyStatusBarAppearance()` 里加防御：检测到不在主线程就 `post` 回主线程再涂，
+   并打一条 warning。这样即使将来分派逻辑被改坏，也不会再出现「底色变了图标没变」。
+
+**实测（release APK + debug 签名，API 36 模拟器 1080x2400 / 420dpi）**：
+
+| 场景                         | 状态栏图标               | 导航栏图标 | 状态栏底色 | 导航栏底色 |
+| ---------------------------- | ------------------------ | ---------- | ---------- | ---------- |
+| 深色（修复后）               | 白                       | 白         | `#08080a`  | `#08080a`  |
+| 浅色（修复后）               | 深灰                     | 深灰       | `#f5f5f7`  | `#f5f5f7`  |
+| 浅色，冷启动（localStorage） | 深灰                     | 深灰       | `#f5f5f7`  | `#f5f5f7`  |
+| 浅色，详情页                 | 深灰                     | 深灰       | `#f5f5f7`  | `#f5f5f7`  |
+| 浅色，手势导航               | 深灰                     | 深灰手势条 | `#f5f5f7`  | `#f5f5f7`  |
+| 浅色 → 深色 回切             | 白                       | 白         | `#08080a`  | `#08080a`  |
+| 系统 `uimode night yes`      | 跟随页面主题，不跟随系统 | —          | —          | —          |
+
+修复后 logcat 里 `bridge error` 计数为 **0**（修复前每次切换至少 2 条）。
+
+**为什么手机上「始终」是白色**：这条缺陷与设备无关，与模拟器也无关。修复前
+在任何设备上图标都不会跟随，只有底色会。用户看到的现象与代码缺陷完全一致。
+
+### 34. 浏览器访问时 `theme-color` 不跟随主题
+
+**现象**：用浏览器打开 `:9133` 时，浅色主题下移动端地址栏/状态栏仍是深色。
+
+**根因**：`web/index.html` 写死 `<meta name="theme-color" content="#0a0a0a">`，
+且这个值既不是深色主题的 `#08080a`，也不随主题变化。
+
+**修法**：
+
+1. `theme-store.ts` 导出 `THEME_SURFACE`（`dark: '#08080a'` / `light: '#f5f5f7'`），
+   与 `styles/index.css` 的 `--color-surface` 保持一致。
+2. `index.html` 写两条带 `media` 的 meta：浅色 `#f5f5f7`、深色 `#08080a`。
+   主题确定前浏览器按系统配色自己挑一条，不会先涂错色。
+3. `applyTheme()` 把**所有** `theme-color` 的 `content` 改成解析后的值。
+   只改一条不够：用户手动选的主题优先级高于系统，另一条带 `media` 的仍会命中。
+
+**实测（Chromium，`pnpm hongguo:start` 单端口）**：
+
+| 场景                              | `data-theme` | 两条 meta 的 `content` | `body` 背景          |
+| --------------------------------- | ------------ | ---------------------- | -------------------- |
+| 系统浅色，无偏好                  | `light`      | 都是 `#f5f5f7`         | `rgb(245, 245, 247)` |
+| 系统深色，无偏好                  | `dark`       | 都是 `#08080a`         | `rgb(8, 8, 10)`      |
+| 系统浅色，手动切到深色            | `dark`       | 都是 `#08080a`         | `rgb(8, 8, 10)`      |
+| 系统深色，手动切到浅色            | `light`      | 都是 `#f5f5f7`         | `rgb(245, 245, 247)` |
+| 刷新（localStorage 记住 `light`） | `light`      | 都是 `#f5f5f7`         | `rgb(245, 245, 247)` |
+
+App 内不受这条影响：WebView 不读 `theme-color`，系统栏由第 33 条的
+`applyStatusBarAppearance()` 管。
