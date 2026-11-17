@@ -113,10 +113,49 @@ PR 上不跑这个 workflow。构建约 5 分钟，而 APK 只在合入后才需
 两种情况都上传为 artifact `hongguo-shell-release`，保留 30 天。
 从 GitHub 网页或 `gh run download <run-id> -n hongguo-shell-release` 取回。
 
+### 版本号
+
+`versionCode` 与 `versionName` 由 CI 注入，本地构建回退到固定值。
+
+| 环境变量          | 来源                | 例           |
+| ----------------- | ------------------- | ------------ |
+| `HG_VERSION_CODE` | `github.run_number` | `7`          |
+| `HG_GIT_SHA`      | `github.sha`        | `979826a1b…` |
+
+| 场景 | `versionCode` | `versionName`      |
+| ---- | ------------- | ------------------ |
+| CI   | `run_number`  | `0.1.0+7.g979826a` |
+| 本地 | `1`           | `0.1.0`            |
+
+基号 `0.1.0` 只在 `app/build.gradle.kts` 的 `baseVersion` 定义一次。发正式版时
+改那一处，`versionCode` 不跟着改——它由 `run_number` 单调递增维护。
+
+`run_number` 而不是 commit 计数：被取消的 run 也消耗序号，不会出现两个产物同号。
+`versionName` 的 SHA 截到 7 位，与 `git log --oneline` 一致，太长会在「应用信息」
+里被截断。
+
+`Report APK facts` 步骤会校验注入结果：`versionCode` 与 `HG_VERSION_CODE` 不符、
+或 `versionName` 缺少 `+<run_number>` 时直接失败，不静默发出无版本标识的包。
+
+**降级安装会被拒**：`versionCode` 一旦递增，装回旧包会报
+`INSTALL_FAILED_VERSION_DOWNGRADE`。这是 Android 的既定行为。需要回退时先
+`adb uninstall`，代价是清掉本地数据（收藏、历史）。
+
 ### 构建可复现
 
-同一份源码在 CI 与本地构建出的 unsigned APK 字节完全相同。
-实测 `sha256sum` 两边都是 `e07d2a51...ddae`。
+**注意：版本号注入后，CI 与本地的 unsigned APK 不再字节相同。**
+
+原因：`versionCode` / `versionName` 会写进 `AndroidManifest.xml`，而两边的值不同
+（CI 是 `run_number`，本地是 `1`）。
+
+要恢复可复现，两边必须传同一组变量：
+
+```bash
+HG_VERSION_CODE=7 HG_GIT_SHA=979826a ./gradlew :app:assembleRelease
+```
+
+在满足这个前提、且以下两条也成立时，同一份源码在 CI 与本地构建出的 unsigned
+APK 字节完全相同。实测 `sha256sum` 两边都是 `e07d2a51...ddae`（版本号注入之前）。
 
 这条性质依赖两个前提，破坏任一个就会失去可复现性：
 

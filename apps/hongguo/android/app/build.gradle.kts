@@ -43,16 +43,73 @@ if (!hasSigningMaterial) {
     )
 }
 
+/*
+ * 版本基号。整个仓库只有这一处定义，workflow 不重复写。
+ *
+ * 发正式版时改这里：`0.1.0` → `0.2.0`。`versionCode` 不跟着改，它由 CI 的
+ * `run_number` 递增维护，人工不干预。
+ */
+val baseVersion = "0.1.0"
+
 android {
     namespace = "com.mlzwl.hongguo.shell"
     compileSdk = 36
+
+    /*
+     * 版本号由 CI 注入，本地构建回退到固定值。
+     *
+     * ## 为什么不写死
+     *
+     * 写死 `versionCode = 1` 时，每次 CI 产物都是同一个版本号：
+     * - Android 靠 `versionCode` 判断升级，同值只能靠 `adb install -r` 覆盖，
+     *   系统「应用信息」里永远显示同一个 `versionName`。
+     * - 下载回来的 artifact 名字恒为 `hongguo-shell-release`，不记 run id
+     *   就分不清哪个包含哪次修复。
+     *
+     * ## 取值约定
+     *
+     * | 环境变量             | 来源                | 例        |
+     * | -------------------- | ------------------- | --------- |
+     * | `HG_VERSION_CODE`    | `github.run_number` | `7`       |
+     * | `HG_GIT_SHA`         | commit 短 SHA       | `979826a` |
+     *
+     * `versionCode` 用 `run_number` 而不是 commit 计数：它严格单调递增，
+     * 被取消的 run 也消耗序号，不会出现两个产物同号。
+     *
+     * `versionName` 由本文件拼装，基号 `baseVersion` 只在这里出现一次，
+     * workflow 不需要重复写：
+     *
+     * - CI：`0.1.0+7.g979826a`（`+` 后是 semver 构建元数据）
+     * - 本地：`0.1.0`
+     *
+     * ## 降级安装会被拒
+     *
+     * `versionCode` 一旦开始递增，装回旧包会被系统拒绝（`INSTALL_FAILED_
+     * VERSION_DOWNGRADE`）。这是 Android 的既定行为，不是本配置的缺陷；
+     * 需要回退时先 `adb uninstall`，代价是清掉本地数据（收藏、历史）。
+     *
+     * ## 对构建可复现性的影响
+     *
+     * 版本号进了 APK，CI 与本地产物不再字节相同。要恢复可复现，两边必须
+     * 传同一组 `HG_VERSION_CODE` / `HG_GIT_SHA`。README 的「构建可复现」
+     * 一节已同步说明。
+     */
+    val injectedVersionCode = System.getenv("HG_VERSION_CODE")?.trim()?.toIntOrNull()
+    val injectedGitSha = System.getenv("HG_GIT_SHA")?.trim()?.takeIf { it.isNotEmpty() }
 
     defaultConfig {
         applicationId = "com.mlzwl.hongguo.shell"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = injectedVersionCode ?: 1
+        versionName = if (injectedVersionCode == null) {
+            baseVersion
+        } else {
+            // `github.sha` 是 40 位完整 SHA。截到 7 位：与 `git log --oneline`
+            // 一致，用户能直接比对；versionName 太长在「应用信息」里会被截断。
+            val sha = injectedGitSha?.take(7)?.let { ".g$it" } ?: ""
+            "$baseVersion+$injectedVersionCode$sha"
+        }
     }
 
     // signingConfigs 必须先于 buildTypes 声明，否则 getByName("release") 会抛异常。
