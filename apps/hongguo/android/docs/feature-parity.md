@@ -917,6 +917,78 @@ APPEARANCE_LIGHT_NAVIGATION_BARS`。
 下载落盘 `HgDownload: saved 7697469881821711385-360p.mp4 (2591021 B) -> .../downloads/32`；
 倍速 1.5 与画幅 `cover` 跨集保持。
 
+### 32. 换集后控件永久不隐藏（手动切集、自动连播、手动进全屏都会）
+
+**现象**：进全屏后点「下一集」，顶栏与底栏就一直亮着，无操作多久都不消失。
+手动切集、自动连播到下一集都一样。
+
+**实测（修复前，全屏 915×412，切集后不操作）**：
+
+| 时刻   | `top` `opacity` | `bottom` `opacity` | `location.pathname`          |
+| ------ | --------------- | ------------------ | ---------------------------- |
+| 切集前 | 1               | 1                  | `/watch/7697465811157404697` |
+| +1.5s  | 1               | 1                  | `/watch/7697465495296953369` |
+| +8.5s  | 1               | 1                  | `/watch/7697465495296953369` |
+| +12.5s | 1               | 1                  | `/watch/7697465495296953369` |
+
+**根因：重挂后没有任何人启动隐藏计时。** `player-route.tsx` 用
+`<Player key={playback.episodeId}>`，换集时 `key` 变、`Player` 整体卸载重挂。
+`showControls` 的初值是 `true`，而原代码只有这些地方调 `scheduleHide()`：
+`revealControls()`、`onTap` 隐藏分支、`onScrubEnd`、`onLongPressEnd`、
+`onDragEnd`、菜单关闭、`onFocusOut`。它们全是**用户交互**。重挂后没有任何
+交互发生，就没人起计时。
+
+注意这不是上一轮 #30 的回归：#30 把全屏元素上提到 `.player-host` 后不再退出
+全屏，但 `Player` 本身仍然重挂，所以这条缺陷一直在。
+
+**为什么不能改成「不换路由、只换 `src`」**：`Player` 确实已有 `src` 变化分支
+（`useEffect([src, initialTime])` 重置状态、`useEffect([speed, src])` 重写倍速、
+`useEffect([src])` 自动播放），但去掉 `key` 会丢掉 URL 与当前集同步、
+`episodeLabel`、选集抽屉高亮、观看历史、`canPrev`/`canNext` 的推导。
+缺陷只有一处，补一条 effect 即可。
+
+**修法**：在 `player.tsx` 加一条挂载 effect：
+
+```ts
+useEffect(() => {
+  scheduleHide();
+}, [scheduleHide]);
+```
+
+依赖只写 `scheduleHide`：它的 `useCallback` 依赖只有 `clearHideTimer`，所以不会
+因 `src` 变化而重建，这条 effect 一个挂载周期只跑一次。
+
+**实测（修复后，release APK，页内 20ms 采样 `getComputedStyle().opacity`）**：
+
+| 场景                                | `6000` 定时器调度 | 开始淡出 | 完全消失 | 可见窗口 |
+| ----------------------------------- | ----------------- | -------- | -------- | -------- |
+| 竖屏手动进全屏（412×815 → 915×412） | +76ms             | +6114ms  | +6290ms  | 6176ms   |
+| 全屏点「下一集」（第 2→3）          | +94ms             | +6161ms  | +6321ms  | 6227ms   |
+| 全屏自动连播到下一集（`ended`）     | +1060ms           | +7146ms  | +7332ms  | 6272ms   |
+| 竖屏点「下一集」（第 4→5）          | +1143ms           | +7481ms  | +7647ms  | 6338ms   |
+
+每个场景里 `top` 与 `bottom` 的 `opacity` 在每个采样点上都相等。四个场景的可见
+窗口都在 6.1–6.3 秒，差异来自定时器调度时刻相对切集时刻的偏移与 200ms 过渡。
+
+**切集后仍保持的项**（全屏场景实测）：`fullscreenElement` 仍是
+`DIV.player-host`、方向 `landscape-primary`、视口 915×412、`playbackRate 1.5`、
+`objectFit cover`、`readyState 4`、`paused false`。
+
+**回归（修复后重测）**：
+
+| 项                                    | 结果                     |
+| ------------------------------------- | ------------------------ |
+| 点画面切显隐（隐藏→显示→隐藏→显示）   | `0→1→0→1`，与底栏同步    |
+| 设置面板展开（204px 高）              | 10s 无变化，`finalTop 1` |
+| 倍速菜单展开（12 项 `menuitemradio`） | 10s 无变化，`finalTop 1` |
+| 清晰度菜单展开（5 项）                | 10s 无变化，`finalTop 1` |
+| 选集抽屉展开                          | 12s 无变化，`finalTop 1` |
+| 进度条按住不放 10s                    | 10s 无变化，`finalTop 1` |
+
+**测量陷阱（自己踩过）**：切集后顶栏元素会被 React 替换，采样器若在切集前就把
+`getComputedStyle(el)` 的结果缓存到局部变量，切集后读到的就是已脱离文档的旧节点，
+`opacity` 返回 `null`。采样回调里必须**每帧重新 `querySelector`**。
+
 ### 回归结果（release APK，干净安装）
 
 | 项            | 结果                                                                             |
